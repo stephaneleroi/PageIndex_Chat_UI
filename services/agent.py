@@ -1,26 +1,29 @@
 """
-Document Agent - ReAct loop, query decomposition, self-reflection, proactive analysis
+Document Agent - ReAct loop, query decomposition, self-reflection, proactive analysis.
 
-Implements all five agent directions:
-  1. ReAct loop (Think → Act → Observe)
-  2. Multi-tool agent
-  3. Query decomposition
-  4. Self-reflection
-  5. Proactive document analysis
+Session-based execution supporting two modes:
+  * single  : one document, backwards compatible with the old UX.
+  * kb      : multiple documents chosen by the user; progressive disclosure —
+              the system prompt only exposes metadata, the agent must call
+              list_documents / read_document_toc / tree_search to drill in.
 """
 
 import json
 import logging
 import os
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator, List, Optional
 
-from models.document import DocumentStore, Message
+from models.document import DocumentStore
+from models.session import Message, SessionStore, session_store
 from services.tools.base import ToolRegistry
 from services.tools.tree_search import TreeSearchTool
 from services.tools.node_reader import NodeReaderTool
 from services.tools.keyword_search import KeywordSearchTool
 from services.tools.page_viewer import PageViewerTool
 from services.tools.summarizer import SummarizerTool
+from services.tools.list_documents import ListDocumentsTool
+from services.tools.read_toc import ReadTocTool
+from services.tools.cross_search import CrossSearchTool
 from services.skill_manager import skill_manager
 
 logger = logging.getLogger(__name__)
@@ -30,28 +33,43 @@ MAX_RETRY = 1
 REFLECT_ACCEPT_THRESHOLD = 6
 
 LANG_INSTRUCTION = (
-    "Important: You MUST respond in Chinese (简体中文). All your output text, reasoning, analysis, and answers should be in Chinese. "
+    "Important: You MUST respond in Chinese (简体中文). All your output text, reasoning, "
+    "analysis, and answers should be in Chinese. "
     "When mentioning any mathematical symbol, variable, subscript, superscript, or formula, "
-    "you MUST wrap them in LaTeX delimiters: use $...$ for inline math (e.g. $s_j$, $f_{MD}$, $t_{m,i}^{\\mathrm{loc}}$) "
-    "and \\\\[...\\\\] for display/block math. NEVER output bare symbols like x_i or s_{j+1} without dollar signs."
+    "you MUST wrap them in LaTeX delimiters: use $...$ for inline math (e.g. $s_j$, $f_{MD}$, "
+    "$t_{m,i}^{\\mathrm{loc}}$) and \\\\[...\\\\] for display/block math. "
+    "NEVER output bare symbols like x_i or s_{j+1} without dollar signs."
+)
+
+# System-wide grounding rules. The multi-doc clause is appended dynamically when mode=='kb'.
+GROUNDING_INSTRUCTION_SINGLE = (
+    "Grounding rules (MUST follow):\n"
+    "1. Ground every concrete claim in the Context. Cite the source inline as "
+    "`(node_..., 第 N 页)` when available. Preserve original numbers and units verbatim.\n"
+    "2. If the Context does not cover the question, say so explicitly "
+    "(e.g. `文档中未提及...`). Never fabricate facts, citations, or fill gaps from prior knowledge."
+)
+
+GROUNDING_INSTRUCTION_KB = (
+    "Grounding rules (MUST follow):\n"
+    "1. Ground every concrete claim in the Context. Cite the source inline as "
+    "`(doc: <filename>, node_..., 第 N 页)` so the reader knows WHICH document each claim came from. "
+    "Preserve original numbers and units verbatim.\n"
+    "2. If the Context does not cover the question, say so explicitly "
+    "(e.g. `所选文档中未提及...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
+    "3. When comparing across documents, make the document identity unambiguous in every bullet "
+    "(e.g. `论文A 使用 X，论文B 使用 Y`)."
 )
 
 
 class DocumentAgent:
-    """
-    Agentic document Q&A system.
+    """Session-based agentic document Q&A."""
 
-    Instead of a single search-then-answer pipeline, the agent:
-    - Decomposes complex questions into sub-questions
-    - Uses a ReAct loop to iteratively gather information
-    - Chooses from multiple tools each step
-    - Self-reflects on answer quality and retries if needed
-    - Proactively analyzes documents after indexing
-    """
-
-    def __init__(self, pageindex_service, store: DocumentStore):
+    def __init__(self, pageindex_service, store: DocumentStore,
+                 sessions: SessionStore = session_store):
         self.pageindex = pageindex_service
         self.store = store
+        self.sessions = sessions
         self.registry = ToolRegistry()
         self._register_tools()
 
@@ -61,12 +79,102 @@ class DocumentAgent:
         self.registry.register(KeywordSearchTool())
         self.registry.register(PageViewerTool(self.pageindex))
         self.registry.register(SummarizerTool(self.pageindex))
+        self.registry.register(ListDocumentsTool())
+        self.registry.register(ReadTocTool())
+        self.registry.register(CrossSearchTool(self.pageindex))
 
-    # ------------------------------------------------------------------ #
+    # ============================================================ #
+    #  Context / tool-context builders
+    # ============================================================ #
+    def _ensure_doc_loaded(self, doc_id: str):
+        """Make sure tree/node_map/page_images for this doc are in memory."""
+        doc = self.store.get_document(doc_id)
+        if not doc or doc.status != "ready":
+            return None
+
+        tree = self.store.get_tree(doc_id)
+        node_map = self.store.get_node_map(doc_id)
+        page_images = self.store.get_page_images(doc_id)
+
+        if tree and not node_map:
+            page_count = doc.page_count or self.pageindex.get_pdf_page_count(doc.file_path)
+            if page_count != doc.page_count:
+                self.store.update_document(doc_id, page_count=page_count)
+            node_map = self.pageindex.create_node_mapping(
+                tree, include_page_ranges=True, max_page=page_count
+            )
+            self.store.cache_node_map(doc_id, node_map)
+        return doc
+
+    def _build_tool_context(self, mode: str, doc_ids: List[str],
+                            primary_doc_id: Optional[str],
+                            model_type: str) -> dict:
+        docs_ctx = {}
+        for doc_id in doc_ids:
+            doc = self._ensure_doc_loaded(doc_id)
+            if not doc:
+                continue
+            tree = self.store.get_tree(doc_id)
+            node_map = self.store.get_node_map(doc_id)
+            page_images = self.store.get_page_images(doc_id) or {}
+            analysis = self.store.get_analysis(doc_id)
+            docs_ctx[doc_id] = {
+                "tree": tree,
+                "node_map": node_map,
+                "page_images": page_images,
+                "filename": doc.filename,
+                "page_count": doc.page_count,
+                "analysis": analysis,
+            }
+
+        return {
+            "mode": mode,
+            "primary_doc_id": primary_doc_id if primary_doc_id in docs_ctx else None,
+            "accessible_doc_ids": list(docs_ctx.keys()),
+            "docs": docs_ctx,
+            "model_type": model_type,
+        }
+
+    def _build_docs_overview(self, tool_context: dict) -> str:
+        """Build a short bullet list describing every accessible doc —
+        used inside prompts so the LLM knows what's available without
+        dumping full trees (progressive disclosure)."""
+        docs = tool_context.get("docs") or {}
+        if not docs:
+            return "(no documents loaded)"
+        lines = []
+        for doc_id, d in docs.items():
+            analysis = d.get("analysis") or {}
+            summary_txt = (analysis.get("summary") or "").strip().replace("\n", " ")
+            if summary_txt and len(summary_txt) > 200:
+                summary_txt = summary_txt[:200] + "…"
+            topics = ", ".join(analysis.get("main_topics") or []) or "—"
+            lines.append(
+                f"- {doc_id} | {d.get('filename')} | {d.get('page_count', 0)} pages\n"
+                f"    summary: {summary_txt or '(no analysis)'}\n"
+                f"    topics : {topics}"
+            )
+        return "\n".join(lines)
+
+    def _single_doc_tree_summary(self, tool_context: dict) -> str:
+        """For single-doc mode we can afford to inline the full TOC."""
+        primary = tool_context.get("primary_doc_id")
+        docs = tool_context.get("docs") or {}
+        if not primary or primary not in docs:
+            return ""
+        tree = docs[primary].get("tree")
+        if not tree:
+            return ""
+        return json.dumps(
+            self.pageindex.remove_fields(tree, ["text"]),
+            indent=2, ensure_ascii=False,
+        )
+
+    # ============================================================ #
     #  Direction 3: Query decomposition
-    # ------------------------------------------------------------------ #
-    async def decompose_query(self, query: str, tree_summary: str,
-                              model_type: str = "text") -> dict:
+    # ============================================================ #
+    async def decompose_query(self, query: str, context_overview: str,
+                              mode: str, model_type: str = "text") -> dict:
         skill_section = skill_manager.build_skill_prompt()
         skill_hint = ""
         if skill_section:
@@ -75,21 +183,31 @@ class DocumentAgent:
                 "Consider them when decomposing:\n" + skill_section
             )
 
+        mode_hint = (
+            "Multi-document mode: the user may want to compare or aggregate across documents. "
+            "A sub-question that asks about a single aspect across multiple docs (\"compare X in A and B\") "
+            "counts as ONE sub-question, not one-per-document — the cross_search tool handles that."
+            if mode == "kb" else
+            "Single-document mode."
+        )
+
         prompt = f"""You are an intelligent document analysis agent.
 Analyze the user's question and decide whether it should be broken into simpler sub-questions.
 
 Question: {query}
 
-Document structure overview (titles & summaries only):
-{tree_summary[:4000]}
+Context overview:
+{context_overview[:4000]}
+
+Mode: {mode_hint}
 
 Rules:
-- ONLY decompose if the question genuinely asks about MULTIPLE DIFFERENT topics/aspects that require searching DIFFERENT parts of the document.
+- ONLY decompose if the question genuinely asks about MULTIPLE DIFFERENT topics/aspects that require searching DIFFERENT parts of the document(s).
 - Do NOT decompose if the question is about a single topic, even if it seems complex.
-- Do NOT decompose extraction tasks (e.g. "extract table X", "list the items in section Y", "what does figure Z show").
-- Do NOT decompose lookup tasks (e.g. "what is X?", "find the definition of Y").
+- Do NOT decompose extraction tasks (e.g. "extract table X", "list the items in section Y").
+- Do NOT decompose lookup tasks (e.g. "what is X?").
 - Do NOT decompose if the answer is likely in one section/table/figure.
-- When in doubt, do NOT decompose. A single well-targeted search is better than multiple overlapping searches.
+- When in doubt, do NOT decompose.
 - Generate at most 3 sub-questions, only when truly needed.
 - If a custom skill is relevant, design sub-questions to match its workflow.
 {skill_hint}
@@ -116,13 +234,21 @@ Output JSON only:
                 "synthesis_strategy": "direct",
             }
 
-    # ------------------------------------------------------------------ #
-    #  Direction 1 & 2: ReAct step (think + pick a tool)
-    # ------------------------------------------------------------------ #
+    # ============================================================ #
+    #  Direction 1 & 2: ReAct step
+    # ============================================================ #
     async def think_and_act(self, query: str, gathered: List[dict],
-                            tree_summary: str,
+                            tool_context: dict, context_overview: str,
                             model_type: str = "text") -> dict:
+        mode = tool_context.get("mode", "single")
         tool_specs = self.registry.all_specs()
+
+        # Filter tools per-mode for clarity.
+        if mode == "single":
+            hidden = {"list_documents", "cross_search"}
+            tool_specs = [t for t in tool_specs if t["name"] not in hidden]
+        # kb mode: expose everything.
+
         tools_desc = "\n".join(
             f'{i+1}. {t["name"]}: {t["description"]}  '
             f'Params: {json.dumps(t["parameters"])}'
@@ -131,11 +257,40 @@ Output JSON only:
 
         context_so_far = ""
         if gathered:
-            context_so_far = "Information gathered so far:\n" + "\n".join(
-                f"- [{g['tool']}] {g['observation'][:500]}" for g in gathered
+            trace_lines = []
+            for i, g in enumerate(gathered, 1):
+                thought = (g.get("thought") or "").strip()
+                try:
+                    input_str = json.dumps(g.get("input") or {}, ensure_ascii=False)
+                except Exception:
+                    input_str = str(g.get("input"))
+                obs = g.get("observation") or ""
+                trace_lines.append(
+                    f"Thought {i}: {thought}\n"
+                    f"Action  {i}: {g['tool']}({input_str})\n"
+                    f"Observation {i}: {obs}"
+                )
+            context_so_far = (
+                "Previous reasoning trace — these are actions YOU have already taken. "
+                "Do NOT repeat an action with identical arguments; based on the latest "
+                "Observation, advance to the next logical step (e.g. read_node / "
+                "view_pages / summarize_nodes) or choose final_answer if you have enough.\n\n"
+                + "\n\n".join(trace_lines)
             )
 
         skill_section = skill_manager.build_skill_prompt()
+
+        mode_guide = ""
+        if mode == "kb":
+            mode_guide = (
+                "\nKnowledge-base mode guidance:\n"
+                "  1. Start with `list_documents` if you haven't seen the documents yet.\n"
+                "  2. For documents that look relevant, call `read_document_toc(doc_id=...)` "
+                "to see their structure before drilling in.\n"
+                "  3. Use `cross_search` to find where a topic is covered across several docs, "
+                "or `tree_search(query, doc_id=...)` to search a single doc.\n"
+                "  4. Always pass `doc_id` to per-document tools (read_node, tree_search, view_pages, keyword_search, summarize_nodes).\n"
+            )
 
         prompt = f"""You are an intelligent document analysis agent with access to these tools:
 
@@ -145,11 +300,11 @@ Output JSON only:
 
 Question: {query}
 
-Document tree (titles & summaries):
-{tree_summary[:3000]}
+Accessible documents overview:
+{context_overview[:4000]}
 
 {context_so_far}
-
+{mode_guide}
 Based on the question and what you know so far, decide the next step.
 If you already have enough information, choose "final_answer".
 {skill_section}
@@ -170,33 +325,45 @@ Output JSON only:
             return json.loads(raw)
         except Exception as e:
             logger.warning(f"Think-and-act parse failed: {e}")
+            # Sensible fallback: in single-doc mode tree_search; in kb mode list_documents.
+            fallback_tool = "list_documents" if mode == "kb" else "tree_search"
+            fallback_input = {} if mode == "kb" else {"query": query}
             return {
-                "thought": "Falling back to tree search",
-                "action": {"tool": "tree_search", "input": {"query": query}},
+                "thought": "Falling back to a safe default tool",
+                "action": {"tool": fallback_tool, "input": fallback_input},
             }
 
-    # ------------------------------------------------------------------ #
+    # ============================================================ #
     #  Direction 4: Self-reflection
-    # ------------------------------------------------------------------ #
+    # ============================================================ #
     async def reflect(self, query: str, answer: str,
                       context_summary: str,
                       model_type: str = "text",
-                      is_vision: bool = False) -> dict:
+                      is_vision: bool = False,
+                      docs_overview: str = "") -> dict:
         vision_note = ""
         if is_vision:
             vision_note = (
-                "\nIMPORTANT: The answer was generated using a vision model that "
-                "can directly read page images (figures, tables, charts). The text "
-                "context below is only a partial summary of what the model could see. "
-                "If the answer contains specific data (numbers, table rows) that are "
-                "not in the text context, they may have been correctly read from "
-                "page images — do NOT treat them as fabricated.\n"
+                "\nIMPORTANT: The answer was generated using a vision model that can "
+                "directly read page images. Data from images is valid evidence even if "
+                "it's not in the text context.\n"
+            )
+
+        docs_section = ""
+        if docs_overview:
+            docs_section = (
+                "\nAvailable documents — metadata the answerer can cite directly "
+                "(filename / page count / doc_id). Meta-questions like “how many "
+                "documents / which documents / page counts” can be answered purely "
+                "from this block without any tool observation:\n"
+                f"{docs_overview[:3000]}\n"
             )
 
         prompt = f"""Evaluate this answer's quality.
 
 Question: {query}
 {vision_note}
+{docs_section}
 Context used (tool observations):
 {context_summary[:6000]}
 
@@ -205,9 +372,14 @@ Generated answer:
 
 Check:
 1. Does the answer address the question?
-2. Is the answer supported by the context? (For vision mode, the model can see page images directly, so data from images is valid evidence.)
-3. Are there factual inconsistencies between the answer and the context?
+2. Is the answer supported by the context OR by the Available-documents metadata above? (For vision mode, image data is also valid.)
+3. Are there factual inconsistencies between the answer and the context/metadata?
 4. Is important information missing?
+
+Note: If the question is a meta-question about the document set itself
+(e.g. how many documents, document names, page counts), the Available-documents
+metadata alone is sufficient evidence — do NOT penalise the answer for lacking
+tool observations in that case.
 
 {LANG_INSTRUCTION}
 
@@ -226,9 +398,9 @@ Output JSON only:
             logger.warning(f"Reflection parse failed: {e}")
             return {"score": 7, "issues": [], "missing_info": [], "action": "accept"}
 
-    # ------------------------------------------------------------------ #
+    # ============================================================ #
     #  Direction 5: Proactive document analysis
-    # ------------------------------------------------------------------ #
+    # ============================================================ #
     async def analyze_document(self, doc_id: str,
                                model_type: str = "text") -> dict:
         tree = self.store.get_tree(doc_id)
@@ -276,58 +448,63 @@ Output JSON only:
 
         doc = self.store.get_document(doc_id)
         if doc:
-            analysis_path = os.path.join(doc.result_dir, "analysis.json")
             try:
-                with open(analysis_path, "w", encoding="utf-8") as f:
+                os.makedirs(doc.result_dir, exist_ok=True)
+                with open(doc.analysis_path, "w", encoding="utf-8") as f:
                     json.dump(analysis, f, indent=2, ensure_ascii=False)
             except Exception as e:
                 logger.error(f"Failed to save analysis: {e}")
 
         return analysis
 
-    # ------------------------------------------------------------------ #
-    #  Main agent loop
-    # ------------------------------------------------------------------ #
-    async def run(self, doc_id: str, query: str,
-                  model_type: str = "text",
-                  use_memory: bool = True) -> AsyncGenerator[str, None]:
-        """
-        Main entry point. Yields streaming markers compatible with
-        the socket handler protocol.
-        """
-        doc = self.store.get_document(doc_id)
-        if not doc or doc.status != "ready":
-            yield "[Error: Document not ready]"
+    # ============================================================ #
+    #  Main entry: run_session (handles both single and kb modes)
+    # ============================================================ #
+    async def run_session(self, session_id: str, query: str,
+                          model_type: str = "text",
+                          use_memory: bool = True) -> AsyncGenerator[str, None]:
+        session = self.sessions.get_session(session_id)
+        if not session:
+            yield "[Error: Session not found]"
             return
 
-        tree = self.store.get_tree(doc_id)
-        node_map = self.store.get_node_map(doc_id)
-        page_images = self.store.get_page_images(doc_id)
+        mode = session.mode
+        doc_ids = list(session.doc_ids or [])
 
-        if not tree:
-            yield "[Error: Tree structure not loaded]"
-            return
-        if not node_map:
-            yield "[Error: Node mapping not available]"
+        # In single mode we expect exactly 1 doc; in kb mode we expect ≥1.
+        if not doc_ids:
+            yield "[Error: 未选择任何文档]" if mode == "kb" else "[Error: Document not set]"
             return
 
-        tree_summary = json.dumps(
-            self.pageindex.remove_fields(tree, ["text"]),
-            indent=2, ensure_ascii=False,
-        )
+        # Verify all docs exist & are ready.
+        ready_ids = []
+        for did in doc_ids:
+            doc = self.store.get_document(did)
+            if doc and doc.status == "ready":
+                ready_ids.append(did)
+            else:
+                logger.warning(f"Skipping non-ready doc {did} in session {session_id}")
+        if not ready_ids:
+            yield "[Error: 所选文档均未就绪]"
+            return
 
-        tool_context = {
-            "tree": tree,
-            "node_map": node_map,
-            "page_images": page_images or {},
-            "doc_id": doc_id,
-            "model_type": model_type,
-        }
+        primary = ready_ids[0] if mode == "single" else None
+        tool_context = self._build_tool_context(mode, ready_ids, primary, model_type)
+
+        if not tool_context["docs"]:
+            yield "[Error: 文档未成功加载]"
+            return
+
+        context_overview = self._build_docs_overview(tool_context)
+        # In single mode we can afford to inline the TOC too for richer planning.
+        if mode == "single":
+            tree_str = self._single_doc_tree_summary(tool_context)
+            if tree_str:
+                context_overview = context_overview + "\n\nPrimary document TOC (text elided):\n" + tree_str[:6000]
 
         # ---- Phase 1: Query decomposition ----
         yield "[SEARCHING]\n"
-
-        decomposition = await self.decompose_query(query, tree_summary, model_type)
+        decomposition = await self.decompose_query(query, context_overview, mode, model_type)
         yield f"[AGENT_DECOMPOSE]{json.dumps(decomposition, ensure_ascii=False)}\n"
 
         sub_questions = (
@@ -338,18 +515,29 @@ Output JSON only:
 
         # ---- Phase 2: ReAct loop ----
         gathered: List[dict] = []
-        all_nodes: List[str] = []
+        all_nodes: List[str] = []  # qualified node refs "doc_id::node_id"
+
+        def _qualify_nodes(obs_nodes: List[str], obs_doc_id: Optional[str]) -> List[str]:
+            out = []
+            for n in obs_nodes:
+                if "::" in n:
+                    out.append(n)
+                elif obs_doc_id:
+                    out.append(f"{obs_doc_id}::{n}")
+                else:
+                    out.append(n)
+            return out
 
         for sq_idx, sub_q in enumerate(sub_questions):
             for step in range(MAX_REACT_STEPS):
                 step_result = await self.think_and_act(
-                    sub_q, gathered, tree_summary, model_type
+                    sub_q, gathered, tool_context, context_overview, model_type
                 )
 
                 thought = step_result.get("thought", "")
                 action = step_result.get("action", {})
                 tool_name = action.get("tool", "final_answer")
-                tool_input = action.get("input", {})
+                tool_input = action.get("input", {}) or {}
 
                 if tool_name == "final_answer":
                     yield self._step_marker(
@@ -367,20 +555,23 @@ Output JSON only:
                 else:
                     observation = {"summary": f"Unknown tool: {tool_name}", "nodes": []}
 
-                obs_nodes = observation.get("nodes", [])
-                all_nodes.extend(obs_nodes)
+                obs_nodes = observation.get("nodes", []) or []
+                obs_doc_id = observation.get("doc_id") or tool_input.get("doc_id")
+                qualified = _qualify_nodes(obs_nodes, obs_doc_id)
+                all_nodes.extend(qualified)
 
                 gathered.append({
                     "question": sub_q,
                     "thought": thought,
                     "tool": tool_name,
                     "input": tool_input,
+                    "doc_id": obs_doc_id,
                     "observation": observation.get("summary", ""),
                 })
 
                 yield self._step_marker(
-                    sq_idx, step, thought, tool_name,
-                    tool_input, observation.get("summary", "")
+                    sq_idx, step, thought, tool_name, tool_input,
+                    observation.get("summary", ""),
                 )
 
         unique_nodes = list(dict.fromkeys(all_nodes))
@@ -390,23 +581,26 @@ Output JSON only:
         # ---- Phase 3: Generate answer ----
         yield "[ANSWERING]\n"
 
-        answer_context = self._build_answer_context(gathered, node_map)
-        history_context = self._build_history_context(doc_id, use_memory)
+        answer_context = self._build_answer_context(gathered, tool_context)
+        history_context = self._build_history_context(session_id, use_memory)
 
         is_vision = model_type != "text"
+        grounding = GROUNDING_INSTRUCTION_KB if mode == "kb" else GROUNDING_INSTRUCTION_SINGLE
+
+        full_answer = ""
 
         if is_vision:
-            priority_nodes = self._get_priority_nodes(gathered, unique_nodes)
-            image_paths = self.pageindex.get_page_images_for_nodes(
-                priority_nodes, node_map, page_images or {}
-            )
+            priority_refs = self._get_priority_node_refs(gathered, unique_nodes)
+            image_paths = self._collect_images_for_refs(priority_refs, tool_context)
             vision_prompt = self._build_vision_answer_prompt(
                 query, sub_questions, history_context,
                 decomposition.get("synthesis_strategy", "direct"),
                 gathered_context=answer_context,
+                grounding=grounding,
+                mode=mode,
+                docs_overview=context_overview,
             )
             if image_paths:
-                full_answer = ""
                 async for chunk in self.pageindex.call_vlm_stream(
                     vision_prompt, image_paths, model_type
                 ):
@@ -415,33 +609,62 @@ Output JSON only:
             else:
                 answer_prompt = self._build_answer_prompt(
                     query, sub_questions, answer_context, history_context,
-                    decomposition.get("synthesis_strategy", "direct")
+                    decomposition.get("synthesis_strategy", "direct"),
+                    grounding=grounding, mode=mode,
+                    docs_overview=context_overview,
                 )
-                full_answer = ""
                 async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
                     full_answer += chunk
                     yield chunk
         else:
             answer_prompt = self._build_answer_prompt(
                 query, sub_questions, answer_context, history_context,
-                decomposition.get("synthesis_strategy", "direct")
+                decomposition.get("synthesis_strategy", "direct"),
+                grounding=grounding, mode=mode,
+                docs_overview=context_overview,
             )
-            full_answer = ""
             async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
                 full_answer += chunk
                 yield chunk
 
+        # ---- Persist to session history (BEFORE reflection) ----
+        # Persisting here (rather than at the very end of run_session) means:
+        #   * simple questions that skip reflection still get saved
+        #   * a reflection LLM error won't drop the conversation
+        #   * user-initiated Stop during reflection still keeps the answer
+        # If Phase 4 retry produces a better answer we overwrite in place.
+        def _thinking_summary(g_list):
+            return "\n".join(
+                f"Step {i+1} [{g['tool']}{(' doc=' + g['doc_id']) if g.get('doc_id') else ''}]: {g['thought']}"
+                for i, g in enumerate(g_list)
+            )
+
+        self.sessions.add_message(session_id, Message(role="user", content=query))
+        self.sessions.add_message(session_id, Message(
+            role="assistant",
+            content=full_answer,
+            nodes=list(dict.fromkeys(all_nodes)),
+            thinking=_thinking_summary(gathered),
+        ))
+
         # ---- Phase 4: Self-reflection ----
-        is_vision = model_type != "text"
+        # Fast path: if the agent chose final_answer on the very first step
+        # without invoking any content tool (gathered is empty), this is a
+        # trivial / meta / chit-chat question. Reflection adds latency and
+        # cost but almost never flips the answer here, so skip it entirely
+        # and do NOT emit [AGENT_REFLECT] (no "自我检查" UI for trivial turns).
+        if not gathered:
+            return
+
         context_summary = "\n".join(
             f"[{g['tool']}] {g['observation'][:600]}" for g in gathered
         )
         reflection = await self.reflect(
-            query, full_answer, context_summary, model_type, is_vision
+            query, full_answer, context_summary, model_type, is_vision,
+            docs_overview=context_overview,
         )
         yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
 
-        # Retry if reflection says so (at most once)
         if (reflection.get("action") == "retry"
                 and reflection.get("score", 10) < REFLECT_ACCEPT_THRESHOLD):
             yield "[AGENT_RETRY]\n"
@@ -451,12 +674,12 @@ Output JSON only:
                 extra_query = "; ".join(missing)
                 for step in range(MAX_REACT_STEPS):
                     step_result = await self.think_and_act(
-                        extra_query, gathered, tree_summary, model_type
+                        extra_query, gathered, tool_context, context_overview, model_type
                     )
                     thought = step_result.get("thought", "")
                     action = step_result.get("action", {})
                     tool_name = action.get("tool", "final_answer")
-                    tool_input = action.get("input", {})
+                    tool_input = action.get("input", {}) or {}
 
                     if tool_name == "final_answer":
                         break
@@ -470,79 +693,80 @@ Output JSON only:
                     else:
                         observation = {"summary": "Unknown tool", "nodes": []}
 
-                    all_nodes.extend(observation.get("nodes", []))
+                    obs_nodes = observation.get("nodes", []) or []
+                    obs_doc_id = observation.get("doc_id") or tool_input.get("doc_id")
+                    qualified = _qualify_nodes(obs_nodes, obs_doc_id)
+                    all_nodes.extend(qualified)
                     gathered.append({
                         "question": extra_query,
                         "thought": thought,
                         "tool": tool_name,
                         "input": tool_input,
+                        "doc_id": obs_doc_id,
                         "observation": observation.get("summary", ""),
                     })
                     yield self._step_marker(
                         len(sub_questions), step, thought, tool_name,
-                        tool_input, observation.get("summary", "")
+                        tool_input, observation.get("summary", ""),
                     )
 
-                answer_context = self._build_answer_context(gathered, node_map)
+                answer_context = self._build_answer_context(gathered, tool_context)
                 unique_nodes = list(dict.fromkeys(all_nodes))
                 if unique_nodes:
                     yield f"\n[NODES]{json.dumps(unique_nodes)}\n"
 
-                # Signal frontend to REPLACE previous answer, not append
                 yield "[RETRY_ANSWERING]\n"
 
+                full_answer = ""
                 if is_vision:
-                    retry_priority = self._get_priority_nodes(gathered, unique_nodes)
-                    retry_image_paths = self.pageindex.get_page_images_for_nodes(
-                        retry_priority, node_map, page_images or {}
-                    )
+                    retry_priority = self._get_priority_node_refs(gathered, unique_nodes)
+                    retry_images = self._collect_images_for_refs(retry_priority, tool_context)
                     retry_vision_prompt = self._build_vision_answer_prompt(
                         query, sub_questions, history_context,
                         decomposition.get("synthesis_strategy", "direct"),
                         gathered_context=answer_context,
+                        grounding=grounding, mode=mode,
+                        docs_overview=context_overview,
                     )
-                    if retry_image_paths:
-                        full_answer = ""
+                    if retry_images:
                         async for chunk in self.pageindex.call_vlm_stream(
-                            retry_vision_prompt, retry_image_paths, model_type
+                            retry_vision_prompt, retry_images, model_type
                         ):
                             full_answer += chunk
                             yield chunk
                     else:
                         retry_prompt = self._build_answer_prompt(
                             query, sub_questions, answer_context, history_context,
-                            decomposition.get("synthesis_strategy", "direct")
+                            decomposition.get("synthesis_strategy", "direct"),
+                            grounding=grounding, mode=mode,
+                            docs_overview=context_overview,
                         )
-                        full_answer = ""
                         async for chunk in self.pageindex.call_llm_stream(retry_prompt, model_type):
                             full_answer += chunk
                             yield chunk
                 else:
                     retry_prompt = self._build_answer_prompt(
                         query, sub_questions, answer_context, history_context,
-                        decomposition.get("synthesis_strategy", "direct")
+                        decomposition.get("synthesis_strategy", "direct"),
+                        grounding=grounding, mode=mode,
+                        docs_overview=context_overview,
                     )
-                    full_answer = ""
                     async for chunk in self.pageindex.call_llm_stream(retry_prompt, model_type):
                         full_answer += chunk
                         yield chunk
 
-        # ---- Save to history ----
-        thinking_summary = "\n".join(
-            f"Step {i+1} [{g['tool']}]: {g['thought']}"
-            for i, g in enumerate(gathered)
-        )
-        self.store.add_message(doc_id, Message(role="user", content=query))
-        self.store.add_message(doc_id, Message(
-            role="assistant",
-            content=full_answer,
-            nodes=list(dict.fromkeys(all_nodes)),
-            thinking=thinking_summary,
-        ))
+            # Retry produced a (hopefully better) answer — overwrite the
+            # assistant message we persisted right after Phase 3.
+            self.sessions.update_last_message(
+                session_id, role="assistant",
+                content=full_answer,
+                nodes=list(dict.fromkeys(all_nodes)),
+                thinking=_thinking_summary(gathered),
+            )
 
-    # ------------------------------------------------------------------ #
+    # ============================================================ #
     #  Helpers
-    # ------------------------------------------------------------------ #
+    # ============================================================ #
     def _step_marker(self, sq_idx, step, thought, tool, tool_input, observation):
         data = {
             "sub_question_idx": sq_idx,
@@ -550,24 +774,55 @@ Output JSON only:
             "thought": thought,
             "tool": tool,
             "tool_input": tool_input,
-            "observation": observation[:500],
+            "observation": (observation or "")[:500],
         }
         return f"[AGENT_STEP]{json.dumps(data, ensure_ascii=False)}\n"
 
-    def _build_answer_context(self, gathered: list, node_map: dict) -> str:
-        """Build answer context with strict priority ordering.
+    def _build_answer_context(self, gathered: list, tool_context: dict) -> str:
+        """Assemble answer context, grouping by document in multi-doc mode.
 
-        Nodes processed by summarize_nodes are not re-included as raw text —
-        the summarized output supersedes the raw content.
+        Output layout:
+          【Agent 推理轨迹】 Thought / Action / Observation of every ReAct step,
+                           so Phase-3 LLM can continue from the same mental state.
+          【工具分析结果】   summarize_nodes outputs (already LLM-processed).
+          【原文证据】       raw node texts grouped by document (grounding source).
+          【视觉分析】       view_pages VLM observations.
         """
         import re
 
         ANALYTICAL_TOOLS = {"summarize_nodes"}
+        docs = tool_context.get("docs") or {}
+        mode = tool_context.get("mode", "single")
 
-        # --- Pass 1: collect analytical outputs and track which nodes they cover ---
-        analytically_processed_nodes = set()
+        # -------- Reasoning trace (Thought / Action / Observation per step) --------
+        trace_lines = []
+        for i, g in enumerate(gathered, 1):
+            tool = g.get("tool", "")
+            did = g.get("doc_id")
+            tool_input = g.get("input", {}) or {}
+            try:
+                input_str = json.dumps(tool_input, ensure_ascii=False)
+            except Exception:
+                input_str = str(tool_input)
+            thought = (g.get("thought") or "").strip()
+            obs = (g.get("observation") or "").strip()
+            action_line = f"{tool}({input_str})"
+            if did:
+                action_line = f"[doc={did}] " + action_line
+            trace_lines.append(
+                f"Step {i}:\n"
+                f"  Thought: {thought}\n"
+                f"  Action:  {action_line}\n"
+                f"  Observation: {obs}"
+            )
+        trace_block = "\n\n".join(trace_lines)
+
+        analytically_processed = set()   # qualified node refs
         analytical_outputs = []
         seen_obs_keys = set()
+
+        def _qual(did, nid):
+            return f"{did}::{nid}" if did else nid
 
         for g in gathered:
             tool = g["tool"]
@@ -581,42 +836,62 @@ Output JSON only:
                 continue
             seen_obs_keys.add(dedup_key)
             analytical_outputs.append(f"[{tool}] {obs}")
-            for nid in g.get("input", {}).get("node_ids", []):
-                analytically_processed_nodes.add(nid)
+            did = g.get("doc_id")
+            for nid in g.get("input", {}).get("node_ids", []) or []:
+                analytically_processed.add(_qual(did, nid))
             single = g.get("input", {}).get("node_id", "")
             if single:
-                analytically_processed_nodes.add(single)
+                analytically_processed.add(_qual(did, single))
 
-        # --- Pass 2: collect raw node texts (skip analytically processed nodes) ---
-        seen_nodes = set()
-        raw_node_texts = []
+        # Collect raw texts, grouped by doc_id so the answer can cite cleanly.
+        per_doc_raw: dict = {}
         visual_observations = []
+        seen_refs = set()
 
-        def _add_node_text(nid):
-            if nid in seen_nodes or nid not in node_map:
+        def _add_node_text(did, nid):
+            ref = _qual(did, nid)
+            if ref in seen_refs or ref in analytically_processed:
                 return
-            if nid in analytically_processed_nodes:
+            dctx = docs.get(did) or {}
+            node_map = dctx.get("node_map") or {}
+            if nid not in node_map:
                 return
             info = node_map[nid]
             node = info.get("node", info)
             text = node.get("text", "") if isinstance(node, dict) else ""
             if text:
-                raw_node_texts.append(text)
-                seen_nodes.add(nid)
+                per_doc_raw.setdefault(did, []).append(text)
+                seen_refs.add(ref)
 
         for g in gathered:
             tool = g["tool"]
+            did = g.get("doc_id")
 
             if tool == "read_node":
                 single = g["input"].get("node_id", "")
-                batch = g["input"].get("node_ids", [])
-                for nid in ([single] if single else []) + (batch or []):
-                    _add_node_text(nid)
+                batch = g["input"].get("node_ids", []) or []
+                for nid in ([single] if single else []) + batch:
+                    _add_node_text(did, nid)
 
             elif tool == "tree_search":
                 obs = g.get("observation", "")
                 for nid in re.findall(r"(node_\S+)", obs):
-                    _add_node_text(nid)
+                    _add_node_text(did, nid)
+
+            elif tool == "cross_search":
+                # per_doc_nodes may be present in raw return; fall back to scanning.
+                obs = g.get("observation", "")
+                # Very rough: pull out "[doc_x] filename" section headers and
+                # associated node_ids until next blank line.
+                cur_did = None
+                for line in obs.split("\n"):
+                    m = re.match(r"•\s+\[(\S+)\]", line.strip())
+                    if m:
+                        cur_did = m.group(1)
+                        continue
+                    for nid in re.findall(r"(node_\S+)", line):
+                        if cur_did:
+                            _add_node_text(cur_did, nid)
 
             elif tool == "view_pages":
                 obs = g.get("observation", "")
@@ -626,127 +901,182 @@ Output JSON only:
             elif tool == "keyword_search":
                 obs = g.get("observation", "")
                 if obs:
-                    raw_node_texts.append(f"[{tool}] {obs}")
+                    per_doc_raw.setdefault(did or "_unknown", []).append(f"[{tool}] {obs}")
 
-        if not raw_node_texts and not analytical_outputs and not visual_observations:
-            for nid in node_map:
-                if nid not in analytically_processed_nodes:
-                    _add_node_text(nid)
-                if len(raw_node_texts) >= 3:
-                    break
+        # Fallback: if nothing at all, sprinkle in a few nodes from primary doc.
+        if not per_doc_raw and not analytical_outputs and not visual_observations:
+            primary = tool_context.get("primary_doc_id")
+            if primary and primary in docs:
+                nm = docs[primary].get("node_map") or {}
+                for nid in list(nm.keys())[:3]:
+                    _add_node_text(primary, nid)
 
-        # --- Assemble: analytical first, raw as supplement ---
         parts = []
+        if trace_block:
+            parts.append(
+                "【Agent 推理轨迹 — 你先前逐步的 Thought/Action/Observation，"
+                "用以承接推理过程】\n" + trace_block
+            )
         if analytical_outputs:
             parts.append(
                 "【工具分析结果 - 已由AI处理，请直接采信并基于此作答】\n"
                 + "\n\n".join(analytical_outputs)
             )
-        if raw_node_texts:
-            raw_combined = "\n\n".join(raw_node_texts)
-            budget = 4000 if analytical_outputs else 12000
-            if len(raw_combined) > budget:
-                raw_combined = raw_combined[:budget] + "\n...(truncated)"
-            parts.append("【原文补充】\n" + raw_combined)
+        if per_doc_raw:
+            doc_sections = []
+            # Give each doc its own budget proportional to presence.
+            budget_total = 4000 if analytical_outputs else 12000
+            per_doc_budget = max(800, budget_total // max(1, len(per_doc_raw)))
+            for did, texts in per_doc_raw.items():
+                filename = (docs.get(did) or {}).get("filename", did)
+                header = (
+                    f"📄 文档 [{did}] {filename}\n" if mode == "kb" else "【原文补充】\n"
+                )
+                combined = "\n\n".join(texts)
+                if len(combined) > per_doc_budget:
+                    combined = combined[:per_doc_budget] + "\n...(truncated)"
+                doc_sections.append(header + combined)
+            parts.append("\n\n".join(doc_sections))
         if visual_observations:
             parts.append("【视觉分析】\n" + "\n\n".join(visual_observations))
+
         return "\n\n".join(parts)
 
     @staticmethod
-    def _get_priority_nodes(gathered: list, all_unique_nodes: list) -> list:
-        """Return nodes most relevant for image retrieval.
-
-        Strategy: take nodes from the LAST view_pages or tree_search call
-        (which reflects the agent's most refined understanding of what's
-        relevant) and fall back to all unique nodes.
-        """
+    def _get_priority_node_refs(gathered: list, all_unique_nodes: list) -> list:
+        """Return qualified node refs (doc::nid) from the most recent visual/search call."""
         import re
-        last_visual_nodes = []
-        last_search_nodes = []
+        last_visual = []
+        last_search = []
 
         for g in reversed(gathered):
-            if g["tool"] == "view_pages" and not last_visual_nodes:
-                ids = g["input"].get("node_ids", [])
-                if ids:
-                    last_visual_nodes = ids
-            if g["tool"] == "tree_search" and not last_search_nodes:
+            did = g.get("doc_id")
+            if g["tool"] == "view_pages" and not last_visual:
+                for nid in g["input"].get("node_ids", []) or []:
+                    last_visual.append(f"{did}::{nid}" if did else nid)
+            if g["tool"] == "tree_search" and not last_search:
                 obs = g.get("observation", "")
-                found = re.findall(r"(node_\S+)", obs)
-                if found:
-                    last_search_nodes = found
-            if last_visual_nodes and last_search_nodes:
+                for nid in re.findall(r"(node_\S+)", obs):
+                    last_search.append(f"{did}::{nid}" if did else nid)
+            if last_visual and last_search:
                 break
 
-        priority = last_visual_nodes or last_search_nodes
+        priority = last_visual or last_search
         if priority:
             seen = set()
-            result = []
-            for nid in priority:
-                if nid not in seen:
-                    result.append(nid)
-                    seen.add(nid)
-            return result
-
+            out = []
+            for ref in priority:
+                if ref not in seen:
+                    seen.add(ref)
+                    out.append(ref)
+            return out
         return all_unique_nodes
 
-    def _build_history_context(self, doc_id: str, use_memory: bool) -> str:
+    def _collect_images_for_refs(self, refs: list, tool_context: dict) -> list:
+        """Given qualified refs (doc::nid), gather corresponding page image paths."""
+        docs = tool_context.get("docs") or {}
+        paths = []
+        seen = set()
+        for ref in refs:
+            if "::" in ref:
+                did, nid = ref.split("::", 1)
+            else:
+                did = tool_context.get("primary_doc_id")
+                nid = ref
+            dctx = docs.get(did)
+            if not dctx:
+                continue
+            node_map = dctx.get("node_map") or {}
+            page_images = dctx.get("page_images") or {}
+            info = node_map.get(nid)
+            if not info:
+                continue
+            s = info.get("start_index") or 1
+            e = info.get("end_index") or s
+            for p in range(s, e + 1):
+                key = (did, p)
+                if key not in seen and p in page_images:
+                    paths.append(page_images[p])
+                    seen.add(key)
+        return paths
+
+    def _build_history_context(self, session_id: str, use_memory: bool) -> str:
         if not use_memory:
             return ""
-        history = self.store.get_chat_history(doc_id)
+        history = self.sessions.get_messages(session_id)
         if not history:
             return ""
         ctx = "\nPrevious conversation:\n"
-        for msg in history[-5:]:
+        # Exclude the most recent user turn since that's the current question.
+        recent = history[-10:]
+        for msg in recent:
             ctx += f"{msg.role}: {msg.content[:200]}\n"
         return ctx
 
     def _build_vision_answer_prompt(self, query, sub_questions,
                                     history_context, strategy,
-                                    gathered_context: str = ""):
+                                    gathered_context: str = "",
+                                    grounding: str = GROUNDING_INSTRUCTION_SINGLE,
+                                    mode: str = "single",
+                                    docs_overview: str = ""):
         sub_q_note = ""
         if len(sub_questions) > 1:
             sub_q_note = (
                 f"\nThe question was decomposed into sub-questions: "
                 f"{json.dumps(sub_questions, ensure_ascii=False)}\n"
                 f"Synthesis strategy: {strategy}\n"
+            )
+
+        docs_section = ""
+        if docs_overview:
+            docs_section = (
+                f"\n【Available documents — metadata you already know】\n"
+                f"{docs_overview[:4000]}\n"
             )
 
         context_section = ""
         if gathered_context:
             context_section = (
                 f"\nAnalysis results from the reasoning process "
-                f"(IMPORTANT — use these findings as primary reference, "
-                f"they reflect what was actually discovered in the document):\n"
-                f"{gathered_context[:10000]}\n"
+                f"(IMPORTANT — use these findings as primary reference):\n"
+                f"{gathered_context[:12000]}\n"
             )
 
         skill_section = skill_manager.build_skill_prompt()
-        skill_note = ""
-        if skill_section:
-            skill_note = (
-                "\n\nFollow the output format and workflow of any matching "
-                "custom skill below:\n" + skill_section
-            )
+        skill_note = (
+            "\n\nFollow the output format and workflow of any matching custom skill below:\n"
+            + skill_section
+            if skill_section else ""
+        )
+
+        mode_note = (
+            "\nYou are answering based on MULTIPLE documents. "
+            "Be explicit about which document each claim comes from.\n"
+            if mode == "kb" else ""
+        )
 
         return f"""Answer the question based on the images AND the analysis context below.
 The analysis context contains findings from previous reasoning steps — treat it as authoritative.
-If the analysis context contradicts your initial impression of the images, trust the analysis context.
-Examine the images carefully for visual details including figures, tables, diagrams, colors, and layouts.
-
+{mode_note}
 Question: {query}
 {sub_q_note}
+{docs_section}
 {context_section}
 {history_context}
 {skill_note}
 
 {LANG_INSTRUCTION}
+
+{grounding}
+
 Provide a clear, comprehensive answer in Chinese.
-Base your answer primarily on the analysis context, supplemented by what you can see in the images.
-If sub-questions were used, synthesize a unified answer.
 Use Markdown formatting for better readability."""
 
     def _build_answer_prompt(self, query, sub_questions, context,
-                             history_context, strategy):
+                             history_context, strategy,
+                             grounding: str = GROUNDING_INSTRUCTION_SINGLE,
+                             mode: str = "single",
+                             docs_overview: str = ""):
         sub_q_note = ""
         if len(sub_questions) > 1:
             sub_q_note = (
@@ -755,29 +1085,42 @@ Use Markdown formatting for better readability."""
                 f"Synthesis strategy: {strategy}\n"
             )
 
-        skill_section = skill_manager.build_skill_prompt()
-        skill_note = ""
-        if skill_section:
-            skill_note = (
-                "\n\nFollow the output format and workflow of any matching "
-                "custom skill below:\n" + skill_section
+        docs_section = ""
+        if docs_overview:
+            docs_section = (
+                f"\n【Available documents — metadata you already know】\n"
+                f"{docs_overview[:4000]}\n"
             )
 
-        return f"""Answer the question based on the context below.
-The context contains tool analysis results (processed by AI, highly reliable) and may
-also contain raw source text. You MUST use the information available in the context to
-answer the question. If tool analysis results are present, base your answer primarily
-on those results — they have already been extracted and verified from the document.
+        skill_section = skill_manager.build_skill_prompt()
+        skill_note = (
+            "\n\nFollow the output format and workflow of any matching custom skill below:\n"
+            + skill_section
+            if skill_section else ""
+        )
 
+        mode_note = (
+            "\nYou are answering based on MULTIPLE documents. "
+            "Be explicit about which document each claim comes from in every citation.\n"
+            if mode == "kb" else ""
+        )
+
+        return f"""Answer the question based on the context below.
+The context contains your prior reasoning trace, tool analysis results (processed by AI) and raw source text grouped per document.
+{mode_note}
 Question: {query}
 {sub_q_note}
+{docs_section}
 Context:
-{context[:12000]}
+{context[:14000]}
 {history_context}
 {skill_note}
 
 {LANG_INSTRUCTION}
-Provide a clear, comprehensive answer in Chinese. Reference specific sections if helpful.
+
+{grounding}
+
+Provide a clear, comprehensive answer in Chinese.
 If sub-questions were used, synthesize a unified answer.
 Use Markdown formatting for better readability."""
 

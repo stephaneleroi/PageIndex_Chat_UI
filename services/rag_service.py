@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-PageIndex service - handles PDF indexing and RAG operations
+PageIndex service - handles PDF indexing and RAG operations.
+
+Chat is now session-based: both agent and legacy flows take a session_id
+and persist messages into models.session.SessionStore.
 """
 
 import os
@@ -9,11 +12,12 @@ import re
 import json
 import base64
 import logging
-from typing import Dict, List, Optional, Generator
+from typing import Dict, List, Optional, AsyncGenerator
 
 from openai import AsyncOpenAI
 
-from models.document import Document, DocumentStore, Message, document_store
+from models.document import Document, DocumentStore, document_store
+from models.session import Message, SessionStore, session_store
 from config import config_manager
 
 logger = logging.getLogger(__name__)
@@ -38,7 +42,7 @@ class PageIndexService:
         config = config_manager.get_model_config(model_type)
         return config.get('name', 'gpt-4o-mini')
     
-    async def call_llm_stream(self, prompt: str, model_type: str = 'text') -> Generator[str, None, None]:
+    async def call_llm_stream(self, prompt: str, model_type: str = 'text') -> AsyncGenerator[str, None]:
         """Stream LLM response"""
         client = self._get_client(model_type)
         model = self._get_model_name(model_type)
@@ -162,7 +166,6 @@ class PageIndexService:
         mapping = {}
         for i, node in enumerate(all_nodes):
             if node.get("node_id"):
-                # Support both start_index (new) and physical_index (old) field names
                 start_page = node.get("start_index") or node.get("physical_index") or node.get("page_index")
                 
                 if i + 1 < len(all_nodes):
@@ -215,9 +218,7 @@ Directly return the final JSON structure. Do not output anything else.
         
         result = await self.call_llm(search_prompt, model_type)
         
-        # Parse JSON from result
         try:
-            # Find JSON in response
             if '```json' in result:
                 start = result.find('```json') + 7
                 end = result.rfind('```')
@@ -228,13 +229,7 @@ Directly return the final JSON structure. Do not output anything else.
             return {"thinking": "Error parsing response", "node_list": []}
     
     async def tree_search_stream(self, query: str, tree: dict, model_type: str = 'text'):
-        """Perform tree search with streaming thinking output
-        
-        Yields:
-            tuple: (chunk_type, content)
-                - ('thinking', str): thinking text chunk
-                - ('node_list', list): final node list
-        """
+        """Perform tree search with streaming thinking output"""
         tree_without_text = self.remove_fields(tree.copy(), ['text'])
         
         search_prompt = f"""You are given a question and a tree structure of a document.
@@ -266,37 +261,28 @@ Example output:
             full_response += chunk
             buffer += chunk
             
-            # Stream thinking content (including node list part)
-            if len(buffer) > 20:  # Buffer a bit for smoother output
+            if len(buffer) > 20:
                 yield ('thinking', buffer)
                 buffer = ""
             
-            # Check if we have a complete node list
             if '[NODE_LIST]:' in buffer and not node_list_str:
-                # Try to extract the JSON array
                 match = re.search(r'\[NODE_LIST\]:\s*(\[.*?\])', full_response, re.DOTALL)
                 if match:
                     node_list_str = match.group(1)
                     try:
                         node_list = json.loads(node_list_str)
-                        # Don't return yet, continue streaming thinking
-                        # But store the result for later
                         self._pending_node_list = node_list
                     except json.JSONDecodeError:
-                        # Continue accumulating
                         pass
         
-        # Yield any remaining buffer as thinking
         if buffer:
             yield ('thinking', buffer)
         
-        # Return the node list at the end
         if hasattr(self, '_pending_node_list') and self._pending_node_list:
             yield ('node_list', self._pending_node_list)
             delattr(self, '_pending_node_list')
             return
         
-        # If we didn't get a node list, try to parse from full response
         match = re.search(r'\[NODE_LIST\]:\s*(\[.*?\])', full_response, re.DOTALL)
         if match:
             try:
@@ -306,13 +292,12 @@ Example output:
                 logger.error(f"Failed to parse node list: {match.group(1)}")
                 yield ('node_list', [])
         else:
-            # Try to find any JSON array in the response
             match = re.search(r'\[("[^"]+"\s*,\s*)*"[^"]+"\s*\]', full_response)
             if match:
                 try:
                     node_list = json.loads(match.group(0))
                     yield ('node_list', node_list)
-                except:
+                except Exception:
                     logger.error(f"Failed to parse any node list from response")
                     yield ('node_list', [])
             else:
@@ -320,7 +305,6 @@ Example output:
                 yield ('node_list', [])
     
     def get_relevant_content(self, node_list: List[str], node_map: dict) -> str:
-        """Get relevant text content from nodes"""
         contents = []
         for node_id in node_list:
             if node_id in node_map:
@@ -332,7 +316,6 @@ Example output:
     
     def get_page_images_for_nodes(self, node_list: List[str], node_map: dict, 
                                   page_images: dict) -> List[str]:
-        """Get page images for nodes"""
         image_paths = []
         seen_pages = set()
         
@@ -349,29 +332,39 @@ Example output:
         
         return image_paths
     
-    async def extract_pdf_page_images(self, pdf_path: str, output_dir: str) -> dict:
-        """Extract page images from PDF"""
-        import fitz  # PyMuPDF
+    async def extract_pdf_page_images(self, pdf_path: str, output_dir: str,
+                                      on_progress=None) -> dict:
+        """Render each PDF page to a JPEG under output_dir.
+
+        on_progress(rendered:int, total:int) is called after each page so callers
+        (e.g. the indexing pipeline) can surface "第 X/Y 页" progress to the UI.
+        """
+        import fitz
         
         os.makedirs(output_dir, exist_ok=True)
         pdf_document = fitz.open(pdf_path)
         page_images = {}
+        total = len(pdf_document)
         
-        for page_number in range(len(pdf_document)):
+        for page_number in range(total):
             page = pdf_document.load_page(page_number)
-            mat = fitz.Matrix(2.0, 2.0)  # 2x zoom for quality
+            mat = fitz.Matrix(2.0, 2.0)
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("jpeg")
             image_path = os.path.join(output_dir, f"page_{page_number + 1}.jpg")
             with open(image_path, "wb") as f:
                 f.write(img_data)
             page_images[page_number + 1] = image_path
+            if on_progress is not None:
+                try:
+                    on_progress(page_number + 1, total)
+                except Exception:
+                    pass
         
         pdf_document.close()
         return page_images
     
     def get_pdf_page_count(self, pdf_path: str) -> int:
-        """Get PDF page count"""
         import fitz
         doc = fitz.open(pdf_path)
         count = len(doc)
@@ -379,11 +372,6 @@ Example output:
         return count
 
     def extract_text_highlights(self, pdf_path: str, node_map: dict) -> dict:
-        """Extract text block positions per page and assign each block to a node.
-
-        Returns ``{"scale": 2.0, "pages": { "<page_num>": { "width", "height", "blocks": [...] } }}``
-        where each block has ``bbox`` (4-element list in PDF points) and ``node_id``.
-        """
         import fitz
 
         page_to_nodes: Dict[int, List[dict]] = {}
@@ -456,10 +444,11 @@ Example output:
 
 
 class RAGService:
-    """RAG service combining PageIndex with chat functionality"""
-    
-    def __init__(self, store: DocumentStore):
+    """RAG service combining PageIndex with session-based chat."""
+
+    def __init__(self, store: DocumentStore, sessions: SessionStore = session_store):
         self.store = store
+        self.sessions = sessions
         self.pageindex = PageIndexService(store)
         self._agent = None
 
@@ -467,7 +456,7 @@ class RAGService:
     def agent(self):
         if self._agent is None:
             from services.agent import DocumentAgent
-            self._agent = DocumentAgent(self.pageindex, self.store)
+            self._agent = DocumentAgent(self.pageindex, self.store, self.sessions)
         return self._agent
     
     async def prepare_document(self, doc_id: str, pdf_path: str, tree_path: str):
@@ -477,105 +466,122 @@ class RAGService:
             return False
         
         try:
-            # Load tree structure
+            self.store.set_stage(doc_id, 'image_extract', '正在生成页面图像（准备中）...')
             tree = self.pageindex.load_tree_structure(tree_path)
             self.store.cache_tree(doc_id, tree)
             
-            # Get page count
             page_count = self.pageindex.get_pdf_page_count(pdf_path)
             self.store.update_document(doc_id, page_count=page_count)
             
-            # Create node mapping
             node_map = self.pageindex.create_node_mapping(tree, include_page_ranges=True, max_page=page_count)
             self.store.cache_node_map(doc_id, node_map)
-            
-            # Extract page images for vision mode (save to doc.images_dir)
-            page_images = await self.pageindex.extract_pdf_page_images(pdf_path, doc.images_dir)
+
+            # Throttle per-page messages so we don't hammer the metadata file.
+            last_ts = [0.0]
+            def _on_page(done: int, total: int):
+                import time as _t
+                now = _t.time()
+                if done == total or now - last_ts[0] > 0.4:
+                    self.store.set_stage(
+                        doc_id, 'image_extract',
+                        f'正在生成页面图像：第 {done}/{total} 页',
+                    )
+                    last_ts[0] = now
+
+            page_images = await self.pageindex.extract_pdf_page_images(
+                pdf_path, doc.images_dir, on_progress=_on_page,
+            )
             self.store.cache_page_images(doc_id, page_images)
             
             self.store.update_document(doc_id, status='ready')
+            self.store.set_stage(doc_id, 'done', '索引完成')
             return True
         except Exception as e:
             logger.error(f"Error preparing document: {e}")
-            self.store.update_document(doc_id, status='error', error_message=str(e))
+            self.store.update_document(
+                doc_id, status='error', error_message=str(e),
+                stage='error', stage_message=f'准备阶段失败: {e}'
+            )
             return False
-    
-    async def chat_stream(self, doc_id: str, query: str, model_type: str = 'text',
-                         use_memory: bool = True) -> Generator[str, None, None]:
-        """Stream chat response with RAG"""
+
+    # ---------------- Session-based chat ---------------- #
+
+    async def chat_stream(self, session_id: str, query: str,
+                          model_type: str = 'text',
+                          use_memory: bool = True) -> AsyncGenerator[str, None]:
+        """Legacy non-agent RAG stream. Operates on a session in single-doc mode only."""
+        session = self.sessions.get_session(session_id)
+        if not session:
+            yield "[Error: Session not found]"
+            return
+        if session.mode != 'single':
+            yield "[Error: Legacy chat only supports single-doc sessions. Use agent mode for KB.]"
+            return
+        if not session.doc_ids:
+            yield "[Error: Session has no document]"
+            return
+
+        doc_id = session.doc_ids[0]
         doc = self.store.get_document(doc_id)
         if not doc or doc.status != 'ready':
             yield "[Error: Document not ready]"
             return
-        
+
         tree = self.store.get_tree(doc_id)
         node_map = self.store.get_node_map(doc_id)
         page_images = self.store.get_page_images(doc_id)
-        
-        # If node_map is empty but tree exists, prepare the document
+
         if tree and not node_map:
             yield "[PREPARING]\n正在准备文档数据...\n"
             try:
-                # Get page count
                 page_count = self.pageindex.get_pdf_page_count(doc.file_path)
                 self.store.update_document(doc_id, page_count=page_count)
-                
-                # Create node mapping
                 node_map = self.pageindex.create_node_mapping(tree, include_page_ranges=True, max_page=page_count)
                 self.store.cache_node_map(doc_id, node_map)
-                
-                # Extract page images if needed
                 if not page_images:
                     page_images = await self.pageindex.extract_pdf_page_images(doc.file_path, doc.images_dir)
                     self.store.cache_page_images(doc_id, page_images)
-                
                 yield "[PREPARED]\n准备完成！\n\n"
             except Exception as e:
                 logger.error(f"Error preparing document: {e}")
                 yield f"[Error: Failed to prepare document: {e}]"
                 return
-        
+
         if not tree:
             yield "[Error: Tree structure not loaded]"
             return
-        
         if not node_map:
             yield "[Error: Node mapping not available]"
             return
-        
-        # Step 1: Tree search with streaming thinking
+
+        # Step 1: tree search streaming thinking
         yield "[SEARCHING]\n"
-        
+
         thinking = ""
         node_list = []
-        
+
         async for chunk_type, content in self.pageindex.tree_search_stream(query, tree, model_type):
             if chunk_type == 'thinking':
                 thinking += content
-                yield f"[THINKING_CHUNK]{content}"  # Stream thinking with marker
+                yield f"[THINKING_CHUNK]{content}"
             elif chunk_type == 'node_list':
                 node_list = content
-        
-        # Send node list
+
         if node_list:
             yield f"\n[NODES]{json.dumps(node_list)}\n"
-        
-        yield "[ANSWERING]\n"  # Signal that we're starting to answer
-        
-        # Step 2: Get relevant context
+
+        yield "[ANSWERING]\n"
+
         if model_type == 'text':
-            # Text mode - use text content
             relevant_content = self.pageindex.get_relevant_content(node_list, node_map)
-            
-            # Build context with memory
             history_context = ""
             if use_memory:
-                history = self.store.get_chat_history(doc_id)
+                history = self.sessions.get_messages(session_id)
                 if history:
                     history_context = "\n\nPrevious conversation:\n"
-                    for msg in history[-5:]:  # Last 5 messages
+                    for msg in history[-5:]:
                         history_context += f"{msg.role}: {msg.content}\n"
-            
+
             answer_prompt = f"""Answer the question based on the context. If the context is not sufficient, say so.
 
 Question: {query}
@@ -584,82 +590,72 @@ Context: {relevant_content}
 {history_context}
 
 Important: You MUST respond in Chinese (简体中文). All your output should be in Chinese.
-When mentioning any mathematical symbol, variable, subscript, superscript, or formula, you MUST wrap them in LaTeX delimiters: use $...$ for inline math (e.g. $s_j$, $f_{{MD}}$) and \\[...\\] for display math. NEVER output bare symbols like x_i without dollar signs.
+When mentioning any mathematical symbol, variable, subscript, superscript, or formula, you MUST wrap them in LaTeX delimiters: use $...$ for inline math and \\[...\\] for display math.
 Provide a clear, concise answer in Chinese based only on the context provided. If you need to reference specific sections, mention the node IDs.
 Use Markdown formatting for better readability.
 """
-            
-            # Stream answer
-            yield "[ANSWERING]\n"
             full_answer = ""
             async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
                 full_answer += chunk
                 yield chunk
-            
-            # Save to history
-            self.store.add_message(doc_id, Message(role='user', content=query))
-            self.store.add_message(doc_id, Message(
-                role='assistant', 
-                content=full_answer,
-                nodes=node_list,
-                thinking=thinking
+
+            self.sessions.add_message(session_id, Message(role='user', content=query))
+            self.sessions.add_message(session_id, Message(
+                role='assistant', content=full_answer,
+                nodes=node_list, thinking=thinking,
             ))
-            
         else:
-            # Vision mode - use images
             image_paths = self.pageindex.get_page_images_for_nodes(node_list, node_map, page_images)
-            
             if not image_paths:
                 yield "[Error: No relevant images found]"
                 return
-            
+
             answer_prompt = f"""Answer the question based on the images of the document pages as context.
 
 Question: {query}
 
-Important: You MUST respond in Chinese (简体中文). All your output should be in Chinese.
-When mentioning any mathematical symbol, variable, subscript, superscript, or formula, you MUST wrap them in LaTeX delimiters: use $...$ for inline math (e.g. $s_j$, $f_{{MD}}$) and \\[...\\] for display math. NEVER output bare symbols like x_i without dollar signs.
-Provide a clear, concise answer in Chinese based only on the context provided.
+Important: You MUST respond in Chinese (简体中文). Use LaTeX for math symbols.
 Use Markdown formatting for better readability.
 """
-            
-            # Stream answer for vision mode
-            yield "[ANSWERING]\n"
             full_answer = ""
             async for chunk in self.pageindex.call_vlm_stream(answer_prompt, image_paths, model_type):
                 full_answer += chunk
                 yield chunk
-            
-            # Save to history
-            self.store.add_message(doc_id, Message(role='user', content=query))
-            self.store.add_message(doc_id, Message(
-                role='assistant',
-                content=full_answer,
-                nodes=node_list,
-                thinking=thinking
-            ))
-    
-    def get_chat_history(self, doc_id: str) -> List[dict]:
-        """Get chat history for a document"""
-        history = self.store.get_chat_history(doc_id)
-        return [msg.to_dict() for msg in history]
-    
-    def clear_chat_history(self, doc_id: str):
-        """Clear chat history for a document"""
-        self.store.clear_chat_history(doc_id)
 
-    async def agent_chat_stream(self, doc_id: str, query: str,
+            self.sessions.add_message(session_id, Message(role='user', content=query))
+            self.sessions.add_message(session_id, Message(
+                role='assistant', content=full_answer,
+                nodes=node_list, thinking=thinking,
+            ))
+
+    async def agent_chat_stream(self, session_id: str, query: str,
                                 model_type: str = 'text',
                                 use_memory: bool = True):
-        """Agent-powered chat with ReAct loop, decomposition, and reflection"""
-        async for chunk in self.agent.run(doc_id, query, model_type, use_memory):
+        """Agent-powered chat with ReAct loop, decomposition, and reflection."""
+        async for chunk in self.agent.run_session(session_id, query, model_type, use_memory):
             yield chunk
+
+    # ---------------- History helpers ---------------- #
+
+    def get_session_history(self, session_id: str) -> List[dict]:
+        return [m.to_dict() for m in self.sessions.get_messages(session_id)]
+
+    def clear_session_history(self, session_id: str):
+        self.sessions.clear_messages(session_id)
 
     async def auto_analyze_document(self, doc_id: str,
                                     model_type: str = 'text') -> dict:
         """Proactive document analysis after indexing"""
-        return await self.agent.analyze_document(doc_id, model_type)
+        self.store.set_stage(doc_id, 'analysis', '正在生成文档摘要与推荐问题...')
+        try:
+            result = await self.agent.analyze_document(doc_id, model_type)
+            self.store.set_stage(doc_id, 'done', '索引完成')
+            return result
+        except Exception as e:
+            # Analysis is non-fatal — doc is already 'ready'. Just surface a hint.
+            self.store.set_stage(doc_id, 'done', f'摘要生成失败（不影响问答）: {e}')
+            raise
 
 
 # Create singleton instance
-rag_service = RAGService(document_store)
+rag_service = RAGService(document_store, session_store)

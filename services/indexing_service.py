@@ -36,6 +36,7 @@ class IndexingService:
         try:
             # Update status
             self.store.update_document(doc_id, status='indexing')
+            self.store.set_stage(doc_id, 'parsing', '正在读取 PDF 文件...')
             
             # Get model configuration (can be updated via web UI)
             model_config = config_manager.get_model_config('text')
@@ -64,12 +65,36 @@ class IndexingService:
             
             # Run indexing
             logger.info(f"Starting indexing for {pdf_path}")
-            
+            self.store.set_stage(
+                doc_id, 'tree_build',
+                '正在构建文档结构树（识别目录、切分节点）...'
+            )
+
+            # Progress callback for the per-node summary phase — this is the
+            # longest single chunk of work inside page_index_main. It runs in
+            # the executor thread (asyncio.run inside), so we just touch the
+            # store synchronously.
+            def _on_summary_progress(done: int, total: int):
+                try:
+                    if total <= 0:
+                        return
+                    # Keep the leading label consistent with image_extract's
+                    # "第 X/Y 页" format so the frontend regex picks it up.
+                    self.store.set_stage(
+                        doc_id, 'tree_build',
+                        f'正在生成节点摘要：第 {done}/{total} 个节点'
+                    )
+                except Exception:
+                    pass
+
             # Run in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
-                lambda: page_index_main(pdf_path, opt)
+                lambda: page_index_main(
+                    pdf_path, opt,
+                    summary_progress_callback=_on_summary_progress,
+                )
             )
             
             # Get document to find result directory
@@ -91,7 +116,10 @@ class IndexingService:
             
         except Exception as e:
             logger.error(f"Indexing error: {e}")
-            self.store.update_document(doc_id, status='error', error_message=str(e))
+            self.store.update_document(
+                doc_id, status='error', error_message=str(e),
+                stage='error', stage_message=f'索引失败: {e}'
+            )
             return False
     
     def get_indexing_status(self, doc_id: str) -> Optional[str]:
