@@ -3,7 +3,7 @@ Keyword search tool - searches for exact keywords across all document nodes
 """
 
 import logging
-from .base import BaseTool
+from .base import BaseTool, resolve_doc
 
 logger = logging.getLogger(__name__)
 
@@ -11,19 +11,28 @@ logger = logging.getLogger(__name__)
 class KeywordSearchTool(BaseTool):
     name = "keyword_search"
     description = (
-        "Search for an exact keyword or phrase across all document nodes. "
-        "Useful for finding specific terms, numbers, names, or technical concepts."
+        "Search for an exact keyword or phrase across a document's nodes. "
+        "Useful for finding specific terms, numbers, names, or technical concepts. "
+        "In multi-document mode specify doc_id."
     )
     parameters_schema = {
         "keyword": {
             "type": "string",
             "description": "The exact keyword or phrase to search for",
-        }
+        },
+        "doc_id": {
+            "type": "string",
+            "description": "(multi-doc mode) Document ID to search within.",
+        },
     }
 
     async def execute(self, params: dict, context: dict) -> dict:
+        doc_id, doc_ctx, err = resolve_doc(params, context)
+        if err:
+            return {"summary": err, "nodes": []}
+
         keyword = params.get("keyword", "").lower()
-        node_map = context.get("node_map", {})
+        node_map = doc_ctx.get("node_map", {})
 
         if not keyword:
             return {"summary": "No keyword provided", "nodes": []}
@@ -50,15 +59,18 @@ class KeywordSearchTool(BaseTool):
 
         if not matches:
             return {
-                "summary": f"Keyword '{keyword}' not found in any document node",
+                "summary": f"[doc={doc_id}] Keyword '{keyword}' not found.",
                 "nodes": [],
+                "doc_id": doc_id,
             }
 
         summary = (
-            f"Found '{keyword}' in {len(matches)} nodes:\n" + "\n".join(matches[:10])
+            f"[doc={doc_id}] Found '{keyword}' in {len(matches)} nodes:\n"
+            + "\n".join(matches[:10])
         )
         return {
             "summary": summary,
             "nodes": matched_nodes,
+            "doc_id": doc_id,
             "match_count": len(matches),
         }

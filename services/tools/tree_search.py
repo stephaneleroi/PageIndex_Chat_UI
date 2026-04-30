@@ -4,7 +4,7 @@ Tree search tool - searches the document tree structure to find relevant section
 
 import json
 import logging
-from .base import BaseTool
+from .base import BaseTool, resolve_doc
 
 logger = logging.getLogger(__name__)
 
@@ -12,14 +12,19 @@ logger = logging.getLogger(__name__)
 class TreeSearchTool(BaseTool):
     name = "tree_search"
     description = (
-        "Search the document's hierarchical tree structure to find sections "
-        "relevant to a query. Returns matching node IDs with titles and summaries."
+        "Search a document's hierarchical tree to find sections relevant to a query. "
+        "In single-document mode the doc_id is optional. In multi-document mode you MUST "
+        "specify which document to search via doc_id."
     )
     parameters_schema = {
         "query": {
             "type": "string",
             "description": "The search query to find relevant document sections",
-        }
+        },
+        "doc_id": {
+            "type": "string",
+            "description": "(multi-doc mode) ID of the document to search. Omit in single-doc mode.",
+        },
     }
 
     def __init__(self, pageindex_service):
@@ -27,7 +32,12 @@ class TreeSearchTool(BaseTool):
 
     async def execute(self, params: dict, context: dict) -> dict:
         query = params.get("query", "")
-        tree = context.get("tree")
+        doc_id, doc_ctx, err = resolve_doc(params, context)
+        if err:
+            return {"summary": err, "nodes": []}
+
+        tree = doc_ctx.get("tree")
+        node_map = doc_ctx.get("node_map", {})
         model_type = context.get("model_type", "text")
 
         if not tree or not query:
@@ -38,7 +48,6 @@ class TreeSearchTool(BaseTool):
         node_list = result.get("node_list", [])
         thinking = result.get("thinking", "")
 
-        node_map = context.get("node_map", {})
         node_details = []
         for nid in node_list:
             info = node_map.get(nid, {})
@@ -50,13 +59,14 @@ class TreeSearchTool(BaseTool):
                 )
 
         summary = (
-            f"Found {len(node_list)} relevant nodes: {', '.join(node_list)}.\n"
-            + "\n".join(node_details)
+            f"[doc={doc_id}] Found {len(node_list)} relevant nodes: "
+            f"{', '.join(node_list)}.\n" + "\n".join(node_details)
         )
 
         return {
             "summary": summary,
             "nodes": node_list,
+            "doc_id": doc_id,
             "thinking": thinking,
             "node_details": node_details,
         }

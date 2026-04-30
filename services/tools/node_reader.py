@@ -3,7 +3,7 @@ Node reader tool - reads the full text content of document nodes (single or batc
 """
 
 import logging
-from .base import BaseTool
+from .base import BaseTool, resolve_doc
 
 logger = logging.getLogger(__name__)
 
@@ -13,21 +13,28 @@ class NodeReaderTool(BaseTool):
     description = (
         "Read the full text content of one or more document nodes. "
         "Use this to get detailed information from sections you've identified. "
-        "You can pass a single node_id or a list of node_ids for batch reading."
+        "In multi-document mode you MUST specify which document via doc_id."
     )
     parameters_schema = {
         "node_id": {
             "type": "string",
-            "description": "The ID of a single node to read (e.g. 'node_1_2'). Use this OR node_ids.",
+            "description": "ID of a single node to read (e.g. 'node_1_2'). Use this OR node_ids.",
         },
         "node_ids": {
             "type": "array",
-            "description": "List of node IDs to read in batch (e.g. ['node_1_2', 'node_2_3']). Use this OR node_id.",
+            "description": "List of node IDs to read in batch. Use this OR node_id.",
+        },
+        "doc_id": {
+            "type": "string",
+            "description": "(multi-doc mode) ID of the document these nodes belong to.",
         },
     }
 
     async def execute(self, params: dict, context: dict) -> dict:
-        node_map = context.get("node_map", {})
+        doc_id, doc_ctx, err = resolve_doc(params, context)
+        if err:
+            return {"summary": err, "nodes": []}
+        node_map = doc_ctx.get("node_map", {})
 
         ids = params.get("node_ids") or []
         single_id = params.get("node_id", "")
@@ -62,8 +69,8 @@ class NodeReaderTool(BaseTool):
             found_nodes.append(nid)
 
         summary = (
-            f"Read {len(found_nodes)}/{len(ids)} nodes, {total_chars} total chars:\n"
-            + "\n".join(results)
+            f"[doc={doc_id}] Read {len(found_nodes)}/{len(ids)} nodes, "
+            f"{total_chars} total chars:\n" + "\n".join(results)
         )
 
         all_texts = []
@@ -78,5 +85,6 @@ class NodeReaderTool(BaseTool):
         return {
             "summary": summary,
             "nodes": found_nodes,
+            "doc_id": doc_id,
             "content": "\n\n".join(all_texts),
         }

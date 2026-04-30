@@ -3,7 +3,7 @@ Summarizer tool - generates LLM-powered summaries of document sections
 """
 
 import logging
-from .base import BaseTool
+from .base import BaseTool, resolve_doc
 
 logger = logging.getLogger(__name__)
 
@@ -12,21 +12,30 @@ class SummarizerTool(BaseTool):
     name = "summarize_nodes"
     description = (
         "Generate a concise summary of one or more document nodes' content. "
-        "Useful when you have too much text and need a quick overview."
+        "Useful when you have a lot of text and need a quick overview. "
+        "In multi-document mode specify doc_id."
     )
     parameters_schema = {
         "node_ids": {
             "type": "array",
             "description": "List of node IDs to summarize",
-        }
+        },
+        "doc_id": {
+            "type": "string",
+            "description": "(multi-doc mode) Document ID.",
+        },
     }
 
     def __init__(self, pageindex_service):
         self.pageindex = pageindex_service
 
     async def execute(self, params: dict, context: dict) -> dict:
+        doc_id, doc_ctx, err = resolve_doc(params, context)
+        if err:
+            return {"summary": err, "nodes": []}
+
         node_ids = params.get("node_ids", [])
-        node_map = context.get("node_map", {})
+        node_map = doc_ctx.get("node_map", {})
         model_type = context.get("model_type", "text")
 
         if not node_ids:
@@ -43,8 +52,9 @@ class SummarizerTool(BaseTool):
 
         if not texts:
             return {
-                "summary": "No text content found in the specified nodes",
+                "summary": f"[doc={doc_id}] No text content in the specified nodes.",
                 "nodes": node_ids,
+                "doc_id": doc_id,
             }
 
         combined = "\n\n---\n\n".join(texts)
@@ -56,12 +66,14 @@ class SummarizerTool(BaseTool):
         try:
             result = await self.pageindex.call_llm(prompt, model_type)
             return {
-                "summary": result,
+                "summary": f"[doc={doc_id}] {result}",
                 "nodes": node_ids,
+                "doc_id": doc_id,
             }
         except Exception as e:
             logger.error(f"Summarizer error: {e}")
             return {
-                "summary": f"Error generating summary: {e}",
+                "summary": f"[doc={doc_id}] Error generating summary: {e}",
                 "nodes": node_ids,
+                "doc_id": doc_id,
             }

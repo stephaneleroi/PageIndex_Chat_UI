@@ -1,13 +1,9 @@
 """
 Page viewer tool - reads page images via VLM for visual content understanding.
-
-In text mode: returns textual content of the nodes (delegates to node text).
-In vision mode: sends page images to VLM and returns the visual description,
-enabling the Agent to "see" figures, tables, colors, layouts during ReAct.
 """
 
 import logging
-from .base import BaseTool
+from .base import BaseTool, resolve_doc
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +11,10 @@ logger = logging.getLogger(__name__)
 class PageViewerTool(BaseTool):
     name = "view_pages"
     description = (
-        "Visually read page images corresponding to document nodes. "
-        "In vision mode, this sends page images to the vision model so you can "
-        "understand figures, tables, charts, colors, and visual layouts. "
-        "Provide node_ids and an optional focus query describing what to look for."
+        "Visually inspect page images corresponding to document nodes. "
+        "In vision mode, pages are sent to the vision model so you can understand "
+        "figures, tables, charts, colors, and visual layouts. "
+        "In multi-document mode specify doc_id."
     )
     parameters_schema = {
         "node_ids": {
@@ -27,7 +23,11 @@ class PageViewerTool(BaseTool):
         },
         "focus": {
             "type": "string",
-            "description": "Optional: what to focus on when reading the pages (e.g. 'describe the chart', 'what color is the logo').",
+            "description": "Optional: what to focus on (e.g. 'describe the chart').",
+        },
+        "doc_id": {
+            "type": "string",
+            "description": "(multi-doc mode) Document ID.",
         },
     }
 
@@ -35,10 +35,14 @@ class PageViewerTool(BaseTool):
         self.pageindex = pageindex_service
 
     async def execute(self, params: dict, context: dict) -> dict:
+        doc_id, doc_ctx, err = resolve_doc(params, context)
+        if err:
+            return {"summary": err, "nodes": [], "pages": []}
+
         node_ids = params.get("node_ids", [])
         focus = params.get("focus", "")
-        node_map = context.get("node_map", {})
-        page_images = context.get("page_images", {})
+        node_map = doc_ctx.get("node_map", {})
+        page_images = doc_ctx.get("page_images", {})
         model_type = context.get("model_type", "text")
 
         if not node_ids:
@@ -67,9 +71,7 @@ class PageViewerTool(BaseTool):
         is_vision = model_type != "text"
 
         if is_vision and image_paths and self.pageindex:
-            focus_instruction = ""
-            if focus:
-                focus_instruction = f"\nFocus on: {focus}"
+            focus_instruction = f"\nFocus on: {focus}" if focus else ""
 
             prompt = (
                 f"You are examining pages from a document. "
@@ -85,21 +87,23 @@ class PageViewerTool(BaseTool):
                     prompt, image_paths, model_type
                 )
                 summary = (
-                    f"Visual analysis of {len(node_ids)} nodes "
+                    f"[doc={doc_id}] Visual analysis of {len(node_ids)} nodes "
                     f"({len(image_paths)} page images):\n{vlm_response}"
                 )
                 return {
                     "summary": summary,
                     "pages": sorted(all_pages),
                     "nodes": node_ids,
+                    "doc_id": doc_id,
                     "visual_content": vlm_response,
                 }
             except Exception as e:
                 logger.error(f"VLM call failed in PageViewerTool: {e}")
                 return {
-                    "summary": f"Visual analysis failed: {e}. Falling back to text.",
+                    "summary": f"[doc={doc_id}] Visual analysis failed: {e}. Falling back to text.",
                     "pages": sorted(all_pages),
                     "nodes": node_ids,
+                    "doc_id": doc_id,
                 }
 
         texts = []
@@ -111,7 +115,7 @@ class PageViewerTool(BaseTool):
                 texts.append(text[:500])
 
         summary = (
-            f"Page info for {len(node_ids)} nodes "
+            f"[doc={doc_id}] Page info for {len(node_ids)} nodes "
             f"(pages {sorted(all_pages)}, {len(image_paths)} images available):\n"
             + "\n".join(texts[:5])
         )
@@ -120,4 +124,5 @@ class PageViewerTool(BaseTool):
             "summary": summary,
             "pages": sorted(all_pages),
             "nodes": node_ids,
+            "doc_id": doc_id,
         }
