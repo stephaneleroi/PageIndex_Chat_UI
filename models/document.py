@@ -1,17 +1,22 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Document models for PageIndex Chat UI
+Document models for PageIndex Chat UI.
+
+A Document represents a persisted, indexed PDF plus its derived artifacts
+(structure, images, analysis). It is no longer tied to a single chat history —
+chat state lives in models.session.SessionStore.
 """
 
 import os
 import json
-import uuid
-import time
 import shutil
+import time
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
+
+# Re-export Message from session module so legacy imports keep working.
+from .session import Message  # noqa: F401
 
 # Base directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,127 +25,122 @@ RESULTS_DIR = os.path.join(BASE_DIR, 'results')
 
 
 @dataclass
-class Message:
-    """Chat message"""
-    role: str  # 'user' or 'assistant'
-    content: str
-    timestamp: float = field(default_factory=time.time)
-    nodes: List[str] = field(default_factory=list)
-    thinking: str = ''
-    
-    def to_dict(self):
-        return asdict(self)
-
-
-@dataclass
 class Document:
-    """Document representation"""
+    """Document representation."""
     doc_id: str
     filename: str  # original filename without doc_id prefix
     file_path: str  # path to PDF in uploads/
     result_dir_name: str = ''  # directory name in results/ (defaults to {doc_id}_{filename})
-    status: str = 'pending'  # pending, indexing, ready, error
+    status: str = 'pending'  # pending, indexing, indexed, ready, error
     created_at: float = field(default_factory=time.time)
     page_count: int = 0
     error_message: str = ''
-    
+    # Fine-grained indexing progress — only meaningful while status != 'ready'.
+    # stage: queued | parsing | toc_detect | tree_build | image_extract | analysis | done | error
+    stage: str = ''
+    stage_message: str = ''        # Short Chinese description for the UI.
+    stage_started_at: float = 0.0  # When the current stage began (unix ts).
+
     def __post_init__(self):
-        """Set default result_dir_name if not provided"""
         if not self.result_dir_name:
             self.result_dir_name = f"{self.doc_id}_{self.filename}"
-    
+
     @property
     def result_dir(self) -> str:
-        """Get result directory for this document"""
         return os.path.join(RESULTS_DIR, self.result_dir_name)
-    
+
     @property
     def metadata_path(self) -> str:
-        """Get metadata file path"""
         return os.path.join(self.result_dir, 'metadata.json')
-    
+
     @property
     def structure_path(self) -> str:
-        """Get structure file path"""
         return os.path.join(self.result_dir, 'structure.json')
-    
+
     @property
     def images_dir(self) -> str:
-        """Get images directory"""
         return os.path.join(self.result_dir, 'images')
-    
-    @property
-    def chat_history_path(self) -> str:
-        """Get chat history file path"""
-        return os.path.join(self.result_dir, 'chat_history.json')
 
     @property
     def analysis_path(self) -> str:
-        """Get auto-analysis file path"""
         return os.path.join(self.result_dir, 'analysis.json')
 
     def to_dict(self):
-        return asdict(self)
+        d = asdict(self)
+        # Attach short analysis summary (best-effort) so library cards can show it.
+        try:
+            if os.path.exists(self.analysis_path):
+                with open(self.analysis_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                summary = (data.get('summary') or '').strip()
+                if summary:
+                    d['analysis_summary'] = summary[:240]
+        except Exception:
+            pass
+        return d
 
 
 class DocumentStore:
-    """Document store with persistence"""
-    
+    """In-memory document registry with lazy disk persistence.
+
+    Chat history has been removed — see models.session.SessionStore.
+    """
+
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
         self._initialized = True
         self.documents: Dict[str, Document] = {}
-        self.chat_history: Dict[str, List[Message]] = {}
         self.tree_cache: Dict[str, dict] = {}
         self.node_map_cache: Dict[str, dict] = {}
         self.page_images_cache: Dict[str, dict] = {}
-        
-        # Ensure base directories exist
+
         os.makedirs(UPLOADS_DIR, exist_ok=True)
         os.makedirs(RESULTS_DIR, exist_ok=True)
-        
-        # Load persisted documents on init
+
         self._load_from_disk()
-    
+
+    # -------------------- discovery & metadata -------------------- #
+
     def _load_from_disk(self):
-        """Load document metadata by scanning results directories"""
+        """Recover documents by scanning results/* for metadata.json files."""
         if not os.path.exists(RESULTS_DIR):
             return
-        
+
         print("Scanning results directory to recover documents...")
-        
         for dir_name in os.listdir(RESULTS_DIR):
+            # Skip system directories introduced by the session store.
+            if dir_name.startswith('_') or dir_name.startswith('.'):
+                continue
+
             doc_dir = os.path.join(RESULTS_DIR, dir_name)
             if not os.path.isdir(doc_dir):
                 continue
-            
+
             metadata_path = os.path.join(doc_dir, 'metadata.json')
             if not os.path.exists(metadata_path):
                 continue
-            
+
             try:
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                
                 doc_id = data['doc_id']
                 filename = data['filename']
                 result_dir_name = data.get('result_dir_name', dir_name)
-                
-                # Find PDF file
+
                 pdf_path = os.path.join(UPLOADS_DIR, f"{doc_id}_{filename}")
                 if not os.path.exists(pdf_path):
                     print(f"Skipping document with missing PDF: {dir_name}")
                     continue
-                
+
                 doc = Document(
                     doc_id=doc_id,
                     filename=filename,
@@ -149,21 +149,19 @@ class DocumentStore:
                     status=data.get('status', 'ready'),
                     created_at=data.get('created_at', os.path.getctime(doc_dir)),
                     page_count=data.get('page_count', 0),
-                    error_message=data.get('error_message', '')
+                    error_message=data.get('error_message', ''),
+                    stage=data.get('stage', '') if data.get('status') != 'ready' else '',
+                    stage_message=data.get('stage_message', '') if data.get('status') != 'ready' else '',
+                    stage_started_at=data.get('stage_started_at', 0.0),
                 )
                 self.documents[doc.doc_id] = doc
-                self.chat_history[doc.doc_id] = []
                 print(f"Recovered document: {filename} (id: {doc_id}, status: {doc.status})")
-                    
             except Exception as e:
                 print(f"Error loading metadata for {dir_name}: {e}")
-        
         print(f"Total documents recovered: {len(self.documents)}")
-    
+
     def _save_document_metadata(self, doc: Document):
-        """Save document metadata to its result directory"""
         os.makedirs(doc.result_dir, exist_ok=True)
-        
         metadata = {
             'doc_id': doc.doc_id,
             'filename': doc.filename,
@@ -171,179 +169,111 @@ class DocumentStore:
             'status': doc.status,
             'created_at': doc.created_at,
             'page_count': doc.page_count,
-            'error_message': doc.error_message
+            'error_message': doc.error_message,
+            'stage': doc.stage,
+            'stage_message': doc.stage_message,
+            'stage_started_at': doc.stage_started_at,
         }
-        
         try:
             with open(doc.metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"Error saving document metadata: {e}")
-    
+
+    # -------------------- CRUD -------------------- #
+
     def add_document(self, doc: Document):
-        """Add a document to the store"""
         self.documents[doc.doc_id] = doc
-        self.chat_history[doc.doc_id] = []
         os.makedirs(doc.result_dir, exist_ok=True)
         self._save_document_metadata(doc)
-    
+
     def get_document(self, doc_id: str) -> Optional[Document]:
-        """Get a document by ID"""
         return self.documents.get(doc_id)
-    
+
     def get_document_by_name(self, filename: str) -> Optional[Document]:
-        """Get a document by filename"""
         for doc in self.documents.values():
             if doc.filename == filename:
                 return doc
         return None
-    
+
     def update_document(self, doc_id: str, **kwargs):
-        """Update document properties"""
         if doc_id in self.documents:
             doc = self.documents[doc_id]
             for key, value in kwargs.items():
                 if hasattr(doc, key):
                     setattr(doc, key, value)
             self._save_document_metadata(doc)
-    
-    def get_all_documents(self) -> List[Document]:
-        """Get all documents"""
-        return list(self.documents.values())
-    
-    def delete_document(self, doc_id: str):
-        """Delete a document and all its data"""
-        if doc_id in self.documents:
-            doc = self.documents[doc_id]
-            
-            # Delete PDF file
-            if doc.file_path and os.path.exists(doc.file_path):
-                os.remove(doc.file_path)
-            
-            # Delete entire result directory
-            if os.path.exists(doc.result_dir):
-                shutil.rmtree(doc.result_dir)
-            
-            # Remove from store
-            del self.documents[doc_id]
-            self.chat_history.pop(doc_id, None)
-            self.tree_cache.pop(doc_id, None)
-            self.node_map_cache.pop(doc_id, None)
-            self.page_images_cache.pop(doc_id, None)
-    
-    def add_message(self, doc_id: str, message: Message):
-        """Add a message to chat history"""
-        if doc_id in self.chat_history:
-            self.chat_history[doc_id].append(message)
-            # Persist chat history to disk
-            self._save_chat_history(doc_id)
-    
-    def _save_chat_history(self, doc_id: str):
-        """Save chat history to disk"""
-        doc = self.get_document(doc_id)
-        if not doc:
+
+    def set_stage(self, doc_id: str, stage: str, message: str = ''):
+        """Update fine-grained indexing progress for a not-yet-ready document."""
+        if doc_id not in self.documents:
             return
-        
-        history = self.chat_history.get(doc_id, [])
-        history_data = [msg.to_dict() for msg in history]
-        
-        try:
-            with open(doc.chat_history_path, 'w', encoding='utf-8') as f:
-                json.dump(history_data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"Error saving chat history: {e}")
-    
-    def _load_chat_history(self, doc_id: str):
-        """Load chat history from disk"""
-        doc = self.get_document(doc_id)
-        if not doc or not os.path.exists(doc.chat_history_path):
-            return []
-        
-        try:
-            with open(doc.chat_history_path, 'r', encoding='utf-8') as f:
-                history_data = json.load(f)
-            
-            messages = []
-            for msg_data in history_data:
-                messages.append(Message(
-                    role=msg_data.get('role', 'user'),
-                    content=msg_data.get('content', ''),
-                    timestamp=msg_data.get('timestamp', 0),
-                    nodes=msg_data.get('nodes', []),
-                    thinking=msg_data.get('thinking', '')
-                ))
-            return messages
-        except Exception as e:
-            print(f"Error loading chat history: {e}")
-            return []
-    
-    def get_chat_history(self, doc_id: str) -> List[Message]:
-        """Get chat history for a document"""
-        # Try memory cache first
-        if doc_id in self.chat_history and self.chat_history[doc_id]:
-            return self.chat_history[doc_id]
-        
-        # Try loading from disk
-        history = self._load_chat_history(doc_id)
-        if history:
-            self.chat_history[doc_id] = history
-        return self.chat_history.get(doc_id, [])
-    
-    def clear_chat_history(self, doc_id: str):
-        """Clear chat history for a document"""
-        self.chat_history[doc_id] = []
-        
-        # Also delete the file from disk
-        doc = self.get_document(doc_id)
-        if doc and os.path.exists(doc.chat_history_path):
+        doc = self.documents[doc_id]
+        doc.stage = stage
+        doc.stage_message = message
+        doc.stage_started_at = time.time()
+        # Keep the metadata file in sync so the next list_documents call reflects it.
+        self._save_document_metadata(doc)
+
+    def get_all_documents(self) -> List[Document]:
+        return list(self.documents.values())
+
+    def delete_document(self, doc_id: str):
+        """Delete a document's index artifacts. Does NOT affect any chat session."""
+        if doc_id not in self.documents:
+            return
+        doc = self.documents[doc_id]
+
+        if doc.file_path and os.path.exists(doc.file_path):
             try:
-                os.remove(doc.chat_history_path)
+                os.remove(doc.file_path)
             except Exception as e:
-                print(f"Error deleting chat history file: {e}")
-    
+                print(f"Error removing PDF: {e}")
+
+        if os.path.exists(doc.result_dir):
+            try:
+                shutil.rmtree(doc.result_dir)
+            except Exception as e:
+                print(f"Error removing result dir: {e}")
+
+        del self.documents[doc_id]
+        self.tree_cache.pop(doc_id, None)
+        self.node_map_cache.pop(doc_id, None)
+        self.page_images_cache.pop(doc_id, None)
+
+    # -------------------- derived artifact caches -------------------- #
+
     def cache_tree(self, doc_id: str, tree: dict):
-        """Cache parsed tree structure"""
         self.tree_cache[doc_id] = tree
-    
+
     def get_tree(self, doc_id: str) -> Optional[dict]:
-        """Get cached tree structure"""
-        # Try memory cache first
         if doc_id in self.tree_cache:
             return self.tree_cache[doc_id]
-        
-        # Try loading from disk
         doc = self.get_document(doc_id)
         if doc and os.path.exists(doc.structure_path):
             try:
                 with open(doc.structure_path, 'r', encoding='utf-8') as f:
                     tree_data = json.load(f)
-                # Extract 'structure' field if present (format: {"doc_name": ..., "structure": [...]})
                 tree = tree_data.get('structure', tree_data)
                 self.tree_cache[doc_id] = tree
                 return tree
             except Exception as e:
                 print(f"Error loading tree from disk: {e}")
         return None
-    
+
     def cache_node_map(self, doc_id: str, node_map: dict):
-        """Cache node mapping"""
         self.node_map_cache[doc_id] = node_map
-    
+
     def get_node_map(self, doc_id: str) -> Optional[dict]:
-        """Get cached node mapping"""
         return self.node_map_cache.get(doc_id)
-    
+
     def cache_page_images(self, doc_id: str, page_images: dict):
-        """Cache page images mapping"""
         self.page_images_cache[doc_id] = page_images
-    
+
     def get_page_images(self, doc_id: str) -> Optional[dict]:
-        """Get cached page images"""
-        # Try memory cache first
         if doc_id in self.page_images_cache:
             return self.page_images_cache[doc_id]
-        
-        # Try loading from disk by scanning the images directory
+
         doc = self.get_document(doc_id)
         if doc and os.path.exists(doc.images_dir):
             try:
@@ -363,7 +293,6 @@ class DocumentStore:
         return None
 
     def get_analysis(self, doc_id: str) -> Optional[dict]:
-        """Get document analysis (proactive agent analysis)"""
         doc = self.get_document(doc_id)
         if not doc:
             return None
