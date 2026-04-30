@@ -577,6 +577,8 @@ class RAGService:
             history_context = ""
             if use_memory:
                 history = self.sessions.get_messages(session_id)
+                # Skip reflection-superseded drafts (see agent._build_history_context).
+                history = [m for m in history if not getattr(m, 'superseded', False)]
                 if history:
                     history_context = "\n\nPrevious conversation:\n"
                     for msg in history[-5:]:

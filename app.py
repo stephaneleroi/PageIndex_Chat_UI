@@ -60,9 +60,17 @@ def serve_static(filename):
 # Serve results files (images, etc.)
 @app.route('/api/results/<path:filename>')
 def serve_results(filename):
-    """Serve files from results directory (page images, etc.)"""
-    from models.document import RESULTS_DIR
-    return send_from_directory(RESULTS_DIR, filename)
+    """Serve files from results/documents/ (page images, etc.).
+
+    Historically the URL prefix was ``/api/results/<doc_dir>/...`` and the
+    files lived directly under ``results/<doc_dir>/``. After the results
+    layout reorganisation, per-document artifacts now live under
+    ``results/documents/<doc_dir>/``. We keep the public URL prefix unchanged
+    and just point the handler at the new physical location so existing
+    callers (and already-rendered messages) keep working.
+    """
+    from models.document import DOCUMENTS_DIR
+    return send_from_directory(DOCUMENTS_DIR, filename)
 
 # Error handlers
 @app.errorhandler(404)

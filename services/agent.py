@@ -517,11 +517,31 @@ Output JSON only:
         gathered: List[dict] = []
         all_nodes: List[str] = []  # qualified node refs "doc_id::node_id"
 
-        def _qualify_nodes(obs_nodes: List[str], obs_doc_id: Optional[str]) -> List[str]:
+        def _qualify_nodes(obs_nodes: List[str], obs_doc_id: Optional[str],
+                           per_doc_nodes: Optional[dict] = None) -> List[str]:
+            # Build a reverse lookup {node_id -> doc_id} from cross_search's
+            # per_doc_nodes, so bare node refs returned by multi-doc tools get
+            # the correct document prefix (instead of silently defaulting to
+            # the caller's obs_doc_id, which is usually None for cross_search
+            # and leads to unclickable nodes on the frontend).
+            #
+            # If the same node_id happens to collide across documents (very
+            # rare in practice since ids are per-tree), first-seen wins — the
+            # qualified result is still better than leaving it bare.
+            rev = {}
+            if per_doc_nodes:
+                for did, nids in per_doc_nodes.items():
+                    if not did:
+                        continue
+                    for nid in (nids or []):
+                        if nid and nid not in rev:
+                            rev[nid] = did
             out = []
             for n in obs_nodes:
                 if "::" in n:
                     out.append(n)
+                elif n in rev:
+                    out.append(f"{rev[n]}::{n}")
                 elif obs_doc_id:
                     out.append(f"{obs_doc_id}::{n}")
                 else:
@@ -557,7 +577,8 @@ Output JSON only:
 
                 obs_nodes = observation.get("nodes", []) or []
                 obs_doc_id = observation.get("doc_id") or tool_input.get("doc_id")
-                qualified = _qualify_nodes(obs_nodes, obs_doc_id)
+                per_doc_nodes = observation.get("per_doc_nodes")
+                qualified = _qualify_nodes(obs_nodes, obs_doc_id, per_doc_nodes)
                 all_nodes.extend(qualified)
 
                 gathered.append({
@@ -669,6 +690,12 @@ Output JSON only:
                 and reflection.get("score", 10) < REFLECT_ACCEPT_THRESHOLD):
             yield "[AGENT_RETRY]\n"
 
+            # Snapshot state BEFORE retry so we can persist the retry round
+            # as a SEPARATE assistant message (continuing the conversation
+            # rather than overwriting the low-score draft).
+            gathered_cutoff = len(gathered)
+            nodes_cutoff = len(all_nodes)
+
             missing = reflection.get("missing_info", [])
             if missing:
                 extra_query = "; ".join(missing)
@@ -695,7 +722,8 @@ Output JSON only:
 
                     obs_nodes = observation.get("nodes", []) or []
                     obs_doc_id = observation.get("doc_id") or tool_input.get("doc_id")
-                    qualified = _qualify_nodes(obs_nodes, obs_doc_id)
+                    per_doc_nodes = observation.get("per_doc_nodes")
+                    qualified = _qualify_nodes(obs_nodes, obs_doc_id, per_doc_nodes)
                     all_nodes.extend(qualified)
                     gathered.append({
                         "question": extra_query,
@@ -755,14 +783,34 @@ Output JSON only:
                         full_answer += chunk
                         yield chunk
 
-            # Retry produced a (hopefully better) answer — overwrite the
-            # assistant message we persisted right after Phase 3.
-            self.sessions.update_last_message(
-                session_id, role="assistant",
+            # Retry produced a (hopefully better) answer. Instead of
+            # overwriting the low-score draft, APPEND it as a second
+            # assistant turn so the full conversation is preserved —
+            # user sees: [user] → [draft answer] → [reflect + retry steps]
+            # → [improved answer], and the next turn's history_context
+            # naturally continues from here.
+            retry_gathered = gathered[gathered_cutoff:]
+            retry_nodes = list(dict.fromkeys(all_nodes[nodes_cutoff:]))
+
+            def _thinking_summary_renumbered(g_list):
+                return "\n".join(
+                    f"Step {i+1} [{g['tool']}{(' doc=' + g['doc_id']) if g.get('doc_id') else ''}]: {g['thought']}"
+                    for i, g in enumerate(g_list)
+                )
+
+            self.sessions.add_message(session_id, Message(
+                role="assistant",
                 content=full_answer,
-                nodes=list(dict.fromkeys(all_nodes)),
-                thinking=_thinking_summary(gathered),
-            )
+                nodes=retry_nodes,
+                thinking=_thinking_summary_renumbered(retry_gathered),
+            ))
+
+            # Flag the low-score draft (the previous assistant message) as
+            # superseded so _build_history_context skips it in subsequent
+            # turns. UI history still renders it — only LLM context is
+            # cleaned up. This also side-steps providers that reject two
+            # consecutive assistant messages.
+            self.sessions.mark_superseded_before_last(session_id, role="assistant")
 
     # ============================================================ #
     #  Helpers
@@ -1004,6 +1052,13 @@ Output JSON only:
         if not use_memory:
             return ""
         history = self.sessions.get_messages(session_id)
+        if not history:
+            return ""
+        # Skip messages flagged as superseded (e.g. low-score drafts that
+        # were replaced by a reflection-triggered retry). They remain in the
+        # UI for transparency but must NOT leak back into LLM context,
+        # otherwise the model may keep seeing/repeating stale content.
+        history = [m for m in history if not getattr(m, 'superseded', False)]
         if not history:
             return ""
         ctx = "\nPrevious conversation:\n"

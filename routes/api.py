@@ -225,6 +225,30 @@ def clear_session_messages(session_id):
     return jsonify({'success': True})
 
 
+@api_bp.route('/sessions/<session_id>/truncate', methods=['POST'])
+def truncate_session_messages(session_id):
+    """Drop messages at ``index`` and beyond.
+
+    Powers the frontend's "edit & resend" / "regenerate" flows: the client
+    tells us where the fresh turn should start, we cut the tail, then the
+    subsequent ``agent_chat`` socket event replays from that point with the
+    already-trimmed history as LLM context.
+    """
+    session = session_store.get_session(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+    data = request.json or {}
+    try:
+        index = int(data.get('index'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'index (int) required'}), 400
+    session_store.truncate_messages(session_id, index)
+    return jsonify({
+        'success': True,
+        'message_count': len(session_store.get_messages(session_id)),
+    })
+
+
 # ============= Tree Structure Routes =============
 
 @api_bp.route('/documents/<doc_id>/tree', methods=['GET'])

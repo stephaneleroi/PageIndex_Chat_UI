@@ -1138,8 +1138,33 @@ async function sendChatMessage(page) {
         if (ui.messages.innerHTML.includes('empty-landing')) ui.messages.innerHTML = '';
     }
 
-    addUserMessage(ui.messages, text);
     ui.input.value = '';
+    sendChatQuery(page, sessionId, text, { appendUserBubble: true });
+}
+
+/**
+ * Low-level send: fires the agent_chat socket event for ``text`` against
+ * ``sessionId`` and wires up the streaming UI. Does NOT create a session
+ * or validate document selection — callers are responsible for that.
+ *
+ * ``appendUserBubble`` controls whether a user bubble is added to the DOM
+ * before streaming starts:
+ *   - true  (normal send): yes, as always.
+ *   - false (regenerate / edit-resend): no — the user bubble is already
+ *     in the DOM (or will be restored by a subsequent history refresh).
+ */
+function sendChatQuery(page, sessionId, text, opts) {
+    opts = opts || {};
+    const ui = page === 'doc-chat' ? {
+        messages: document.getElementById('docChatMessages'),
+    } : {
+        messages: document.getElementById('kbChatMessages'),
+    };
+    if (!ui.messages) return;
+
+    if (opts.appendUserBubble !== false) {
+        addUserMessage(ui.messages, text);
+    }
     showTypingIndicator(ui.messages);
     State.isStreaming = true;
     updateSendButton();
@@ -1153,6 +1178,171 @@ async function sendChatMessage(page) {
 
     // All modes (text & vision) use the same streaming agent path.
     State.socket.emit('agent_chat', payload);
+}
+
+/**
+ * Regenerate the latest assistant answer.
+ *
+ * Strategy: truncate the session to just before the last non-superseded
+ * assistant turn (which keeps the user's question at the tail), then
+ * replay that question via ``sendChatQuery``. The history refresh on
+ * stream completion restores the correct DOM state.
+ */
+async function regenerateLastAnswer() {
+    if (State.isStreaming) return;
+    const page = State.currentPage;
+    const sessionId = page === 'doc-chat'
+        ? State.docChat.activeSessionId
+        : State.kbChat.activeSessionId;
+    if (!sessionId) return;
+
+    try {
+        const r = await fetch(`/api/sessions/${sessionId}`);
+        const d = await r.json();
+        const msgs = (d.session && d.session.messages) || [];
+        // Find the last user message — we want to keep it and drop
+        // everything after (including any superseded drafts that followed).
+        let lastUserIdx = -1;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].role === 'user') { lastUserIdx = i; break; }
+        }
+        if (lastUserIdx < 0) return;
+        const userText = msgs[lastUserIdx].content || '';
+        // Truncate right AFTER the last user message — keep it, drop replies.
+        await fetch(`/api/sessions/${sessionId}/truncate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ index: lastUserIdx + 1 }),
+        });
+        // Redraw the chat locally from the truncated slice BEFORE firing the
+        // new query. Doing it synchronously (from the fetched data) avoids
+        // the flicker we'd get by waiting on an async get_history round-trip
+        // and prevents the typing indicator from being wiped mid-stream.
+        const ui = page === 'doc-chat'
+            ? { messages: document.getElementById('docChatMessages') }
+            : { messages: document.getElementById('kbChatMessages') };
+        if (ui.messages) {
+            const kept = msgs.slice(0, lastUserIdx + 1);
+            ui.messages.innerHTML = '';
+            // No assistant in the kept slice, so no message gets the
+            // regenerate button yet; the history refresh on stream
+            // completion will attach it to the new answer.
+            kept.forEach((m, idx) => appendHistoryMessage(ui.messages, m, {
+                index: idx, isLastAssistant: false,
+            }));
+        }
+        sendChatQuery(page, sessionId, userText, { appendUserBubble: false });
+    } catch (e) {
+        showNotification('重新生成失败: ' + e.message, 'error');
+    }
+}
+
+/**
+ * In-place edit of the user message at ``index``:
+ *   1. Swap the bubble's content for a textarea + Save/Cancel controls.
+ *   2. On Save: truncate session at ``index``, synchronously redraw the
+ *      preserved prefix, then fire a fresh ``agent_chat`` with the edited
+ *      text. (The history refresh on stream completion puts buttons back.)
+ *   3. On Cancel: restore the original rendered bubble, no server changes.
+ *
+ * We intentionally do NOT route editing through the bottom input box —
+ * users expect the familiar ChatGPT / Claude behaviour where edits happen
+ * on the message itself.
+ */
+async function startEditUserMessage(index) {
+    if (State.isStreaming) return;
+    const page = State.currentPage;
+    const sessionId = page === 'doc-chat'
+        ? State.docChat.activeSessionId
+        : State.kbChat.activeSessionId;
+    if (!sessionId) return;
+    const msgsEl = page === 'doc-chat'
+        ? document.getElementById('docChatMessages')
+        : document.getElementById('kbChatMessages');
+    if (!msgsEl) return;
+    const bubble = msgsEl.querySelector(`.message-user[data-index="${index}"]`);
+    if (!bubble || bubble.classList.contains('editing')) return;
+
+    // Snapshot original HTML so Cancel can restore it verbatim (preserves
+    // the action button, escaping, etc. — cheaper than re-rendering).
+    const originalHtml = bubble.innerHTML;
+    const contentEl = bubble.querySelector('.message-content');
+    const originalText = contentEl ? (contentEl.textContent || '') : '';
+
+    bubble.classList.add('editing');
+    bubble.innerHTML = `
+        <div class="message-edit-box">
+            <textarea class="message-edit-textarea" rows="3">${esc(originalText)}</textarea>
+            <div class="message-edit-actions">
+                <button class="btn-edit-cancel" type="button">取消</button>
+                <button class="btn-edit-send" type="button">
+                    <i class="bi bi-send"></i> 发送
+                </button>
+            </div>
+        </div>
+    `;
+    const ta = bubble.querySelector('.message-edit-textarea');
+    const cancelBtn = bubble.querySelector('.btn-edit-cancel');
+    const sendBtn = bubble.querySelector('.btn-edit-send');
+    // Auto-grow up to a sensible max so long edits stay usable.
+    const autoGrow = () => {
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(ta.scrollHeight, 320) + 'px';
+    };
+    ta.addEventListener('input', autoGrow);
+    ta.focus();
+    try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (_) {}
+    autoGrow();
+
+    const restore = () => {
+        bubble.classList.remove('editing');
+        bubble.innerHTML = originalHtml;
+    };
+    cancelBtn.addEventListener('click', restore);
+    ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); restore(); }
+        // Ctrl/Cmd+Enter to submit (plain Enter inserts newline — users
+        // frequently edit multi-line prompts).
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            sendBtn.click();
+        }
+    });
+
+    sendBtn.addEventListener('click', async () => {
+        const newText = (ta.value || '').trim();
+        if (!newText) return;
+        if (State.isStreaming) return;
+        sendBtn.disabled = true;
+        cancelBtn.disabled = true;
+
+        try {
+            // Truncate server-side from ``index`` (inclusive): the old user
+            // message and every reply after it are dropped. The freshly
+            // submitted query will be appended as a brand-new turn.
+            await fetch(`/api/sessions/${sessionId}/truncate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index }),
+            });
+            // Redraw the preserved prefix in place so the screen keeps
+            // showing earlier history (instead of going blank). We pull
+            // fresh messages to be sure about what survived.
+            const r = await fetch(`/api/sessions/${sessionId}`);
+            const d = await r.json();
+            const kept = ((d.session && d.session.messages) || []);
+            msgsEl.innerHTML = '';
+            kept.forEach((m, i) => appendHistoryMessage(msgsEl, m, {
+                index: i, isLastAssistant: false,
+            }));
+            // Now fire the edited query; sendChatQuery adds the new user
+            // bubble + typing indicator and streams the answer.
+            sendChatQuery(page, sessionId, newText, { appendUserBubble: true });
+        } catch (e) {
+            showNotification('重新发送失败: ' + e.message, 'error');
+            restore();
+        }
+    });
 }
 
 function truncateTitle(text) {
@@ -1177,6 +1367,13 @@ function updateSendButton() {
         btn.classList.remove('stop-mode');
         btn.onclick = () => sendChatMessage(page);
     }
+    // Flag the message container so CSS can hide hover actions (edit /
+    // regenerate) during generation — prevents accidental re-entry.
+    ['docChatMessages', 'kbChatMessages'].forEach(id => {
+        const box = document.getElementById(id);
+        if (!box) return;
+        box.classList.toggle('streaming', State.isStreaming);
+    });
 }
 
 // ========================================================================
@@ -1186,8 +1383,14 @@ function onStreamStatus(status) {
     const msgs = activeChatUI()?.messages;
     if (!msgs) return;
     if (status === 'retry_answering') {
+        // Phase 4 retry: finalize the low-score draft as its own bubble
+        // (strip streaming ids so subsequent chunks create a NEW responseBox)
+        // and reset the streaming text buffer. The reflect-box +补检 steps
+        // that follow will naturally sit between the two assistant bubbles.
         State.streamingRawText = '';
-        msgs.querySelector('#responseContent')?.replaceChildren();
+        ['responseBox', 'responseContent', 'thinkingBox', 'agentTimeline', 'agentSteps'].forEach(id => {
+            msgs.querySelector('#' + id)?.removeAttribute('id');
+        });
     }
     const ti = msgs.querySelector('.typing-indicator');
     const st = ti?.querySelector('.status-text');
@@ -1221,11 +1424,7 @@ function onStreamNodes(nodes) {
     const anchor = msgs.querySelector('#thinkingBox') || msgs.querySelector('#agentTimeline');
     if (!anchor) return;
     const fallbackDoc = State.docChat.docId;   // single-doc fallback
-    const h = `<div class="nodes-box"><strong>检索节点:</strong> ${nodes.map(n => {
-        const { docId, nodeId, label } = parseNodeRef(n, fallbackDoc);
-        return `<span class="node-tag" onclick="showNodePreview('${esc(nodeId)}', '${esc(docId || '')}')">${esc(label)}</span>`;
-    }).join(' ')}</div>`;
-    anchor.insertAdjacentHTML('afterend', h);
+    anchor.insertAdjacentHTML('afterend', renderNodesGrouped(nodes, fallbackDoc));
 }
 
 // Split "doc_id::node_id" or plain "node_id" into parts.
@@ -1242,6 +1441,31 @@ function parseNodeRef(ref, fallbackDocId) {
         };
     }
     return { docId: fallbackDocId || '', nodeId: ref, label: ref };
+}
+
+// Group retrieved node refs by their source document and render one line per
+// document, so the user can see at a glance which file each node comes from
+// (especially useful in kb / multi-doc mode).
+function renderNodesGrouped(nodes, fallbackDocId) {
+    if (!nodes || !nodes.length) return '';
+    const groups = new Map();   // docId -> [{nodeId, label}]
+    const orderedKeys = [];
+    for (const n of nodes) {
+        const { docId, nodeId, label } = parseNodeRef(n, fallbackDocId);
+        const key = docId || '';
+        if (!groups.has(key)) { groups.set(key, []); orderedKeys.push(key); }
+        groups.get(key).push({ nodeId, label, docId });
+    }
+    const rows = orderedKeys.map(key => {
+        const items = groups.get(key);
+        const docInfo = key ? (State.documents || []).find(x => x.doc_id === key) : null;
+        const name = docInfo ? docInfo.filename : (key || '未知文档');
+        const tags = items.map(it => (
+            `<span class="node-tag" onclick="showNodePreview('${esc(it.nodeId)}', '${esc(it.docId || '')}')">${esc(it.label)}</span>`
+        )).join(' ');
+        return `<div class="nodes-row"><span class="nodes-doc-name" title="${esc(name)}">${esc(name)}</span><span class="nodes-row-tags">${tags}</span></div>`;
+    }).join('');
+    return `<div class="nodes-box"><strong>检索节点</strong>${rows}</div>`;
 }
 
 function onStreamChunk(content) {
@@ -1294,6 +1518,16 @@ function onStreamDone(wasStopped) {
     // Refresh session list (message_count / updated_at)
     if (State.currentPage === 'doc-chat') loadDocSessions();
     if (State.currentPage === 'kb-chat') loadKbSessions();
+    // Re-fetch full history so we can (a) render the correct "regenerate"
+    // button on the freshly completed assistant reply only, and (b) drop
+    // any stale buttons from earlier turns. The redraw happens in-place
+    // and is visually near-instant for static content.
+    const refreshedSessionId = State.currentPage === 'doc-chat'
+        ? State.docChat.activeSessionId
+        : State.kbChat.activeSessionId;
+    if (refreshedSessionId && State.socket) {
+        State.socket.emit('get_history', { session_id: refreshedSessionId });
+    }
 }
 
 function onStreamError(msg) {
@@ -1410,11 +1644,25 @@ function onHistoryReceived(data) {
         addSystemMessage(msgs, '这是一个新对话，开始提问吧！');
         return;
     }
-    history.forEach(m => appendHistoryMessage(msgs, m));
+    // Precompute the index of the most recent non-superseded assistant
+    // message so only that one gets a "Regenerate" button (per product
+    // decision: regenerate only applies to the latest answer).
+    let lastAssistantIdx = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === 'assistant' && !history[i].superseded) {
+            lastAssistantIdx = i;
+            break;
+        }
+    }
+    history.forEach((m, idx) => appendHistoryMessage(msgs, m, {
+        index: idx,
+        isLastAssistant: idx === lastAssistantIdx,
+    }));
     scrollChatToBottom();
 }
 
-function appendHistoryMessage(msgs, m) {
+function appendHistoryMessage(msgs, m, ctx) {
+    ctx = ctx || {};
     if (m.thinking) {
         const steps = parseAgentSteps(m.thinking);
         if (steps.length > 0) {
@@ -1447,18 +1695,38 @@ function appendHistoryMessage(msgs, m) {
     }
     if (m.nodes?.length > 0) {
         const primaryDoc = State.docChat.docId;
-        const nb = document.createElement('div');
-        nb.className = 'nodes-box';
-        nb.innerHTML = `<strong>检索节点:</strong> ${m.nodes.map(n => {
-            const { docId, nodeId, label } = parseNodeRef(n, primaryDoc);
-            return `<span class="node-tag" onclick="showNodePreview('${esc(nodeId)}', '${esc(docId || '')}')">${esc(label)}</span>`;
-        }).join(' ')}`;
-        msgs.appendChild(nb);
+        const wrap = document.createElement('div');
+        wrap.innerHTML = renderNodesGrouped(m.nodes, primaryDoc);
+        const nb = wrap.firstElementChild;
+        if (nb) msgs.appendChild(nb);
     }
     const div = document.createElement('div');
-    div.className = `message message-${m.role}`;
+    div.className = `message message-${m.role}${m.superseded ? ' message-superseded' : ''}`;
+    if (typeof ctx.index === 'number') div.dataset.index = String(ctx.index);
     const rendered = m.role === 'assistant' ? renderMarkdown(m.content) : esc(m.content);
-    div.innerHTML = `<div class="message-content">${rendered}</div>`;
+    const supersededBadge = m.superseded
+        ? '<div class="superseded-badge"><i class="bi bi-arrow-repeat"></i> 已被反思修订（下方为最终答案）</div>'
+        : '';
+    // Hover actions: edit any user message, regenerate only the newest
+    // assistant reply. Superseded drafts never get actions (they're frozen
+    // history). Buttons are disabled via CSS during streaming.
+    let actionsHtml = '';
+    if (m.role === 'user') {
+        actionsHtml = `<div class="message-actions">
+            <button class="msg-action-btn" title="编辑并重新发送"
+                onclick="startEditUserMessage(${ctx.index})">
+                <i class="bi bi-pencil"></i>
+            </button>
+        </div>`;
+    } else if (m.role === 'assistant' && !m.superseded && ctx.isLastAssistant) {
+        actionsHtml = `<div class="message-actions">
+            <button class="msg-action-btn" title="重新生成"
+                onclick="regenerateLastAnswer()">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+        </div>`;
+    }
+    div.innerHTML = `${supersededBadge}<div class="message-content">${rendered}</div>${actionsHtml}`;
     msgs.appendChild(div);
     if (m.role === 'assistant') renderMathInContainer(div.querySelector('.message-content'));
 }

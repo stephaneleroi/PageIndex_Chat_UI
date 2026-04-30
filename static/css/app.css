@@ -735,6 +735,19 @@ body {
     padding: 10px 15px; margin-bottom: 12px;
     border-radius: 0 8px 8px 0; font-size: 13px;
 }
+.nodes-box > strong { display: block; margin-bottom: 6px; color: var(--text-primary); }
+.nodes-row {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 4px 0;
+}
+.nodes-row + .nodes-row { border-top: 1px dashed #d1fae5; }
+.nodes-doc-name {
+    flex: 0 0 auto; max-width: 220px;
+    font-weight: 600; color: #065f46;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nodes-doc-name::after { content: ':'; margin-right: 4px; }
+.nodes-row-tags { flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 4px; }
 .agent-timeline {
     background: #f8fafc; border: 1px solid var(--border);
     border-radius: 12px; padding: 16px; margin-bottom: 12px;
@@ -794,6 +807,123 @@ body {
 .reflect-score.good { background: #dcfce7; color: #166534; }
 .reflect-score.medium { background: #fef9c3; color: #854d0e; }
 .reflect-score.poor { background: #fee2e2; color: #991b1b; }
+
+/* Low-score draft that was replaced by a reflection-triggered retry.
+   Still rendered for transparency, but visually de-emphasized so users
+   understand the final answer is the newer bubble below it. */
+.message-superseded { opacity: 0.6; }
+.message-superseded .message-content {
+    background: #f8fafc;
+    border-left: 3px dashed #cbd5e1;
+}
+.superseded-badge {
+    font-size: 12px; color: #64748b;
+    background: #f1f5f9;
+    padding: 4px 10px; margin-bottom: 6px;
+    border-radius: 6px;
+    display: inline-block;
+}
+.superseded-badge i { margin-right: 4px; }
+
+/* -----------------------------------------------------------------------
+ * Per-message hover actions: edit (on user messages) and regenerate
+ * (only on the latest non-superseded assistant reply). Buttons appear on
+ * hover and are hidden while a stream is in-flight (see .streaming rule).
+ * --------------------------------------------------------------------- */
+.message { position: relative; }
+.message-actions {
+    display: flex; gap: 6px;
+    margin-top: 6px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.message-user .message-actions { justify-content: flex-end; }
+.message:hover .message-actions { opacity: 1; }
+.msg-action-btn {
+    background: white;
+    border: 1px solid #e2e8f0;
+    color: #64748b;
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s ease;
+    padding: 0;
+}
+.msg-action-btn:hover {
+    color: var(--primary);
+    border-color: var(--primary-light);
+    background: #f5f3ff;
+    box-shadow: 0 2px 6px rgba(99, 102, 241, 0.15);
+}
+/* During streaming, no hover actions (avoid re-entry / races). */
+.chat-messages.streaming .message-actions { display: none; }
+
+/* -----------------------------------------------------------------------
+ * In-place edit UI for user messages: swaps the bubble's rendered text
+ * for a textarea + Cancel / Send buttons. Styled to feel native to the
+ * purple user bubble (darker send button, subtle cancel).
+ * --------------------------------------------------------------------- */
+.message-user.editing {
+    /* Let the edit box breathe — override the regular max-width clamp so
+     * the textarea isn't awkwardly narrow. */
+    max-width: min(85%, 720px) !important;
+    width: 85%;
+}
+.message-edit-box {
+    display: flex; flex-direction: column; gap: 8px;
+}
+.message-edit-textarea {
+    width: 100%;
+    min-height: 60px;
+    max-height: 320px;
+    resize: vertical;
+    padding: 10px 12px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.96);
+    color: #1e293b;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.5;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35) inset;
+}
+.message-edit-textarea:focus {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6) inset;
+}
+.message-edit-actions {
+    display: flex; justify-content: flex-end; gap: 8px;
+}
+.btn-edit-cancel, .btn-edit-send {
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex; align-items: center; gap: 4px;
+}
+.btn-edit-cancel {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+.btn-edit-cancel:hover {
+    background: rgba(255, 255, 255, 0.35);
+}
+.btn-edit-send {
+    background: white;
+    color: var(--primary);
+}
+.btn-edit-send:hover {
+    background: #f5f3ff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.btn-edit-send:disabled, .btn-edit-cancel:disabled {
+    opacity: 0.6; cursor: not-allowed;
+}
 
 .node-tag {
     display: inline-block;

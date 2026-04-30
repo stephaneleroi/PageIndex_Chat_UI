@@ -22,7 +22,10 @@ from .session import Message  # noqa: F401
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPLOADS_DIR = os.path.join(BASE_DIR, 'uploads')
 RESULTS_DIR = os.path.join(BASE_DIR, 'results')
-
+# All per-document artifacts (metadata/structure/images/analysis) live under
+# results/documents/<doc_dir_name>/ so the results root only contains a small
+# number of well-known subdirectories (documents/, _index/, _sessions/).
+DOCUMENTS_DIR = os.path.join(RESULTS_DIR, 'documents')
 
 @dataclass
 class Document:
@@ -30,7 +33,7 @@ class Document:
     doc_id: str
     filename: str  # original filename without doc_id prefix
     file_path: str  # path to PDF in uploads/
-    result_dir_name: str = ''  # directory name in results/ (defaults to {doc_id}_{filename})
+    result_dir_name: str = ''  # directory name in results/documents/ (defaults to {doc_id}_{filename})
     status: str = 'pending'  # pending, indexing, indexed, ready, error
     created_at: float = field(default_factory=time.time)
     page_count: int = 0
@@ -47,7 +50,7 @@ class Document:
 
     @property
     def result_dir(self) -> str:
-        return os.path.join(RESULTS_DIR, self.result_dir_name)
+        return os.path.join(DOCUMENTS_DIR, self.result_dir_name)
 
     @property
     def metadata_path(self) -> str:
@@ -105,23 +108,60 @@ class DocumentStore:
 
         os.makedirs(UPLOADS_DIR, exist_ok=True)
         os.makedirs(RESULTS_DIR, exist_ok=True)
+        os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+
+        # One-shot migration: any <doc_dir>/ still sitting directly under
+        # results/ (from older versions) is moved into results/documents/.
+        self._migrate_legacy_layout()
 
         self._load_from_disk()
 
     # -------------------- discovery & metadata -------------------- #
 
-    def _load_from_disk(self):
-        """Recover documents by scanning results/* for metadata.json files."""
+    def _migrate_legacy_layout(self):
+        """Move legacy results/<doc_dir>/ folders into results/documents/.
+
+        Only directories that look like a document artifact folder (i.e. they
+        contain a metadata.json) are migrated. System directories (_index,
+        _sessions, documents itself, dotfiles) are skipped.
+        """
         if not os.path.exists(RESULTS_DIR):
             return
-
-        print("Scanning results directory to recover documents...")
+        moved = 0
         for dir_name in os.listdir(RESULTS_DIR):
-            # Skip system directories introduced by the session store.
             if dir_name.startswith('_') or dir_name.startswith('.'):
                 continue
+            if dir_name == 'documents':
+                continue
+            src = os.path.join(RESULTS_DIR, dir_name)
+            if not os.path.isdir(src):
+                continue
+            if not os.path.exists(os.path.join(src, 'metadata.json')):
+                continue
+            dst = os.path.join(DOCUMENTS_DIR, dir_name)
+            if os.path.exists(dst):
+                print(f"[DocumentStore] Skip migration, destination exists: {dst}")
+                continue
+            try:
+                shutil.move(src, dst)
+                moved += 1
+                print(f"[DocumentStore] Migrated legacy document dir: {dir_name}")
+            except Exception as e:
+                print(f"[DocumentStore] Failed to migrate {dir_name}: {e}")
+        if moved:
+            print(f"[DocumentStore] Legacy layout migration complete ({moved} dir(s)).")
 
-            doc_dir = os.path.join(RESULTS_DIR, dir_name)
+    def _load_from_disk(self):
+        """Recover documents by scanning results/documents/* for metadata.json files."""
+        if not os.path.exists(DOCUMENTS_DIR):
+            return
+
+        print("Scanning results/documents directory to recover documents...")
+        for dir_name in os.listdir(DOCUMENTS_DIR):
+            if dir_name.startswith('.'):
+                continue
+
+            doc_dir = os.path.join(DOCUMENTS_DIR, dir_name)
             if not os.path.isdir(doc_dir):
                 continue
 
@@ -235,6 +275,14 @@ class DocumentStore:
                 shutil.rmtree(doc.result_dir)
             except Exception as e:
                 print(f"Error removing result dir: {e}")
+
+        # Also drop any single-mode chat sessions that were bound to this
+        # document, plus their per-document folder under _sessions/single/.
+        try:
+            from .session import session_store
+            session_store.drop_document_bindings(doc_id, doc.result_dir_name)
+        except Exception as e:
+            print(f"Error cleaning sessions for doc {doc_id}: {e}")
 
         del self.documents[doc_id]
         self.tree_cache.pop(doc_id, None)
