@@ -1,7 +1,7 @@
 ---
 name: 结构化对比分析
 description: 对文档内任意两个或多个对象（章节/方法/条款/版本/产品/数据）进行多维度对比
-enabled: false
+enabled: true
 ---
 
 ## 激活条件 (Triggers)
