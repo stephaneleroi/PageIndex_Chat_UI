@@ -39,7 +39,10 @@ def get_base_url():
 def count_tokens(text, model=None):
     if not text:
         return 0
-    enc = tiktoken.encoding_for_model(model)
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+        enc = tiktoken.get_encoding("o200k_base")
     tokens = enc.encode(text)
     return len(tokens)
 

@@ -28,17 +28,17 @@ DEFAULT_SERVER_CONFIG = {
 
 # ============================================================
 # Default Model Configurations (hardcoded defaults)
-# 默认模型已统一为 gpt-5.4-mini（2026-05）
+# 默认模型已统一为 gpt-5-mini（2026-05）
 # ============================================================
 DEFAULT_MODELS = {
     'text': {
-        'name': 'gpt-5.4-mini',
+        'name': 'gpt-5-mini',
         'api_key': '',
         'base_url': 'https://api.openai.com/v1',
         'type': 'text'
     },
     'vision': {
-        'name': 'gpt-5.4-mini',
+        'name': 'gpt-5-mini',
         'api_key': '',
         'base_url': 'https://api.openai.com/v1',
         'type': 'vision'
