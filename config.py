@@ -28,7 +28,7 @@ DEFAULT_SERVER_CONFIG = {
 
 # ============================================================
 # Default Model Configurations (hardcoded defaults)
-# 默认模型已统一为 gpt-5-mini（2026-05）
+# Le modèle par défaut a été unifié sur gpt-5-mini (2026-05)
 # ============================================================
 DEFAULT_MODELS = {
     'text': {

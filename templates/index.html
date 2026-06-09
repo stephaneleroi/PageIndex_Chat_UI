@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="fr">
 
 <head>
     <meta charset="UTF-8">
@@ -19,16 +19,16 @@
             <span>PageIndex Agent</span>
         </div>
         <div class="nav-tabs-wrapper">
-            <button class="nav-tab active" data-page="library"><i class="bi bi-collection"></i> 知识库</button>
-            <button class="nav-tab" data-page="kb-chat"><i class="bi bi-chat-square-dots"></i> 知识库问答</button>
+            <button class="nav-tab active" data-page="library"><i class="bi bi-collection"></i> Base de connaissances</button>
+            <button class="nav-tab" data-page="kb-chat"><i class="bi bi-chat-square-dots"></i> Questions-réponses</button>
         </div>
         <div class="nav-actions">
             <div class="model-toggle">
-                <button id="textModelBtn" class="active" type="button"><i class="bi bi-chat-text"></i> 文本</button>
-                <button id="visionModelBtn" type="button"><i class="bi bi-eye"></i> 视觉</button>
+                <button id="textModelBtn" class="active" type="button"><i class="bi bi-chat-text"></i> Texte</button>
+                <button id="visionModelBtn" type="button"><i class="bi bi-eye"></i> Vision</button>
             </div>
             <button class="nav-icon-btn" id="skillsBtn" title="Agent Skills"><i class="bi bi-lightning-charge-fill"></i></button>
-            <button class="nav-icon-btn" id="settingsBtn" title="模型配置"><i class="bi bi-gear"></i></button>
+            <button class="nav-icon-btn" id="settingsBtn" title="Configuration des modèles"><i class="bi bi-gear"></i></button>
         </div>
     </nav>
 
@@ -42,41 +42,41 @@
                 <div class="hero-inner">
                     <div class="hero-text">
                         <span class="hero-badge">
-                            <i class="bi bi-stars"></i> PageIndex Agent · 会推理的文档助手
+                            <i class="bi bi-stars"></i> PageIndex Agent · l'assistant documentaire qui raisonne
                         </span>
                         <h1 class="hero-title">
-                            让 <span class="grad-word">LLM</span> 像人类一样<br>
-                            阅读文档
+                            Faire lire les documents au <span class="grad-word">LLM</span><br>
+                            comme un humain
                         </h1>
                         <p class="hero-subtitle">
-                            基于树状结构推理的 Agentic RAG 知识库问答系统，无向量 / 无 Embedding。
-                            Agent 通过多步推理 + 工具调用在文档目录树中检索、阅读、归纳，
-                            支持单文档深读与跨文档对比分析。
+                            Système de questions-réponses Agentic RAG fondé sur le raisonnement dans une structure arborescente, sans vecteurs / sans Embedding.
+                            L'Agent recherche, lit et synthétise dans l'arbre du document grâce à un raisonnement multi-étapes et à l'appel d'outils,
+                            avec lecture approfondie d'un document et analyse comparative entre plusieurs documents.
                         </p>
                         <div class="hero-actions">
                             <button class="hero-btn primary" id="heroUploadBtn">
-                                <i class="bi bi-cloud-arrow-up-fill"></i> 上传 PDF
+                                <i class="bi bi-cloud-arrow-up-fill"></i> Importer un PDF
                             </button>
                             <button class="hero-btn ghost" id="heroKbBtn">
-                                <i class="bi bi-chat-square-dots"></i> 进入知识库问答
+                                <i class="bi bi-chat-square-dots"></i> Accéder aux questions-réponses
                             </button>
                         </div>
                     </div>
                     <div class="hero-stats">
                         <div class="stat-card">
-                            <div class="stat-label">文档总数</div>
+                            <div class="stat-label">Documents au total</div>
                             <div class="stat-value" id="statTotalDocs">0</div>
                         </div>
                         <div class="stat-card">
-                            <div class="stat-label">已就绪</div>
+                            <div class="stat-label">Prêts</div>
                             <div class="stat-value" id="statReadyDocs">0</div>
                         </div>
                         <div class="stat-card">
-                            <div class="stat-label">累计页数</div>
-                            <div class="stat-value" id="statTotalPages">0<span class="unit">页</span></div>
+                            <div class="stat-label">Pages cumulées</div>
+                            <div class="stat-value" id="statTotalPages">0<span class="unit">pages</span></div>
                         </div>
                         <div class="stat-card">
-                            <div class="stat-label">对话会话</div>
+                            <div class="stat-label">Conversations</div>
                             <div class="stat-value" id="statTotalSessions">0</div>
                         </div>
                     </div>
@@ -88,22 +88,22 @@
                 <div class="feature-card">
                     <div class="feature-icon c1"><i class="bi bi-diagram-3-fill"></i></div>
                     <div class="feature-body">
-                        <h4>结构化索引</h4>
-                        <p>基于 PageIndex 构建文档目录树，Agent 能按章节层级定位内容，不再丢上下文。</p>
+                        <h4>Indexation structurée</h4>
+                        <p>Construction de l'arbre du document avec PageIndex : l'Agent localise le contenu par niveau de chapitre, sans perdre le contexte.</p>
                     </div>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon c2"><i class="bi bi-cpu-fill"></i></div>
                     <div class="feature-body">
-                        <h4>Agent 多步推理</h4>
-                        <p>Agent 自主规划搜索、阅读、总结路径，支持文本与视觉两种模型模式。</p>
+                        <h4>Raisonnement multi-étapes de l'Agent</h4>
+                        <p>L'Agent planifie de façon autonome ses étapes de recherche, de lecture et de synthèse, en mode texte ou vision.</p>
                     </div>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon c3"><i class="bi bi-intersect"></i></div>
                     <div class="feature-body">
-                        <h4>跨文档对比</h4>
-                        <p>在知识库问答中选择多份文档，一次提问，Agent 自动聚合并标注引用来源。</p>
+                        <h4>Comparaison entre documents</h4>
+                        <p>Sélectionnez plusieurs documents dans les questions-réponses : en une seule question, l'Agent agrège et cite automatiquement les sources.</p>
                     </div>
                 </div>
             </section>
@@ -111,11 +111,11 @@
             <!-- Docs section -->
             <div class="docs-section-header">
                 <h3 class="docs-section-title">
-                    <i class="bi bi-folder2-open"></i> 我的文档
+                    <i class="bi bi-folder2-open"></i> Mes documents
                     <span class="docs-count-badge" id="docsCountBadge">0</span>
                 </h3>
                 <button class="btn-primary-grad" id="libraryUploadBtn">
-                    <i class="bi bi-cloud-upload"></i> 上传文档
+                    <i class="bi bi-cloud-upload"></i> Importer un document
                 </button>
             </div>
             <div class="library-grid" id="libraryGrid"></div>
@@ -129,7 +129,7 @@
     <div class="page page-doc-chat" id="pageDocChat">
         <aside class="sidebar sidebar-sessions">
             <div class="sidebar-header-row">
-                <button class="back-btn" id="docBackBtn" title="返回知识库">
+                <button class="back-btn" id="docBackBtn" title="Retour à la base de connaissances">
                     <i class="bi bi-chevron-left"></i>
                 </button>
                 <div class="sidebar-header-title">
@@ -138,13 +138,13 @@
                 </div>
             </div>
             <button class="new-session-btn" id="docNewSessionBtn">
-                <i class="bi bi-plus-lg"></i> 新建对话
+                <i class="bi bi-plus-lg"></i> Nouvelle conversation
             </button>
-            <div class="sessions-section-label">对话历史</div>
+            <div class="sessions-section-label">Historique des conversations</div>
             <div class="sessions-list" id="docSessionsList"></div>
             <div class="sidebar-footer">
                 <label class="memory-check">
-                    <input type="checkbox" id="docMemoryToggle" checked> 对话记忆
+                    <input type="checkbox" id="docMemoryToggle" checked> Mémoire de conversation
                 </label>
             </div>
         </aside>
@@ -158,7 +158,7 @@
             <div class="input-area" id="docInputArea">
                 <div class="input-container">
                     <div class="input-wrapper">
-                        <textarea class="chat-input" id="docChatInput" placeholder="输入您的问题..." rows="1"></textarea>
+                        <textarea class="chat-input" id="docChatInput" placeholder="Saisissez votre question..." rows="1"></textarea>
                     </div>
                     <button class="send-btn" id="docSendBtn" type="button"><i class="bi bi-send"></i></button>
                 </div>
@@ -172,33 +172,33 @@
     <div class="page page-kb-chat" id="pageKbChat">
         <aside class="sidebar sidebar-kb">
             <div class="kb-sidebar-header">
-                <h5><i class="bi bi-chat-square-dots"></i> 知识库问答</h5>
+                <h5><i class="bi bi-chat-square-dots"></i> Questions-réponses</h5>
             </div>
             <div class="kb-docs-panel">
                 <div class="panel-label">
-                    <span>参与文档</span>
+                    <span>Documents inclus</span>
                     <span class="kb-select-info" id="kbSelectInfo">0 / 0</span>
                 </div>
                 <div class="kb-doc-search-wrap">
                     <i class="bi bi-search"></i>
-                    <input type="text" id="kbDocSearch" placeholder="搜索文档…">
+                    <input type="text" id="kbDocSearch" placeholder="Rechercher un document…">
                 </div>
                 <div class="kb-doc-actions">
-                    <button id="kbSelectAllBtn" type="button">全选</button>
-                    <button id="kbClearAllBtn" type="button">清空</button>
+                    <button id="kbSelectAllBtn" type="button">Tout sélectionner</button>
+                    <button id="kbClearAllBtn" type="button">Tout effacer</button>
                 </div>
                 <div class="kb-doc-list" id="kbDocList"></div>
             </div>
             <div class="kb-sessions-panel">
                 <button class="new-session-btn" id="kbNewSessionBtn">
-                    <i class="bi bi-plus-lg"></i> 新建对话
+                    <i class="bi bi-plus-lg"></i> Nouvelle conversation
                 </button>
-                <div class="sessions-section-label">对话历史</div>
+                <div class="sessions-section-label">Historique des conversations</div>
                 <div class="sessions-list" id="kbSessionsList"></div>
             </div>
             <div class="sidebar-footer">
                 <label class="memory-check">
-                    <input type="checkbox" id="kbMemoryToggle" checked> 对话记忆
+                    <input type="checkbox" id="kbMemoryToggle" checked> Mémoire de conversation
                 </label>
             </div>
         </aside>
@@ -210,7 +210,7 @@
             <div class="input-area">
                 <div class="input-container">
                     <div class="input-wrapper">
-                        <textarea class="chat-input" id="kbChatInput" placeholder="请先从左侧选择文档，再输入问题..." rows="1"></textarea>
+                        <textarea class="chat-input" id="kbChatInput" placeholder="Sélectionnez d'abord des documents à gauche, puis saisissez votre question..." rows="1"></textarea>
                     </div>
                     <button class="send-btn" id="kbSendBtn" type="button"><i class="bi bi-send"></i></button>
                 </div>
@@ -225,30 +225,30 @@
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">模型配置</h5>
+                    <h5 class="modal-title">Configuration des modèles</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
                     <ul class="nav nav-tabs mb-3" id="modelTabs">
-                        <li class="nav-item"><a class="nav-link active" href="#textConfig" data-bs-toggle="tab">文本模型</a></li>
-                        <li class="nav-item"><a class="nav-link" href="#visionConfig" data-bs-toggle="tab">视觉模型</a></li>
+                        <li class="nav-item"><a class="nav-link active" href="#textConfig" data-bs-toggle="tab">Modèle texte</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#visionConfig" data-bs-toggle="tab">Modèle vision</a></li>
                     </ul>
                     <div class="tab-content">
                         <div class="tab-pane fade show active" id="textConfig">
-                            <div class="mb-3"><label class="form-label">模型名称</label><input type="text" class="form-control" id="textModelName" placeholder="例如: gpt-4o-mini"></div>
+                            <div class="mb-3"><label class="form-label">Nom du modèle</label><input type="text" class="form-control" id="textModelName" placeholder="ex. : gpt-4o-mini"></div>
                             <div class="mb-3"><label class="form-label">API Key</label><input type="password" class="form-control" id="textApiKey" placeholder="sk-..."></div>
                             <div class="mb-3"><label class="form-label">Base URL</label><input type="text" class="form-control" id="textBaseUrl" placeholder="https://api.openai.com/v1"></div>
                         </div>
                         <div class="tab-pane fade" id="visionConfig">
-                            <div class="mb-3"><label class="form-label">模型名称</label><input type="text" class="form-control" id="visionModelName" placeholder="例如: gpt-4.1"></div>
+                            <div class="mb-3"><label class="form-label">Nom du modèle</label><input type="text" class="form-control" id="visionModelName" placeholder="ex. : gpt-4.1"></div>
                             <div class="mb-3"><label class="form-label">API Key</label><input type="password" class="form-control" id="visionApiKey" placeholder="sk-..."></div>
                             <div class="mb-3"><label class="form-label">Base URL</label><input type="text" class="form-control" id="visionBaseUrl" placeholder="https://api.openai.com/v1"></div>
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="button" class="btn btn-primary" id="saveSettingsBtn">保存配置</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                    <button type="button" class="btn btn-primary" id="saveSettingsBtn">Enregistrer</button>
                 </div>
             </div>
         </div>
@@ -263,8 +263,8 @@
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-lightning-charge-fill"></i> Agent Skills</h5>
                     <div class="d-flex gap-2">
-                        <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('skillFileInput').click()"><i class="bi bi-upload"></i> 上传</button>
-                        <button class="btn btn-sm btn-primary" onclick="openSkillEditor()"><i class="bi bi-plus-lg"></i> 新建</button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('skillFileInput').click()"><i class="bi bi-upload"></i> Importer</button>
+                        <button class="btn btn-sm btn-primary" onclick="openSkillEditor()"><i class="bi bi-plus-lg"></i> Nouveau</button>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                 </div>
@@ -283,39 +283,39 @@
                 <div class="modal-header">
                     <h5 class="modal-title skill-editor-header">
                         <i class="bi bi-lightning-charge-fill"></i>
-                        <span id="skillEditorTitle">新建 Skill</span>
+                        <span id="skillEditorTitle">Nouveau Skill</span>
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
                     <input type="hidden" id="skillEditorId">
                     <div class="mb-3">
-                        <label class="form-label">名称</label>
-                        <input type="text" class="form-control" id="skillEditorName" placeholder="例如: 论文对比分析">
+                        <label class="form-label">Nom</label>
+                        <input type="text" class="form-control" id="skillEditorName" placeholder="ex. : Analyse comparative d'articles">
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">描述</label>
-                        <input type="text" class="form-control" id="skillEditorDesc" placeholder="简短描述">
+                        <label class="form-label">Description</label>
+                        <input type="text" class="form-control" id="skillEditorDesc" placeholder="Brève description">
                     </div>
                     <div class="mb-3">
                         <label class="form-label d-flex justify-content-between align-items-center">
-                            <span>指令内容 (Markdown)</span>
+                            <span>Contenu des instructions (Markdown)</span>
                             <button class="btn btn-sm btn-outline-secondary" type="button" onclick="toggleSkillPreview()" id="skillPreviewToggle" style="font-size:12px;padding:2px 10px;">
-                                <i class="bi bi-eye"></i> 预览
+                                <i class="bi bi-eye"></i> Aperçu
                             </button>
                         </label>
                         <textarea class="form-control skill-md-editor" id="skillEditorContent" rows="10"
-                            placeholder="在此编写 Skill 的详细指令，Agent 会在推理时参考这些指令..."></textarea>
+                            placeholder="Rédigez ici les instructions détaillées du Skill ; l'Agent s'y référera lors de son raisonnement..."></textarea>
                         <div class="skill-preview-pane mt-2" id="skillPreviewPane" style="display:none;"></div>
                     </div>
                 </div>
                 <div class="modal-footer d-flex justify-content-between">
                     <button type="button" class="skill-delete-btn" id="skillDeleteBtn" style="display:none;" onclick="deleteCurrentSkill()">
-                        <i class="bi bi-trash3"></i> 删除
+                        <i class="bi bi-trash3"></i> Supprimer
                     </button>
                     <div class="d-flex gap-2 ms-auto">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                        <button type="button" class="btn btn-primary" onclick="saveSkill()">保存</button>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                        <button type="button" class="btn btn-primary" onclick="saveSkill()">Enregistrer</button>
                     </div>
                 </div>
             </div>

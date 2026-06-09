@@ -206,11 +206,11 @@ Question: {query}
 Document tree structure:
 {json.dumps(tree_without_text, indent=2, ensure_ascii=False)}
 
-Important: You MUST respond in Chinese (简体中文). Your thinking process should be in Chinese.
+Important: You MUST respond in French (français). Your thinking process should be in French.
 
 Please reply in the following JSON format:
 {{
-    "thinking": "<用中文描述你的推理过程>",
+    "thinking": "<décris ton raisonnement en français>",
     "node_list": ["node_id_1", "node_id_2", ..., "node_id_n"]
 }}
 Directly return the final JSON structure. Do not output anything else.
@@ -241,15 +241,15 @@ Question: {query}
 Document tree structure:
 {json.dumps(tree_without_text, indent=2, ensure_ascii=False)}
 
-Important: You MUST respond in Chinese (简体中文). Your thinking process should be in Chinese.
+Important: You MUST respond in French (français). Your thinking process should be in French.
 
-First, output your thinking process in Chinese about which nodes are relevant to the question.
+First, output your thinking process in French about which nodes are relevant to the question.
 Then, at the very end, output the node list in this EXACT format on a new line:
 [NODE_LIST]: ["node_id_1", "node_id_2", "node_id_n"]
 
 Example output:
-根据文档结构，我需要找到与问题相关的节点...
-最相关的节点是X和Y，因为...
+D'après la structure du document, je dois trouver les nœuds liés à la question...
+Les nœuds les plus pertinents sont X et Y, car...
 [NODE_LIST]: ["node_x", "node_y"]
 """
         
@@ -337,7 +337,7 @@ Example output:
         """Render each PDF page to a JPEG under output_dir.
 
         on_progress(rendered:int, total:int) is called after each page so callers
-        (e.g. the indexing pipeline) can surface "第 X/Y 页" progress to the UI.
+        (e.g. the indexing pipeline) can surface "X/Y" page progress to the UI.
         """
         import fitz
         
@@ -466,7 +466,7 @@ class RAGService:
             return False
         
         try:
-            self.store.set_stage(doc_id, 'image_extract', '正在生成页面图像（准备中）...')
+            self.store.set_stage(doc_id, 'image_extract', 'Génération des images de pages (préparation)...')
             tree = self.pageindex.load_tree_structure(tree_path)
             self.store.cache_tree(doc_id, tree)
             
@@ -484,7 +484,7 @@ class RAGService:
                 if done == total or now - last_ts[0] > 0.4:
                     self.store.set_stage(
                         doc_id, 'image_extract',
-                        f'正在生成页面图像：第 {done}/{total} 页',
+                        f'Génération des images de pages : page {done}/{total}',
                     )
                     last_ts[0] = now
 
@@ -494,13 +494,13 @@ class RAGService:
             self.store.cache_page_images(doc_id, page_images)
             
             self.store.update_document(doc_id, status='ready')
-            self.store.set_stage(doc_id, 'done', '索引完成')
+            self.store.set_stage(doc_id, 'done', 'Indexation terminée')
             return True
         except Exception as e:
             logger.error(f"Error preparing document: {e}")
             self.store.update_document(
                 doc_id, status='error', error_message=str(e),
-                stage='error', stage_message=f'准备阶段失败: {e}'
+                stage='error', stage_message=f'Échec de la phase de préparation : {e}'
             )
             return False
 
@@ -532,7 +532,7 @@ class RAGService:
         page_images = self.store.get_page_images(doc_id)
 
         if tree and not node_map:
-            yield "[PREPARING]\n正在准备文档数据...\n"
+            yield "[PREPARING]\nPréparation des données du document...\n"
             try:
                 page_count = self.pageindex.get_pdf_page_count(doc.file_path)
                 self.store.update_document(doc_id, page_count=page_count)
@@ -541,7 +541,7 @@ class RAGService:
                 if not page_images:
                     page_images = await self.pageindex.extract_pdf_page_images(doc.file_path, doc.images_dir)
                     self.store.cache_page_images(doc_id, page_images)
-                yield "[PREPARED]\n准备完成！\n\n"
+                yield "[PREPARED]\nPréparation terminée !\n\n"
             except Exception as e:
                 logger.error(f"Error preparing document: {e}")
                 yield f"[Error: Failed to prepare document: {e}]"
@@ -591,9 +591,9 @@ Question: {query}
 Context: {relevant_content}
 {history_context}
 
-Important: You MUST respond in Chinese (简体中文). All your output should be in Chinese.
+Important: You MUST respond in French (français). All your output should be in French.
 When mentioning any mathematical symbol, variable, subscript, superscript, or formula, you MUST wrap them in LaTeX delimiters: use $...$ for inline math and \\[...\\] for display math.
-Provide a clear, concise answer in Chinese based only on the context provided. If you need to reference specific sections, mention the node IDs.
+Provide a clear, concise answer in French based only on the context provided. If you need to reference specific sections, mention the node IDs.
 Use Markdown formatting for better readability.
 """
             full_answer = ""
@@ -616,7 +616,7 @@ Use Markdown formatting for better readability.
 
 Question: {query}
 
-Important: You MUST respond in Chinese (简体中文). Use LaTeX for math symbols.
+Important: You MUST respond in French (français). Use LaTeX for math symbols.
 Use Markdown formatting for better readability.
 """
             full_answer = ""
@@ -648,14 +648,14 @@ Use Markdown formatting for better readability.
     async def auto_analyze_document(self, doc_id: str,
                                     model_type: str = 'text') -> dict:
         """Proactive document analysis after indexing"""
-        self.store.set_stage(doc_id, 'analysis', '正在生成文档摘要与推荐问题...')
+        self.store.set_stage(doc_id, 'analysis', 'Génération du résumé et des questions suggérées...')
         try:
             result = await self.agent.analyze_document(doc_id, model_type)
-            self.store.set_stage(doc_id, 'done', '索引完成')
+            self.store.set_stage(doc_id, 'done', 'Indexation terminée')
             return result
         except Exception as e:
             # Analysis is non-fatal — doc is already 'ready'. Just surface a hint.
-            self.store.set_stage(doc_id, 'done', f'摘要生成失败（不影响问答）: {e}')
+            self.store.set_stage(doc_id, 'done', f'Échec de la génération du résumé (sans impact sur les questions) : {e}')
             raise
 
 

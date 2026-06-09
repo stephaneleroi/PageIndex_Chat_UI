@@ -85,7 +85,7 @@ def upload_document():
         
         doc = Document(doc_id=doc_id, filename=filename, file_path=file_path, status='pending')
         document_store.add_document(doc)
-        document_store.set_stage(doc_id, 'queued', '已入队，等待索引...')
+        document_store.set_stage(doc_id, 'queued', 'En file d\'attente d\'indexation...')
         
         from threading import Thread
         def run_indexing():

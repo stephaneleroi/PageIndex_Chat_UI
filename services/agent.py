@@ -33,8 +33,8 @@ MAX_RETRY = 1
 REFLECT_ACCEPT_THRESHOLD = 6
 
 LANG_INSTRUCTION = (
-    "Important: You MUST respond in Chinese (简体中文). All your output text, reasoning, "
-    "analysis, and answers should be in Chinese. "
+    "Important: You MUST respond in French (français). All your output text, reasoning, "
+    "analysis, and answers should be in French. "
     "When mentioning any mathematical symbol, variable, subscript, superscript, or formula, "
     "you MUST wrap them in LaTeX delimiters: use $...$ for inline math (e.g. $s_j$, $f_{MD}$, "
     "$t_{m,i}^{\\mathrm{loc}}$) and \\\\[...\\\\] for display/block math. "
@@ -45,20 +45,20 @@ LANG_INSTRUCTION = (
 GROUNDING_INSTRUCTION_SINGLE = (
     "Grounding rules (MUST follow):\n"
     "1. Ground every concrete claim in the Context. Cite the source inline as "
-    "`(node_..., 第 N 页)` when available. Preserve original numbers and units verbatim.\n"
+    "`(node_..., page N)` when available. Preserve original numbers and units verbatim.\n"
     "2. If the Context does not cover the question, say so explicitly "
-    "(e.g. `文档中未提及...`). Never fabricate facts, citations, or fill gaps from prior knowledge."
+    "(e.g. `Non mentionné dans le document...`). Never fabricate facts, citations, or fill gaps from prior knowledge."
 )
 
 GROUNDING_INSTRUCTION_KB = (
     "Grounding rules (MUST follow):\n"
     "1. Ground every concrete claim in the Context. Cite the source inline as "
-    "`(doc: <filename>, node_..., 第 N 页)` so the reader knows WHICH document each claim came from. "
+    "`(doc: <filename>, node_..., page N)` so the reader knows WHICH document each claim came from. "
     "Preserve original numbers and units verbatim.\n"
     "2. If the Context does not cover the question, say so explicitly "
-    "(e.g. `所选文档中未提及...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
+    "(e.g. `Non mentionné dans les documents sélectionnés...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
     "3. When comparing across documents, make the document identity unambiguous in every bullet "
-    "(e.g. `论文A 使用 X，论文B 使用 Y`)."
+    "(e.g. `Le document A utilise X, le document B utilise Y`)."
 )
 
 
@@ -217,8 +217,8 @@ Rules:
 Output JSON only:
 {{
     "needs_decomposition": true or false,
-    "reasoning": "用中文简要说明",
-    "sub_questions": ["子问题1", "子问题2"],
+    "reasoning": "brève explication en français",
+    "sub_questions": ["sous-question 1", "sous-question 2"],
     "synthesis_strategy": "compare" | "aggregate" | "sequence" | "direct"
 }}"""
         try:
@@ -313,7 +313,7 @@ If you already have enough information, choose "final_answer".
 
 Output JSON only:
 {{
-    "thought": "用中文描述你的推理过程",
+    "thought": "décris ton raisonnement en français",
     "action": {{
         "tool": "tool_name",
         "input": {{ ... }}
@@ -386,8 +386,8 @@ tool observations in that case.
 Output JSON only:
 {{
     "score": <1-10>,
-    "issues": ["用中文描述问题1", ...],
-    "missing_info": ["用中文描述缺失信息"],
+    "issues": ["décris le problème 1 en français", ...],
+    "missing_info": ["décris l'information manquante en français"],
     "action": "accept" or "retry"
 }}"""
         try:
@@ -422,15 +422,15 @@ Document structure:
 
 Output JSON only:
 {{
-    "summary": "用2-3句中文概括整篇文档的主要内容",
-    "key_findings": ["核心发现1", "核心发现2", "核心发现3"],
-    "main_topics": ["主题1", "主题2"],
+    "summary": "résume en 2-3 phrases en français le contenu principal du document",
+    "key_findings": ["constat clé 1", "constat clé 2", "constat clé 3"],
+    "main_topics": ["thème 1", "thème 2"],
     "suggested_questions": [
-        "读者可能想问的中文问题1",
-        "中文问题2",
-        "中文问题3",
-        "中文问题4",
-        "中文问题5"
+        "question 1 en français qu'un lecteur pourrait poser",
+        "question 2 en français",
+        "question 3 en français",
+        "question 4 en français",
+        "question 5 en français"
     ]
 }}"""
         try:
@@ -473,7 +473,7 @@ Output JSON only:
 
         # In single mode we expect exactly 1 doc; in kb mode we expect ≥1.
         if not doc_ids:
-            yield "[Error: 未选择任何文档]" if mode == "kb" else "[Error: Document not set]"
+            yield "[Error: Aucun document sélectionné]" if mode == "kb" else "[Error: Document not set]"
             return
 
         # Verify all docs exist & are ready.
@@ -485,14 +485,14 @@ Output JSON only:
             else:
                 logger.warning(f"Skipping non-ready doc {did} in session {session_id}")
         if not ready_ids:
-            yield "[Error: 所选文档均未就绪]"
+            yield "[Error: Aucun des documents sélectionnés n'est prêt]"
             return
 
         primary = ready_ids[0] if mode == "single" else None
         tool_context = self._build_tool_context(mode, ready_ids, primary, model_type)
 
         if not tool_context["docs"]:
-            yield "[Error: 文档未成功加载]"
+            yield "[Error: Échec du chargement des documents]"
             return
 
         context_overview = self._build_docs_overview(tool_context)
@@ -673,7 +673,7 @@ Output JSON only:
         # without invoking any content tool (gathered is empty), this is a
         # trivial / meta / chit-chat question. Reflection adds latency and
         # cost but almost never flips the answer here, so skip it entirely
-        # and do NOT emit [AGENT_REFLECT] (no "自我检查" UI for trivial turns).
+        # and do NOT emit [AGENT_REFLECT] (no "Auto-vérification" UI for trivial turns).
         if not gathered:
             return
 
@@ -830,11 +830,11 @@ Output JSON only:
         """Assemble answer context, grouping by document in multi-doc mode.
 
         Output layout:
-          【Agent 推理轨迹】 Thought / Action / Observation of every ReAct step,
+          【Trace de raisonnement】 Thought / Action / Observation of every ReAct step,
                            so Phase-3 LLM can continue from the same mental state.
-          【工具分析结果】   summarize_nodes outputs (already LLM-processed).
-          【原文证据】       raw node texts grouped by document (grounding source).
-          【视觉分析】       view_pages VLM observations.
+          【Résultats d'analyse】   summarize_nodes outputs (already LLM-processed).
+          【Texte source】          raw node texts grouped by document (grounding source).
+          【Analyse visuelle】      view_pages VLM observations.
         """
         import re
 
@@ -962,12 +962,12 @@ Output JSON only:
         parts = []
         if trace_block:
             parts.append(
-                "【Agent 推理轨迹 — 你先前逐步的 Thought/Action/Observation，"
-                "用以承接推理过程】\n" + trace_block
+                "【Trace de raisonnement de l'Agent — tes Thought/Action/Observation étape par étape, "
+                "pour reprendre le fil du raisonnement】\n" + trace_block
             )
         if analytical_outputs:
             parts.append(
-                "【工具分析结果 - 已由AI处理，请直接采信并基于此作答】\n"
+                "【Résultats d'analyse des outils — déjà traités par l'IA, fais-leur confiance et appuie-toi dessus pour répondre】\n"
                 + "\n\n".join(analytical_outputs)
             )
         if per_doc_raw:
@@ -978,7 +978,7 @@ Output JSON only:
             for did, texts in per_doc_raw.items():
                 filename = (docs.get(did) or {}).get("filename", did)
                 header = (
-                    f"📄 文档 [{did}] {filename}\n" if mode == "kb" else "【原文补充】\n"
+                    f"📄 Document [{did}] {filename}\n" if mode == "kb" else "【Extraits du texte source】\n"
                 )
                 combined = "\n\n".join(texts)
                 if len(combined) > per_doc_budget:
@@ -986,7 +986,7 @@ Output JSON only:
                 doc_sections.append(header + combined)
             parts.append("\n\n".join(doc_sections))
         if visual_observations:
-            parts.append("【视觉分析】\n" + "\n\n".join(visual_observations))
+            parts.append("【Analyse visuelle】\n" + "\n\n".join(visual_observations))
 
         return "\n\n".join(parts)
 
@@ -1124,7 +1124,7 @@ Question: {query}
 
 {grounding}
 
-Provide a clear, comprehensive answer in Chinese.
+Provide a clear, comprehensive answer in French.
 Use Markdown formatting for better readability."""
 
     def _build_answer_prompt(self, query, sub_questions, context,
@@ -1175,7 +1175,7 @@ Context:
 
 {grounding}
 
-Provide a clear, comprehensive answer in Chinese.
+Provide a clear, comprehensive answer in French.
 If sub-questions were used, synthesize a unified answer.
 Use Markdown formatting for better readability."""
 

@@ -122,7 +122,7 @@ function fmtTime(ts) {
     const sameDay = d.toDateString() === now.toDateString();
     if (sameDay) return d.toTimeString().slice(0, 5);
     const diff = Math.floor((now - d) / 86400000);
-    if (diff < 7) return `${diff}天前`;
+    if (diff < 7) return `il y a ${diff} j`;
     return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
@@ -308,7 +308,7 @@ function setupLibraryPage() {
             dragDepth = 0;
             document.querySelector('.lib-dropzone')?.classList.remove('dragover');
             const files = [...(e.dataTransfer.files || [])].filter(f => f.name.toLowerCase().endsWith('.pdf'));
-            if (!files.length) { showNotification('只支持 PDF 文件', 'error'); return; }
+            if (!files.length) { showNotification('Seuls les fichiers PDF sont pris en charge', 'error'); return; }
             files.forEach(f => uploadDocument(f));
         });
     }
@@ -375,9 +375,9 @@ function renderLibrary(allSessions = []) {
         grid.innerHTML = `
             <div class="lib-dropzone" id="libDropzone">
                 <div class="dz-icon"><i class="bi bi-cloud-arrow-up"></i></div>
-                <h3>拖拽 PDF 到这里 / 点击上传</h3>
-                <p>Agent 会自动解析结构、生成摘要，几十秒后即可开始对话</p>
-                <div class="dz-hint">支持批量上传 · 单文件建议 50MB 以内</div>
+                <h3>Glissez un PDF ici / cliquez pour importer</h3>
+                <p>L'Agent analyse la structure et génère un résumé ; la conversation est possible après quelques dizaines de secondes</p>
+                <div class="dz-hint">Import par lots pris en charge · 50 Mo max recommandé par fichier</div>
             </div>`;
         grid.querySelector('#libDropzone')?.addEventListener('click', () => {
             document.getElementById('libraryFileInput')?.click();
@@ -406,12 +406,12 @@ function renderLibrary(allSessions = []) {
 }
 
 function renderDocCard(d) {
-    const statusLabel = { pending: '等待处理', indexing: '正在索引', indexed: '索引完成', ready: '就绪', error: '失败' }[d.status] || d.status;
+    const statusLabel = { pending: 'En attente', indexing: 'Indexation en cours', indexed: 'Indexation terminée', ready: 'Prêt', error: 'Échec' }[d.status] || d.status;
     const summary = d.status === 'ready' && d.analysis_summary ?
         `<div class="doc-card-summary">${esc(d.analysis_summary)}</div>` : '';
     const errorMsg = d.status === 'error' && d.error_message ?
         `<div class="doc-card-error-msg">${esc(d.error_message)}</div>` : '';
-    const meta = d.page_count ? `<span>· ${d.page_count} 页</span>` : '';
+    const meta = d.page_count ? `<span>· ${d.page_count} pages</span>` : '';
 
     // Progress block — only shown while indexing.
     const progressBlock = (d.status !== 'ready' && d.status !== 'error')
@@ -421,7 +421,7 @@ function renderDocCard(d) {
     if (d.status === 'ready') {
         footer = `
             <button class="doc-card-btn chat-btn" data-action="chat" data-doc-id="${d.doc_id}">
-                <i class="bi bi-chat-square-text"></i> 对话
+                <i class="bi bi-chat-square-text"></i> Discuter
             </button>
             <button class="doc-card-btn delete-btn" data-action="delete" data-doc-id="${d.doc_id}" data-filename="${esc(d.filename)}">
                 <i class="bi bi-trash3"></i>
@@ -429,13 +429,13 @@ function renderDocCard(d) {
     } else if (d.status === 'error') {
         footer = `
             <button class="doc-card-btn" data-action="retry" data-doc-id="${d.doc_id}">
-                <i class="bi bi-arrow-clockwise"></i> 重试
+                <i class="bi bi-arrow-clockwise"></i> Réessayer
             </button>
             <button class="doc-card-btn delete-btn" data-action="delete" data-doc-id="${d.doc_id}" data-filename="${esc(d.filename)}">
                 <i class="bi bi-trash3"></i>
             </button>`;
     } else {
-        const stageShort = STAGE_LABEL[d.stage] || '处理中';
+        const stageShort = STAGE_LABEL[d.stage] || 'Traitement en cours';
         footer = `
             <button class="doc-card-btn" disabled style="opacity:.6;cursor:not-allowed">
                 <i class="bi bi-hourglass-split"></i> ${esc(stageShort)}…
@@ -460,19 +460,19 @@ function renderDocCard(d) {
         </div>`;
 }
 
-// Ordered stages + their display labels (Chinese) and nominal progress %.
+// Ordered stages + their display labels (French) and nominal progress %.
 // Progress % is a rough visual guide — it's intentionally not exposed by the
 // backend since we can't measure LLM latency precisely.
 const STAGE_ORDER = ['queued', 'parsing', 'toc_detect', 'tree_build', 'image_extract', 'analysis', 'done'];
 const STAGE_LABEL = {
-    queued:        '已入队',
-    parsing:       '解析 PDF',
-    toc_detect:    '识别目录',
-    tree_build:    '构建结构树',
-    image_extract: '渲染页面',
-    analysis:      '生成摘要',
-    done:          '已完成',
-    error:         '失败',
+    queued:        'En file d\'attente',
+    parsing:       'Analyse du PDF',
+    toc_detect:    'Détection du sommaire',
+    tree_build:    'Construction de l\'arbre',
+    image_extract: 'Rendu des pages',
+    analysis:      'Génération du résumé',
+    done:          'Terminé',
+    error:         'Échec',
 };
 // Each stage occupies a [from, to] % band. Within a band we interpolate based
 // on elapsed time so the bar visibly creeps forward even while the backend is
@@ -497,11 +497,11 @@ const STAGE_EXPECTED_SEC = {
 function stagePercent(stage, startedAt, stageMessage) {
     const band = STAGE_BAND[stage] || [0, 5];
     const [from, to] = band;
-    // image_extract / tree_build embed "第 X/Y ..." in the message — parse for
-    // exact progress. tree_build's "X" counts node summaries, image_extract's
+    // image_extract / tree_build embed an "X/Y" counter in the message — parse
+    // for exact progress. tree_build's "X" counts node summaries, image_extract's
     // counts pages; either way the fraction is real.
     if ((stage === 'image_extract' || stage === 'tree_build') && stageMessage) {
-        const m = /第\s*(\d+)\s*\/\s*(\d+)\s*(页|个节点|节点)?/.exec(stageMessage);
+        const m = /(\d+)\s*\/\s*(\d+)/.exec(stageMessage);
         if (m) {
             const done = parseInt(m[1], 10), total = parseInt(m[2], 10);
             if (total > 0) return from + (to - from) * (done / total);
@@ -517,7 +517,7 @@ function stagePercent(stage, startedAt, stageMessage) {
 
 function renderDocProgress(d) {
     const stage = d.stage || (d.status === 'indexed' ? 'image_extract' : 'queued');
-    const msg = d.stage_message || STAGE_LABEL[stage] || '正在处理...';
+    const msg = d.stage_message || STAGE_LABEL[stage] || 'Traitement en cours...';
     const pct = stagePercent(stage, d.stage_started_at, d.stage_message);
     const elapsedTxt = formatElapsed(d.stage_started_at);
     return `
@@ -571,7 +571,7 @@ function startProgressTick() {
 
 async function uploadDocument(file) {
     if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
-        showNotification('请选择 PDF 文件', 'error'); return;
+        showNotification('Veuillez choisir un fichier PDF', 'error'); return;
     }
     const fd = new FormData();
     fd.append('file', file);
@@ -579,15 +579,15 @@ async function uploadDocument(file) {
         const r = await fetch('/api/documents/upload', { method: 'POST', body: fd });
         const d = await r.json();
         if (d.success) {
-            showNotification(`"${file.name}" 已上传，正在索引...`);
+            showNotification(`"${file.name}" importé, indexation en cours...`);
             await loadLibrary();
             ensurePolling(d.document.doc_id);
         } else {
-            showNotification('上传失败: ' + d.error, 'error');
+            showNotification('Échec de l\'import : ' + d.error, 'error');
         }
     } catch (e) {
         console.error('Upload error:', e);
-        showNotification('上传失败', 'error');
+        showNotification('Échec de l\'import', 'error');
     }
 }
 
@@ -648,18 +648,18 @@ function patchDocCardStatus(docId, statusData) {
 }
 
 async function deleteDocument(docId, filename) {
-    if (!confirm(`确定删除「${filename}」的索引吗？相关聊天记录会保留但无法继续提问。`)) return;
+    if (!confirm(`Supprimer l'index de « ${filename} » ? Les conversations associées seront conservées mais vous ne pourrez plus poser de questions.`)) return;
     try {
         const r = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
         const d = await r.json();
         if (d.success) {
-            showNotification('文档已删除');
+            showNotification('Document supprimé');
             State.kbChat.selectedDocIds.delete(docId);
             await loadLibrary();
         } else {
-            showNotification('删除失败: ' + d.error, 'error');
+            showNotification('Échec de la suppression : ' + d.error, 'error');
         }
-    } catch (e) { showNotification('删除失败', 'error'); }
+    } catch (e) { showNotification('Échec de la suppression', 'error'); }
 }
 
 async function retryDocument(docId) {
@@ -696,14 +696,14 @@ async function onEnterDocChat() {
         const data = await r.json();
         State.docChat.docInfo = data.document;
     } catch (e) {
-        showNotification('无法加载文档信息', 'error');
+        showNotification('Impossible de charger les informations du document', 'error');
         goToPage('library'); return;
     }
 
     // Header
     document.getElementById('docChatFilename').textContent = State.docChat.docInfo.filename;
     document.getElementById('docChatMeta').textContent =
-        State.docChat.docInfo.page_count ? `${State.docChat.docInfo.page_count} 页` : '';
+        State.docChat.docInfo.page_count ? `${State.docChat.docInfo.page_count} pages` : '';
 
     // Load analysis (non-blocking)
     loadDocAnalysis(docId);
@@ -743,16 +743,16 @@ function renderDocSessionsList() {
     if (!list) return;
     const sessions = State.docChat.sessions;
     if (!sessions.length) {
-        list.innerHTML = '<div class="sessions-empty">暂无历史对话<br>发送消息后自动创建</div>';
+        list.innerHTML = '<div class="sessions-empty">Aucune conversation<br>créée automatiquement à l\'envoi d\'un message</div>';
         return;
     }
     list.innerHTML = sessions.map(s => `
         <div class="session-item ${s.session_id === State.docChat.activeSessionId ? 'active' : ''}" data-session-id="${s.session_id}">
             <div class="session-item-body">
-                <div class="session-item-title">${esc(s.title || '新对话')}</div>
-                <div class="session-item-meta">${s.message_count || 0} 条 · ${fmtTime(s.updated_at)}</div>
+                <div class="session-item-title">${esc(s.title || 'Nouvelle conversation')}</div>
+                <div class="session-item-meta">${s.message_count || 0} msg · ${fmtTime(s.updated_at)}</div>
             </div>
-            <button class="session-item-del" data-session-id="${s.session_id}" title="删除">
+            <button class="session-item-del" data-session-id="${s.session_id}" title="Supprimer">
                 <i class="bi bi-trash3"></i>
             </button>
         </div>`).join('');
@@ -793,10 +793,10 @@ function renderDocAnalysisLanding() {
         el.innerHTML = `
             <div class="analysis-landing-empty">
                 <i class="bi bi-hourglass-split"></i>
-                <div>文档智能分析生成中，稍后刷新查看…</div>
+                <div>Analyse intelligente du document en cours, actualisez plus tard…</div>
                 <div style="margin-top:20px">
                     <button class="btn btn-sm btn-outline-primary" onclick="startNewDocSession()">
-                        <i class="bi bi-chat-square-dots"></i> 直接开始对话
+                        <i class="bi bi-chat-square-dots"></i> Démarrer la conversation
                     </button>
                 </div>
             </div>`;
@@ -810,17 +810,17 @@ function renderDocAnalysisLanding() {
     el.innerHTML = `
         <div class="analysis-card-block">
             <div class="analysis-card-title-big">
-                <i class="bi bi-stars"></i> 文档智能分析
+                <i class="bi bi-stars"></i> Analyse intelligente du document
             </div>
             <div class="analysis-summary-text">${esc(a.summary || '')}</div>
             <div class="analysis-grid">
-                ${findings ? `<div class="analysis-card"><div class="analysis-card-title"><i class="bi bi-bookmark-star"></i> 关键发现</div><ul>${findings}</ul></div>` : ''}
-                ${topics ? `<div class="analysis-card"><div class="analysis-card-title"><i class="bi bi-tags"></i> 主要主题</div><ul>${topics}</ul></div>` : ''}
+                ${findings ? `<div class="analysis-card"><div class="analysis-card-title"><i class="bi bi-bookmark-star"></i> Constats clés</div><ul>${findings}</ul></div>` : ''}
+                ${topics ? `<div class="analysis-card"><div class="analysis-card-title"><i class="bi bi-tags"></i> Thèmes principaux</div><ul>${topics}</ul></div>` : ''}
             </div>
         </div>
         ${questions ? `
         <div class="suggest-questions-block">
-            <div class="suggest-questions-title"><i class="bi bi-chat-left-quote"></i> 推荐问题</div>
+            <div class="suggest-questions-title"><i class="bi bi-chat-left-quote"></i> Questions suggérées</div>
             <div class="suggest-questions">${questions}</div>
         </div>` : ''}`;
     el.querySelectorAll('.suggest-btn').forEach(btn => {
@@ -846,7 +846,7 @@ async function openDocSession(sessionId) {
     document.getElementById('docAnalysisLanding').classList.add('hidden');
     const messages = document.getElementById('docChatMessages');
     messages.style.display = '';
-    messages.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-secondary)">加载对话中...</div>';
+    messages.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-secondary)">Chargement de la conversation...</div>';
     State.socket.emit('get_history', { session_id: sessionId });
 }
 
@@ -907,16 +907,16 @@ function renderKbDocList() {
     const sessionActive = !!State.kbChat.activeSessionId;
 
     if (!readyDocs.length) {
-        list.innerHTML = '<div style="padding:16px;text-align:center;color:rgba(255,255,255,0.4);font-size:12px">暂无就绪文档<br>请先到知识库上传</div>';
+        list.innerHTML = '<div style="padding:16px;text-align:center;color:rgba(255,255,255,0.4);font-size:12px">Aucun document prêt<br>Importez-en d\'abord dans la base de connaissances</div>';
         return;
     }
     if (!shown.length) {
-        list.innerHTML = '<div style="padding:16px;text-align:center;color:rgba(255,255,255,0.4);font-size:12px">无匹配结果</div>';
+        list.innerHTML = '<div style="padding:16px;text-align:center;color:rgba(255,255,255,0.4);font-size:12px">Aucun résultat correspondant</div>';
         return;
     }
     list.innerHTML = shown.map(d => {
         const checked = State.kbChat.selectedDocIds.has(d.doc_id);
-        const pc = d.page_count ? `${d.page_count}页` : '';
+        const pc = d.page_count ? `${d.page_count} p.` : '';
         return `
             <label class="kb-doc-item ${sessionActive ? 'disabled' : ''}" data-doc-id="${d.doc_id}">
                 <input type="checkbox" ${checked ? 'checked' : ''} ${sessionActive ? 'disabled' : ''} data-doc-id="${d.doc_id}">
@@ -942,16 +942,16 @@ function renderKbSessionsList() {
     const list = document.getElementById('kbSessionsList');
     if (!list) return;
     if (!State.kbChat.sessions.length) {
-        list.innerHTML = '<div class="sessions-empty">暂无对话</div>';
+        list.innerHTML = '<div class="sessions-empty">Aucune conversation</div>';
         return;
     }
     list.innerHTML = State.kbChat.sessions.map(s => `
         <div class="session-item ${s.session_id === State.kbChat.activeSessionId ? 'active' : ''}" data-session-id="${s.session_id}">
             <div class="session-item-body">
-                <div class="session-item-title">${esc(s.title || '新对话')}</div>
-                <div class="session-item-meta">${(s.doc_ids || []).length} 文档 · ${s.message_count || 0} 条 · ${fmtTime(s.updated_at)}</div>
+                <div class="session-item-title">${esc(s.title || 'Nouvelle conversation')}</div>
+                <div class="session-item-meta">${(s.doc_ids || []).length} doc · ${s.message_count || 0} msg · ${fmtTime(s.updated_at)}</div>
             </div>
-            <button class="session-item-del" data-session-id="${s.session_id}" title="删除">
+            <button class="session-item-del" data-session-id="${s.session_id}" title="Supprimer">
                 <i class="bi bi-trash3"></i>
             </button>
         </div>`).join('');
@@ -980,16 +980,16 @@ function updateKbTopbar() {
             return d ? { name: d.filename, ok: d.status === 'ready' } : { name: did, ok: false };
         });
         const chips = docNames.map(x =>
-            `<span class="active-chip ${x.ok ? '' : 'disabled'}" title="${x.ok ? '' : '文档已删除'}">
+            `<span class="active-chip ${x.ok ? '' : 'disabled'}" title="${x.ok ? '' : 'Document supprimé'}">
                 <i class="bi bi-file-earmark-pdf"></i>${esc(x.name)}
             </span>`).join('');
-        bar.innerHTML = `<i class="bi bi-chat-square-dots"></i> 当前对话：${chips}`;
+        bar.innerHTML = `<i class="bi bi-chat-square-dots"></i> Conversation en cours : ${chips}`;
     } else {
         const count = State.kbChat.selectedDocIds.size;
         if (count === 0) {
-            bar.innerHTML = `<i class="bi bi-info-circle"></i> 请从左侧选择至少一份文档，或点击「新建对话」`;
+            bar.innerHTML = `<i class="bi bi-info-circle"></i> Sélectionnez au moins un document à gauche, ou cliquez sur « Nouvelle conversation »`;
         } else {
-            bar.innerHTML = `<i class="bi bi-check-circle"></i> 已选 <strong style="margin:0 4px;color:var(--primary)">${count}</strong> 份文档，发送消息即开始新对话`;
+            bar.innerHTML = `<i class="bi bi-check-circle"></i> <strong style="margin:0 4px;color:var(--primary)">${count}</strong> document(s) sélectionné(s) ; envoyez un message pour démarrer une nouvelle conversation`;
         }
     }
 }
@@ -1009,8 +1009,8 @@ function renderKbMessagesEmpty() {
     mc.innerHTML = `
         <div class="empty-landing">
             <div class="empty-hero-icon"><i class="bi bi-chat-square-dots"></i></div>
-            <h4>知识库问答</h4>
-            <p>从左侧勾选需要参与对话的文档，Agent 将在多个文档间检索、对比并综合回答。</p>
+            <h4>Questions-réponses</h4>
+            <p>Cochez à gauche les documents à inclure : l'Agent recherche, compare et synthétise sa réponse à partir de plusieurs documents.</p>
         </div>`;
 }
 
@@ -1024,7 +1024,7 @@ async function openKbSession(sessionId) {
     renderKbDocList();
     updateKbTopbar();
     const mc = document.getElementById('kbChatMessages');
-    mc.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-secondary)">加载对话中...</div>';
+    mc.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-secondary)">Chargement de la conversation...</div>';
     State.socket.emit('get_history', { session_id: sessionId });
 }
 
@@ -1053,7 +1053,7 @@ async function updateSessionTitle(sessionId, title) {
 }
 
 async function deleteSession(sessionId, scope) {
-    if (!confirm('确定删除此对话？')) return;
+    if (!confirm('Supprimer cette conversation ?')) return;
     try {
         const r = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
         const d = await r.json();
@@ -1073,9 +1073,9 @@ async function deleteSession(sessionId, scope) {
             await loadKbSessions();
             renderKbDocList();
         }
-        showNotification('对话已删除');
+        showNotification('Conversation supprimée');
     } catch (e) {
-        showNotification('删除失败: ' + e.message, 'error');
+        showNotification('Échec de la suppression : ' + e.message, 'error');
     }
 }
 
@@ -1110,7 +1110,7 @@ async function sendChatMessage(page) {
                 State.docChat.activeSessionId = s.session_id;
                 await loadDocSessions();
             } catch (e) {
-                showNotification('创建对话失败: ' + e.message, 'error'); return;
+                showNotification('Échec de la création de la conversation : ' + e.message, 'error'); return;
             }
         }
         sessionId = State.docChat.activeSessionId;
@@ -1122,7 +1122,7 @@ async function sendChatMessage(page) {
         if (!State.kbChat.activeSessionId) {
             const docIds = [...State.kbChat.selectedDocIds];
             if (!docIds.length) {
-                showNotification('请至少选择一份文档', 'error'); return;
+                showNotification('Veuillez sélectionner au moins un document', 'error'); return;
             }
             try {
                 const s = await createSession('kb', docIds, truncateTitle(text));
@@ -1131,7 +1131,7 @@ async function sendChatMessage(page) {
                 renderKbDocList();
                 updateKbTopbar();
             } catch (e) {
-                showNotification('创建对话失败: ' + e.message, 'error'); return;
+                showNotification('Échec de la création de la conversation : ' + e.message, 'error'); return;
             }
         }
         sessionId = State.kbChat.activeSessionId;
@@ -1233,7 +1233,7 @@ async function regenerateLastAnswer() {
         }
         sendChatQuery(page, sessionId, userText, { appendUserBubble: false });
     } catch (e) {
-        showNotification('重新生成失败: ' + e.message, 'error');
+        showNotification('Échec de la régénération : ' + e.message, 'error');
     }
 }
 
@@ -1274,9 +1274,9 @@ async function startEditUserMessage(index) {
         <div class="message-edit-box">
             <textarea class="message-edit-textarea" rows="3">${esc(originalText)}</textarea>
             <div class="message-edit-actions">
-                <button class="btn-edit-cancel" type="button">取消</button>
+                <button class="btn-edit-cancel" type="button">Annuler</button>
                 <button class="btn-edit-send" type="button">
-                    <i class="bi bi-send"></i> 发送
+                    <i class="bi bi-send"></i> Envoyer
                 </button>
             </div>
         </div>
@@ -1339,7 +1339,7 @@ async function startEditUserMessage(index) {
             // bubble + typing indicator and streams the answer.
             sendChatQuery(page, sessionId, newText, { appendUserBubble: true });
         } catch (e) {
-            showNotification('重新发送失败: ' + e.message, 'error');
+            showNotification('Échec du renvoi : ' + e.message, 'error');
             restore();
         }
     });
@@ -1385,7 +1385,7 @@ function onStreamStatus(status) {
     if (status === 'retry_answering') {
         // Phase 4 retry: finalize the low-score draft as its own bubble
         // (strip streaming ids so subsequent chunks create a NEW responseBox)
-        // and reset the streaming text buffer. The reflect-box +补检 steps
+        // and reset the streaming text buffer. The reflect-box + extra-search steps
         // that follow will naturally sit between the two assistant bubbles.
         State.streamingRawText = '';
         ['responseBox', 'responseContent', 'thinkingBox', 'agentTimeline', 'agentSteps'].forEach(id => {
@@ -1395,12 +1395,12 @@ function onStreamStatus(status) {
     const ti = msgs.querySelector('.typing-indicator');
     const st = ti?.querySelector('.status-text');
     if (st) st.textContent = {
-        preparing: '正在准备文档数据...',
-        prepared: '准备完成',
-        searching: '正在检索相关内容...',
-        answering: '正在生成回答...',
-        retrying: 'Agent 正在补充检索...',
-        retry_answering: '正在重新生成回答...',
+        preparing: 'Préparation des données du document...',
+        prepared: 'Préparation terminée',
+        searching: 'Recherche du contenu pertinent...',
+        answering: 'Génération de la réponse...',
+        retrying: 'L\'Agent complète sa recherche...',
+        retry_answering: 'Régénération de la réponse...',
     }[status] || '';
 }
 
@@ -1412,7 +1412,7 @@ function onStreamThinking(content) {
         b = document.createElement('div');
         b.className = 'thinking-box';
         b.id = 'thinkingBox';
-        b.innerHTML = '<strong>推理过程</strong><span class="thinking-content"></span>';
+        b.innerHTML = '<strong>Raisonnement</strong><span class="thinking-content"></span>';
         if (ti) ti.before(b); else msgs.appendChild(b);
     }
     const tc = b.querySelector('.thinking-content');
@@ -1459,13 +1459,13 @@ function renderNodesGrouped(nodes, fallbackDocId) {
     const rows = orderedKeys.map(key => {
         const items = groups.get(key);
         const docInfo = key ? (State.documents || []).find(x => x.doc_id === key) : null;
-        const name = docInfo ? docInfo.filename : (key || '未知文档');
+        const name = docInfo ? docInfo.filename : (key || 'Document inconnu');
         const tags = items.map(it => (
             `<span class="node-tag" onclick="showNodePreview('${esc(it.nodeId)}', '${esc(it.docId || '')}')">${esc(it.label)}</span>`
         )).join(' ');
         return `<div class="nodes-row"><span class="nodes-doc-name" title="${esc(name)}">${esc(name)}</span><span class="nodes-row-tags">${tags}</span></div>`;
     }).join('');
-    return `<div class="nodes-box"><strong>检索节点</strong>${rows}</div>`;
+    return `<div class="nodes-box"><strong>Nœuds récupérés</strong>${rows}</div>`;
 }
 
 function onStreamChunk(content) {
@@ -1506,7 +1506,7 @@ function onStreamDone(wasStopped) {
         msgs.querySelector('.typing-indicator')?.remove();
         const rc = msgs.querySelector('#responseContent');
         if (rc && State.streamingRawText) {
-            const finalText = wasStopped ? State.streamingRawText + '\n\n---\n*（已停止生成）*' : State.streamingRawText;
+            const finalText = wasStopped ? State.streamingRawText + '\n\n---\n*(génération interrompue)*' : State.streamingRawText;
             rc.innerHTML = renderMarkdown(finalText);
             renderMathInContainer(rc);
         }
@@ -1535,7 +1535,7 @@ function onStreamError(msg) {
     const msgs = activeChatUI()?.messages;
     if (msgs) {
         msgs.querySelector('.typing-indicator')?.remove();
-        addSystemMessage(msgs, '错误: ' + msg);
+        addSystemMessage(msgs, 'Erreur : ' + msg);
     }
 }
 
@@ -1548,7 +1548,7 @@ function getOrCreateTimeline(msgs) {
         const ti = msgs.querySelector('.typing-indicator');
         tl = document.createElement('div');
         tl.className = 'agent-timeline'; tl.id = 'agentTimeline';
-        tl.innerHTML = '<div class="agent-timeline-header"><i class="bi bi-robot"></i> Agent 推理过程</div><div id="agentSteps"></div>';
+        tl.innerHTML = '<div class="agent-timeline-header"><i class="bi bi-robot"></i> Raisonnement de l\'Agent</div><div id="agentSteps"></div>';
         if (ti) ti.before(tl); else msgs.appendChild(tl);
     }
     return tl;
@@ -1558,7 +1558,7 @@ function onAgentStep(d) {
     const msgs = activeChatUI()?.messages; if (!msgs) return;
     getOrCreateTimeline(msgs);
     const sc = msgs.querySelector('#agentSteps'); if (!sc) return;
-    const tool = d.tool === 'final_answer' ? '准备回答' : (d.tool || '');
+    const tool = d.tool === 'final_answer' ? 'Préparation de la réponse' : (d.tool || '');
     const docChip = d.doc_id ? `<span class="step-doc-chip"><i class="bi bi-file-earmark"></i> ${esc(docFilenameShort(d.doc_id))}</span>` : '';
     const div = document.createElement('div');
     div.className = 'agent-step';
@@ -1588,7 +1588,7 @@ function onAgentDecompose(d) {
     const box = document.createElement('div');
     box.className = 'decompose-box';
     const qs = (d.sub_questions || []).map((q, i) => `<div class="sub-question">${i + 1}. ${esc(q)}</div>`).join('');
-    box.innerHTML = `<strong><i class="bi bi-diagram-3"></i> 问题分解 (${esc(d.synthesis_strategy || 'direct')})</strong>${qs}`;
+    box.innerHTML = `<strong><i class="bi bi-diagram-3"></i> Décomposition de la question (${esc(d.synthesis_strategy || 'direct')})</strong>${qs}`;
     if (ti) ti.before(box); else msgs.appendChild(box);
     scrollChatToBottom();
 }
@@ -1599,10 +1599,10 @@ function onAgentReflect(d) {
     box.className = 'reflect-box';
     const s = d.score || 0;
     const cls = s < 6 ? 'poor' : s < 8 ? 'medium' : 'good';
-    const action = d.action === 'accept' ? '回答质量满足要求' : '正在补充检索...';
+    const action = d.action === 'accept' ? 'Qualité de la réponse satisfaisante' : 'Recherche complémentaire en cours...';
     const icon = d.action === 'accept' ? 'bi-check-circle-fill' : 'bi-arrow-repeat';
     const issues = (d.issues || []).map(i => `<li>${esc(i)}</li>`).join('');
-    box.innerHTML = `<strong><i class="bi bi-shield-check"></i> 自我检查</strong>
+    box.innerHTML = `<strong><i class="bi bi-shield-check"></i> Auto-vérification</strong>
         <span class="reflect-score ${cls}">${s}/10</span>
         <span><i class="bi ${icon}"></i> ${action}</span>
         ${issues ? `<ul style="margin-top:6px;padding-left:18px;font-size:12px;color:#64748b">${issues}</ul>` : ''}`;
@@ -1641,7 +1641,7 @@ function onHistoryReceived(data) {
     msgs.innerHTML = '';
     const history = data.history || [];
     if (!history.length) {
-        addSystemMessage(msgs, '这是一个新对话，开始提问吧！');
+        addSystemMessage(msgs, 'Nouvelle conversation, posez votre question !');
         return;
     }
     // Precompute the index of the most recent non-superseded assistant
@@ -1668,10 +1668,10 @@ function appendHistoryMessage(msgs, m, ctx) {
         if (steps.length > 0) {
             const tl = document.createElement('div');
             tl.className = 'agent-timeline';
-            tl.innerHTML = '<div class="agent-timeline-header"><i class="bi bi-robot"></i> Agent 推理过程</div>';
+            tl.innerHTML = '<div class="agent-timeline-header"><i class="bi bi-robot"></i> Raisonnement de l\'Agent</div>';
             const sc = document.createElement('div');
             steps.forEach(s => {
-                const tool = s.tool === 'final_answer' ? '准备回答' : s.tool;
+                const tool = s.tool === 'final_answer' ? 'Préparation de la réponse' : s.tool;
                 const div = document.createElement('div');
                 div.className = 'agent-step';
                 const docChip = s.doc_id ? `<span class="step-doc-chip"><i class="bi bi-file-earmark"></i> ${esc(docFilenameShort(s.doc_id))}</span>` : '';
@@ -1689,7 +1689,7 @@ function appendHistoryMessage(msgs, m, ctx) {
         } else {
             const tb = document.createElement('div');
             tb.className = 'thinking-box';
-            tb.innerHTML = `<strong>推理过程</strong><span class="thinking-content">${esc(m.thinking)}</span>`;
+            tb.innerHTML = `<strong>Raisonnement</strong><span class="thinking-content">${esc(m.thinking)}</span>`;
             msgs.appendChild(tb);
         }
     }
@@ -1705,7 +1705,7 @@ function appendHistoryMessage(msgs, m, ctx) {
     if (typeof ctx.index === 'number') div.dataset.index = String(ctx.index);
     const rendered = m.role === 'assistant' ? renderMarkdown(m.content) : esc(m.content);
     const supersededBadge = m.superseded
-        ? '<div class="superseded-badge"><i class="bi bi-arrow-repeat"></i> 已被反思修订（下方为最终答案）</div>'
+        ? '<div class="superseded-badge"><i class="bi bi-arrow-repeat"></i> Révisée après réflexion (réponse finale ci-dessous)</div>'
         : '';
     // Hover actions: edit any user message, regenerate only the newest
     // assistant reply. Superseded drafts never get actions (they're frozen
@@ -1713,14 +1713,14 @@ function appendHistoryMessage(msgs, m, ctx) {
     let actionsHtml = '';
     if (m.role === 'user') {
         actionsHtml = `<div class="message-actions">
-            <button class="msg-action-btn" title="编辑并重新发送"
+            <button class="msg-action-btn" title="Modifier et renvoyer"
                 onclick="startEditUserMessage(${ctx.index})">
                 <i class="bi bi-pencil"></i>
             </button>
         </div>`;
     } else if (m.role === 'assistant' && !m.superseded && ctx.isLastAssistant) {
         actionsHtml = `<div class="message-actions">
-            <button class="msg-action-btn" title="重新生成"
+            <button class="msg-action-btn" title="Régénérer"
                 onclick="regenerateLastAnswer()">
                 <i class="bi bi-arrow-clockwise"></i>
             </button>
@@ -1742,7 +1742,7 @@ function parseAgentSteps(thinking) {
 }
 
 function onHistoryCleared(data) {
-    showNotification('对话已清空');
+    showNotification('Conversation effacée');
 }
 
 // ========================================================================
@@ -1795,8 +1795,8 @@ async function saveSettings() {
             body: JSON.stringify(vc)
         });
         bootstrap.Modal.getInstance(document.getElementById('settingsModal'))?.hide();
-        showNotification('配置已保存');
-    } catch { showNotification('保存配置失败', 'error'); }
+        showNotification('Configuration enregistrée');
+    } catch { showNotification('Échec de l\'enregistrement', 'error'); }
 }
 
 // ========================================================================
@@ -1829,7 +1829,7 @@ function renderSkillsGrid() {
     const grid = document.getElementById('skillsGrid');
     if (!grid) return;
     if (!_skillsCache.length) {
-        grid.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-secondary)">暂无 Skill，点击右上角「新建」或「上传」</div>';
+        grid.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-secondary)">Aucun Skill ; cliquez sur « Nouveau » ou « Importer » en haut à droite</div>';
         return;
     }
     grid.innerHTML = _skillsCache.map(s => `
@@ -1837,9 +1837,9 @@ function renderSkillsGrid() {
             <div class="skill-toggle ${s.enabled ? 'active' : ''}" data-id="${esc(s.skill_id)}" data-enabled="${s.enabled ? 'true' : 'false'}"></div>
             <div class="skill-card-body" data-id="${esc(s.skill_id)}">
                 <div class="skill-card-name">${esc(s.name)}</div>
-                <div class="skill-card-desc">${esc(s.description || '无描述')}</div>
+                <div class="skill-card-desc">${esc(s.description || 'Aucune description')}</div>
             </div>
-            <button class="skill-card-edit" data-id="${esc(s.skill_id)}" title="编辑"><i class="bi bi-pencil"></i></button>
+            <button class="skill-card-edit" data-id="${esc(s.skill_id)}" title="Modifier"><i class="bi bi-pencil"></i></button>
         </div>`).join('');
     grid.querySelectorAll('.skill-toggle').forEach(el => {
         el.addEventListener('click', async e => {
@@ -1880,14 +1880,14 @@ function openSkillEditor(skillId) {
     if (skillId) {
         const s = _skillsCache.find(x => x.skill_id === skillId);
         if (!s) return;
-        titleEl.textContent = '编辑 Skill';
+        titleEl.textContent = 'Modifier le Skill';
         nameEl.value = s.name;
         descEl.value = s.description || '';
         contentEl.value = s.content || '';
         idEl.value = s.skill_id;
         deleteBtn.style.display = 'inline-flex';
     } else {
-        titleEl.textContent = '新建 Skill';
+        titleEl.textContent = 'Nouveau Skill';
         nameEl.value = ''; descEl.value = ''; contentEl.value = '';
         idEl.value = '';
         deleteBtn.style.display = 'none';
@@ -1900,7 +1900,7 @@ async function saveSkill() {
     const name = document.getElementById('skillEditorName')?.value?.trim();
     const description = document.getElementById('skillEditorDesc')?.value?.trim();
     const content = document.getElementById('skillEditorContent')?.value?.trim();
-    if (!name) { showNotification('请输入 Skill 名称', 'error'); return; }
+    if (!name) { showNotification('Veuillez saisir le nom du Skill', 'error'); return; }
     try {
         if (id) {
             await fetch(`/api/skills/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description, content }) });
@@ -1909,31 +1909,31 @@ async function saveSkill() {
         }
         bootstrap.Modal.getInstance(document.getElementById('skillEditorModal'))?.hide();
         await loadSkills();
-        showNotification(id ? 'Skill 已更新' : 'Skill 已创建');
-    } catch (e) { showNotification('保存失败: ' + e.message, 'error'); }
+        showNotification(id ? 'Skill mis à jour' : 'Skill créé');
+    } catch (e) { showNotification('Échec de l\'enregistrement : ' + e.message, 'error'); }
 }
 
 async function deleteCurrentSkill() {
     const id = document.getElementById('skillEditorId')?.value;
     if (!id) return;
-    if (!confirm('确定删除此 Skill?')) return;
+    if (!confirm('Supprimer ce Skill ?')) return;
     try {
         await fetch(`/api/skills/${id}`, { method: 'DELETE' });
         bootstrap.Modal.getInstance(document.getElementById('skillEditorModal'))?.hide();
         await loadSkills();
-        showNotification('Skill 已删除');
-    } catch (e) { showNotification('删除失败', 'error'); }
+        showNotification('Skill supprimé');
+    } catch (e) { showNotification('Échec de la suppression', 'error'); }
 }
 
 async function uploadSkillFile(file) {
-    if (!file || !file.name.endsWith('.md')) { showNotification('仅支持 .md 文件', 'error'); return; }
+    if (!file || !file.name.endsWith('.md')) { showNotification('Seuls les fichiers .md sont pris en charge', 'error'); return; }
     const fd = new FormData(); fd.append('file', file);
     try {
         const r = await fetch('/api/skills/upload', { method: 'POST', body: fd });
         const d = await r.json();
-        if (d.success) { await loadSkills(); showNotification('Skill 已导入'); }
-        else showNotification('上传失败: ' + (d.error || '未知错误'), 'error');
-    } catch (e) { showNotification('上传失败', 'error'); }
+        if (d.success) { await loadSkills(); showNotification('Skill importé'); }
+        else showNotification('Échec de l\'import : ' + (d.error || 'Erreur inconnue'), 'error');
+    } catch (e) { showNotification('Échec de l\'import', 'error'); }
 }
 
 function toggleSkillPreview() {
@@ -1974,7 +1974,7 @@ async function showNodePreview(nodeId, docId) {
         } catch { return; }
     }
     const info = State.nodeMapCache[docId]?.[nodeId];
-    if (!info) { showNotification('未找到节点信息', 'error'); return; }
+    if (!info) { showNotification('Informations du nœud introuvables', 'error'); return; }
     showPagePreviewModal(docId, nodeId, info, State.allPagesCache[docId]);
 }
 window.showNodePreview = showNodePreview;
@@ -2010,16 +2010,16 @@ function showPagePreviewModal(docId, nodeId, nodeInfo, allPages) {
             <div class="page-preview-header">
                 <h5 class="page-preview-title"></h5>
                 <div class="page-preview-header-actions">
-                    <button class="highlight-toggle-btn" id="highlightToggleBtn" title="点击节点标签以高亮"><i class="bi bi-highlighter"></i></button>
+                    <button class="highlight-toggle-btn" id="highlightToggleBtn" title="Cliquez sur une étiquette de nœud pour la surligner"><i class="bi bi-highlighter"></i></button>
                     <button class="page-preview-close"><i class="bi bi-x-lg"></i></button>
                 </div>
             </div>
             <div class="node-info-card" id="nodeInfoCard"></div>
             <div class="page-preview-body"><div class="page-preview-images"></div></div>
             <div class="page-preview-footer"><div class="page-preview-nav">
-                <button class="page-nav-btn" id="prevPageBtn"><i class="bi bi-chevron-left"></i> 上一页</button>
+                <button class="page-nav-btn" id="prevPageBtn"><i class="bi bi-chevron-left"></i> Page précédente</button>
                 <span class="page-indicator" id="pageIndicator"></span>
-                <button class="page-nav-btn" id="nextPageBtn">下一页 <i class="bi bi-chevron-right"></i></button>
+                <button class="page-nav-btn" id="nextPageBtn">Page suivante <i class="bi bi-chevron-right"></i></button>
             </div></div></div>`;
         document.body.appendChild(modal);
         modal.querySelector('.page-preview-close').addEventListener('click', closePagePreviewModal);
@@ -2039,22 +2039,22 @@ function showPagePreviewModal(docId, nodeId, nodeInfo, allPages) {
     const nodeColor = getNodeColor(nodeId, nMap);
 
     const docInfo = State.documents.find(x => x.doc_id === docId);
-    modal.querySelector('.page-preview-title').textContent = docInfo?.filename || 'PDF 预览';
+    modal.querySelector('.page-preview-title').textContent = docInfo?.filename || 'Aperçu du PDF';
 
     const infoCard = modal.querySelector('#nodeInfoCard');
     infoCard.innerHTML = `
         <div class="node-info-badge" style="background:${nodeColor.bg};color:${nodeColor.text}">${esc(nodeId)}</div>
         <div class="node-info-detail">
-            <div class="node-info-title">${esc(nodeInfo.title || '未命名节点')}</div>
+            <div class="node-info-title">${esc(nodeInfo.title || 'Nœud sans titre')}</div>
             <div class="node-info-meta">
-                <span><i class="bi bi-file-earmark"></i> 第 ${currentStart}–${currentEnd} 页</span>
+                <span><i class="bi bi-file-earmark"></i> Pages ${currentStart}–${currentEnd}</span>
             </div>
             ${nodeInfo.summary ? `<div class="node-info-summary">${esc(nodeInfo.summary)}</div>` : ''}
         </div>`;
 
     const imgs = modal.querySelector('.page-preview-images');
     if (!allPages?.length) {
-        imgs.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)">无页面图片</div>';
+        imgs.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)">Aucune image de page</div>';
     } else {
         imgs.innerHTML = allPages.map((p, i) => {
             const pageNum = p.page;
@@ -2065,13 +2065,13 @@ function showPagePreviewModal(docId, nodeId, nodeInfo, allPages) {
                 const label = n.title.length > 20 ? n.title.slice(0, 18) + '…' : n.title;
                 return `<span class="page-node-tag${isActive ? ' active-node' : ''}" data-node-id="${n.id}" `
                     + `style="background:${n.color.bg};color:${n.color.text}" `
-                    + `title="点击高亮 ${esc(n.id + ': ' + n.title)}">`
+                    + `title="Cliquer pour surligner ${esc(n.id + ': ' + n.title)}">`
                     + `<span class="page-node-tag-id">${n.id}</span> ${esc(label)}</span>`;
             }).join('');
             return `<div class="page-image-container${isCurrent ? ' current-node-page' : ''}" data-index="${i}">`
                 + `<img src="${p.url}" alt="Page ${pageNum}" class="page-preview-image">`
                 + (tags ? `<div class="page-node-tags">${tags}</div>` : '')
-                + `<div class="page-number">第 ${pageNum} 页</div></div>`;
+                + `<div class="page-number">Page ${pageNum}</div></div>`;
         }).join('');
         imgs.querySelectorAll('.page-preview-image').forEach(img => {
             img.addEventListener('click', () => openFullscreen(img.src));
@@ -2203,7 +2203,7 @@ function updateHighlightToggleBtn() {
     const btn = document.getElementById('highlightToggleBtn');
     if (btn) {
         btn.classList.toggle('active', !!State.activeHighlightNodeId);
-        btn.title = State.activeHighlightNodeId ? '清除高亮 (' + State.activeHighlightNodeId + ')' : '点击节点标签以高亮';
+        btn.title = State.activeHighlightNodeId ? 'Effacer le surlignage (' + State.activeHighlightNodeId + ')' : 'Cliquez sur une étiquette de nœud pour la surligner';
     }
 }
 

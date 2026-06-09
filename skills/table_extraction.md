@@ -1,60 +1,60 @@
 ---
-name: 表格抽取与还原
-description: 从文档中精确定位表格并以 Markdown 表格格式无损还原；文本模式和视觉模式均可用
+name: Extraction et restitution de tableaux
+description: Localise précisément les tableaux d'un document et les restitue sans perte au format tableau Markdown ; utilisable en mode texte comme en mode visuel
 enabled: true
 ---
 
-## 激活条件 (Triggers)
-- `把 Table 3 提出来 / 表 2 的数据 / 给我那个对比表`
-- `列一下 ... 的各项参数 / 把 X 章里的数据整理成表`
-- 用户给出明确的表格编号、图注编号、章节号并要求数据
+## Conditions d'activation (Triggers)
+- `extrais-moi le Table 3 / les données du tableau 2 / donne-moi ce tableau comparatif`
+- `liste les différents paramètres de ... / mets les données du chapitre X sous forme de tableau`
+- L'utilisateur fournit un numéro de tableau, un numéro de légende ou un numéro de chapitre précis et demande les données
 
-## 禁止触发 (Anti-triggers)
-- 用户问的是图（figure/chart/示意图）而非表格 → 走 `view_pages` 视觉路径，不按本 skill
-- 用户问"这个表说明了什么" → 这是**解读**任务，输出中**不需要**完整 Markdown 表格，给出几句结论+关键行即可
-- 文档中根本没有表格 → 如实回答"未检测到相关表格"
+## Cas de non-déclenchement (Anti-triggers)
+- L'utilisateur demande une figure (figure / chart / schéma) et non un tableau → suivre le chemin visuel `view_pages`, ne pas appliquer cette skill
+- L'utilisateur demande « qu'illustre ce tableau » → il s'agit d'une tâche d'**interprétation**, la sortie n'a **pas besoin** d'un tableau Markdown complet ; donner quelques phrases de conclusion + les lignes clés suffit
+- Il n'y a aucun tableau dans le document → répondre honnêtement « aucun tableau pertinent détecté »
 
-## 执行流程
+## Flux d'exécution
 
-### Step 1. 定位
-- 若用户给了表号（如 Table 3）：`keyword_search(keyword="Table 3")` 优先
-- 若用户只给了主题：`tree_search(query="<主题> 表格")` 定位最相关 1–2 个节点
-- 将候选节点记录下来
+### Étape 1. Localisation
+- Si l'utilisateur a donné un numéro de tableau (ex. Table 3) : privilégier `keyword_search(keyword="Table 3")`
+- Si l'utilisateur n'a donné qu'un sujet : `tree_search(query="<sujet> tableau")` pour localiser le ou les 1 à 2 nœuds les plus pertinents
+- Noter les nœuds candidats
 
-### Step 2. 读取
-- `read_node(node_ids=[...])` 批量读取候选节点
-- 检查文本中是否包含 `|` 分隔符、Tab 分隔、或连续对齐的数字列 → 判断是否有可解析的表格文本
+### Étape 2. Lecture
+- `read_node(node_ids=[...])` pour lire les nœuds candidats par lot
+- Vérifier si le texte contient des séparateurs `|`, des tabulations, ou des colonnes de chiffres alignées en continu → déterminer s'il existe un texte de tableau analysable
 
-### Step 3a. 文本模式路径（`model_type == "text"`）
-- 直接从节点文本中按列对齐关系还原 Markdown 表格
-- 若节点文本把表格拆成了多段，需要拼接
-- **如果文本根本不存在表格结构**（PDF 里表格是图片）→ 明确告知用户"当前为文本模式，该表以图片形式存在，建议切换到视觉模式"
+### Étape 3a. Chemin mode texte (`model_type == "text"`)
+- Restituer directement le tableau Markdown à partir du texte du nœud en respectant l'alignement des colonnes
+- Si le texte du nœud a fragmenté le tableau en plusieurs segments, il faut les recoller
+- **Si aucune structure de tableau n'existe dans le texte** (le tableau est une image dans le PDF) → indiquer clairement à l'utilisateur « nous sommes actuellement en mode texte, ce tableau existe sous forme d'image, il est recommandé de passer en mode visuel »
 
-### Step 3b. 视觉模式路径（`model_type != "text"`）
-- `view_pages(node_ids=[...], focus="完整提取表格 <表号/主题>，保留所有行列、单位、脚注")`
-- VLM 返回的描述优先作为权威数据源
-- 若视觉结果与 `read_node` 的文本结果冲突 → **以视觉为准**（扫描版文字经常 OCR 错）
+### Étape 3b. Chemin mode visuel (`model_type != "text"`)
+- `view_pages(node_ids=[...], focus="extraire intégralement le tableau <numéro/sujet>, conserver toutes les lignes, colonnes, unités et notes de bas de page")`
+- La description renvoyée par le VLM fait autorité comme source de données prioritaire
+- Si le résultat visuel entre en conflit avec le résultat texte de `read_node` → **donner la priorité au visuel** (les versions scannées comportent souvent des erreurs d'OCR sur le texte)
 
-### Step 4. 二次核对
-- 表头列数必须与每行数据列数一致，否则继续检查遗漏
-- 合并单元格 → 在输出中用 `（同上）` 或脚注说明
-- 跨页表格 → 将相邻节点文本拼接后再还原
+### Étape 4. Vérification croisée
+- Le nombre de colonnes de l'en-tête doit correspondre au nombre de colonnes de chaque ligne de données, sinon continuer à chercher les omissions
+- Cellules fusionnées → l'indiquer dans la sortie par `(idem ci-dessus)` ou une note de bas de page
+- Tableaux à cheval sur plusieurs pages → recoller le texte des nœuds adjacents avant la restitution
 
-## 输出格式
+## Format de sortie
 
-**表格标题**：Table X — <原标题>  
-**位置**：节点 `node_...`，第 N–M 页  
-**提取模式**：文本 / 视觉
+**Titre du tableau** : Table X — <titre original>  
+**Emplacement** : nœud `node_...`, pages N–M  
+**Mode d'extraction** : texte / visuel
 
-| 列1 | 列2 | 列3 |
+| Colonne1 | Colonne2 | Colonne3 |
 |---|---|---|
 | … | … | … |
 
-**单位**：<如有全局单位>  
-**脚注/备注**：<如有>
+**Unité** : <s'il existe une unité globale>  
+**Notes de bas de page / remarques** : <le cas échéant>
 
-## Guardrails（防幻觉）
-- **严禁**自行补全缺失的数据格。缺失就写 `—` 并在"缺失说明"里列出。
-- **严禁**四舍五入原始数值；保留原精度。
-- **严禁**自己发明列名。如果原表列名是缩写，保留缩写并在下方给出全称注释。
-- 如果提取置信度低（文本混乱或图像模糊）→ 在输出末尾加一行"⚠️ 数据置信度较低，建议人工核对"。
+## Guardrails (anti-hallucination)
+- **Strictement interdit** de compléter de soi-même les cases de données manquantes. En cas de valeur manquante, écrire `—` et la lister dans la « note des valeurs manquantes ».
+- **Strictement interdit** d'arrondir les valeurs d'origine ; conserver la précision originale.
+- **Strictement interdit** d'inventer des noms de colonnes. Si les noms de colonnes d'origine sont des abréviations, conserver les abréviations et indiquer leur forme complète en annotation en dessous.
+- Si le niveau de confiance de l'extraction est faible (texte confus ou image floue) → ajouter en fin de sortie une ligne « ⚠️ Confiance des données faible, vérification manuelle recommandée ».

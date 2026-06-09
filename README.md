@@ -1,243 +1,244 @@
 # PageIndex Chat UI
 
-> ⚠️ **项目重构中 / Under Reconstruction**
+> ⚠️ **Projet en cours de refonte / Under Reconstruction**
 >
-> 本项目正处于重构阶段，架构、数据模型、交互方式都可能发生变化，
-> 新的文档将在重构完成后补齐。
+> Ce projet est en phase de refonte ; l'architecture, le modèle de données et les modes d'interaction sont susceptibles d'évoluer.
+> Une nouvelle documentation sera complétée une fois la refonte achevée.
 >
-> 旧版 README 已保留为 [`README_old.md`](./README_old.md)，
-> 仅作历史参考，其中描述的使用方式与当前代码可能不一致。
+> L'ancien README est conservé sous [`README_old.md`](./README_old.md),
+> à titre de référence historique uniquement ; les modes d'utilisation qui y sont décrits peuvent ne pas correspondre au code actuel.
 
 ---
 
 <p align="center">
-  <a href="#-项目简介">简介</a> •
-  <a href="#-核心特性">特性</a> •
-  <a href="#-快速开始">快速开始</a> •
-  <a href="#-api--模型说明">API/模型</a> •
-  <a href="#-致谢">致谢</a>
+  <a href="#-présentation-du-projet">Présentation</a> •
+  <a href="#-fonctionnalités-clés">Fonctionnalités</a> •
+  <a href="#-démarrage-rapide">Démarrage rapide</a> •
+  <a href="#-api--modèles">API/Modèles</a> •
+  <a href="#-remerciements">Remerciements</a>
 </p>
 
 ---
 
-## 📖 项目简介
+## 📖 Présentation du projet
 
-**PageIndex Chat UI** 是一个基于[PageIndex](https://github.com/VectifyAI/PageIndex)的 **Agentic RAG** 文档问答系统。它无需向量数据库、无需 Embedding，完全依靠 LLM 在文档目录树上进行推理式导航。
+**PageIndex Chat UI** est un système de questions-réponses documentaires de type **Agentic RAG** basé sur [PageIndex](https://github.com/VectifyAI/PageIndex). Il ne nécessite ni base de données vectorielle ni Embedding : il s'appuie entièrement sur le LLM pour naviguer par raisonnement dans l'arborescence (table des matières) du document.
 
-重构后的版本采用支持两种对话模式：
+La version refondue prend en charge deux modes de conversation :
 
-* **单文档对话（Single）**：针对单篇 PDF 的深度问答，系统提示词内联完整目录树，Agent 规划更充分
-* **知识库问答（KB）**：用户自由选择多份文档参与对话，Agent 通过渐进式披露（元数据 → 目录 → 章节内容）自动跨文档检索与综合
+* **Conversation mono-document (Single)** : questions-réponses approfondies sur un seul PDF ; le system prompt intègre l'arborescence complète, ce qui permet à l'Agent de planifier plus finement.
+* **Questions-réponses sur base de connaissances (KB)** : l'utilisateur choisit librement plusieurs documents à inclure dans la conversation ; l'Agent effectue une recherche et une synthèse automatiques entre documents par divulgation progressive (métadonnées → table des matières → contenu des chapitres).
 
 
 
-### 💡 核心理念：相似度 ≠ 相关性
+### 💡 Idée centrale : similarité ≠ pertinence
 
-传统 RAG 依赖向量 Embedding——语义相似的片段未必是回答问题所需的上下文。PageIndex 采用不同的路线：
+Le RAG traditionnel s'appuie sur les Embeddings vectoriels — or un fragment sémantiquement similaire n'est pas nécessairement le contexte requis pour répondre à la question. PageIndex adopte une approche différente :
 
-* **建索引时**：将 PDF 解析为层级化的树状结构（类似书的目录），并为每个节点生成摘要
-* **问答时**：让 Agent 基于树结构逐层定位答案所在的章节/段落
+* **Lors de l'indexation** : le PDF est analysé en une structure arborescente hiérarchique (semblable à la table des matières d'un livre), et un résumé est généré pour chaque nœud.
+* **Lors des questions-réponses** : l'Agent localise, niveau par niveau, le chapitre/paragraphe contenant la réponse en s'appuyant sur cette structure arborescente.
 
-*没有任何 Embedding、没有向量数据库。*
+*Aucun Embedding, aucune base de données vectorielle.*
 
 ---
 
-## UI 界面
+## Interface
+
 ![ui](image/readme/UI.png)
 ![kb_chat](image/readme/kb_chat.png)
 
 ---
 
-## ✨ 核心特性
+## ✨ Fonctionnalités clés
 
-### 多工具 Agent
+### Agent multi-outils
 
-问答引擎是一个具备完整推理链路的 Agent。面对用户提问，它自主规划搜索、阅读、总结路径，在 8 种工具中选择调用：
+Le moteur de questions-réponses est un Agent doté d'une chaîne de raisonnement complète. Face à une question de l'utilisateur, il planifie de manière autonome ses chemins de recherche, de lecture et de synthèse, en choisissant parmi 8 outils :
 
-| 工具 | 说明 |
+| Outil | Description |
 | :--: | :--: |
-| `tree_search` | 在文档树结构上推理搜索，定位相关章节 |
-| `read_node` | 读取指定节点的完整文本 |
-| `keyword_search` | 全文精确关键词/短语匹配 |
-| `view_pages` | 将页面图像送入 VLM 分析图表/公式/表格 |
-| `summarize_nodes` | 对节点内容生成 LLM 摘要，压缩信息 |
-| `list_documents` | 列出可访问文档的元数据（KB 模式） |
-| `read_document_toc` | 读取文档的目录结构（KB 模式） |
-| `cross_search` | 跨多篇文档并行搜索（KB 模式） |
+| `tree_search` | Recherche par raisonnement sur l'arborescence du document pour localiser les chapitres pertinents |
+| `read_node` | Lit le texte complet d'un nœud donné |
+| `keyword_search` | Correspondance exacte de mots-clés/expressions sur l'ensemble du texte |
+| `view_pages` | Envoie des images de pages au VLM pour analyser graphiques/formules/tableaux |
+| `summarize_nodes` | Génère un résumé LLM du contenu des nœuds pour compresser l'information |
+| `list_documents` | Liste les métadonnées des documents accessibles (mode KB) |
+| `read_document_toc` | Lit la structure de la table des matières d'un document (mode KB) |
+| `cross_search` | Recherche parallèle à travers plusieurs documents (mode KB) |
 
-Agent 在每轮对话中执行 **分解 → 推理搜索 → 回答生成 → 自我评估** 的完整回路：
+À chaque tour de conversation, l'Agent exécute le cycle complet **décomposition → recherche par raisonnement → génération de la réponse → auto-évaluation** :
 
-* 复杂问题自动拆解为子问题，分别检索后综合
-* 答案生成后自动评估质量，不达标则补充检索并重写
-* 索引完成后自动分析文档，产出摘要、关键发现和推荐问题
+* Les questions complexes sont automatiquement décomposées en sous-questions, recherchées séparément puis synthétisées.
+* Après génération, la qualité de la réponse est évaluée automatiquement ; si elle est insuffisante, une recherche complémentaire est lancée et la réponse réécrite.
+* Une fois l'indexation terminée, le document est analysé automatiquement pour produire un résumé, des découvertes clés et des questions suggérées.
 
-### 文本 / 视觉双模式
+### Double mode texte / vision
 
-| 模式 | 说明 |
+| Mode | Description |
 | :--: | :--: |
-| **文本模式** | 以节点文本为上下文，调用文本模型 |
-| **视觉模式** | 以页面图像为上下文，调用多模态模型分析图表/公式/表格 |
+| **Mode texte** | Utilise le texte des nœuds comme contexte et appelle le modèle texte |
+| **Mode vision** | Utilise les images de pages comme contexte et appelle le modèle multimodal pour analyser graphiques/formules/tableaux |
 
-### 自定义技能（Skills）
+### Compétences personnalisées (Skills)
 
-通过 Markdown 文件定义 Agent 的专项技能，无需改代码即可扩展 Agent 行为。每个 skill 声明激活条件、工具调用流程、输出格式和防幻觉守则：
+Des fichiers Markdown définissent des compétences spécialisées de l'Agent, permettant d'étendre son comportement sans modifier le code. Chaque skill déclare ses conditions d'activation, son flux d'appels d'outils, son format de sortie et ses règles anti-hallucination :
 
-| 技能 | 默认 | 作用 |
+| Compétence | Par défaut | Rôle |
 | :--: | :--: | :-- |
-| **文档速读** `key_info_extraction` | ✅ | 论文/报告/手册/合同/财报的通用速读卡，按文档类型自适应输出 |
-| **结构化对比** `structured_comparison` | ✅ | 章节/方法/条款/版本/产品多维度对比 |
-| **表格抽取** `table_extraction` | ✅ | 文本/视觉双模，精确还原为 Markdown 表格 |
+| **Lecture rapide de document** `key_info_extraction` | ✅ | Fiche de lecture rapide générique pour articles/rapports/manuels/contrats/rapports financiers, avec sortie adaptée au type de document |
+| **Comparaison structurée** `structured_comparison` | ✅ | Comparaison multidimensionnelle de chapitres/méthodes/clauses/versions/produits |
+| **Extraction de tableaux** `table_extraction` | ✅ | Double mode texte/vision, restitution précise sous forme de tableau Markdown |
 
-### 界面
+### Interface
 
-* 三页布局：知识库管理 / 单文档对话 / 知识库问答
-* 节点溯源：回答附带引用的节点 ID 和页码，点击跳转 PDF 对应位置
-* 单文档对话与知识库问答均包含对话记忆
+* Disposition en trois pages : gestion de la base de connaissances / conversation mono-document / questions-réponses sur base de connaissances
+* Traçabilité des nœuds : les réponses sont accompagnées des ID de nœuds et numéros de page cités ; un clic redirige vers l'emplacement correspondant du PDF
+* La conversation mono-document et les questions-réponses sur base de connaissances disposent toutes deux d'une mémoire conversationnelle
 
 ---
 
-## 🚀 快速开始
+## 🚀 Démarrage rapide
 
-### 环境要求
+### Prérequis
 
 * Python >= 3.11
-* OpenAI API Key（或任何兼容 OpenAI API 格式的服务）
+* Une clé API OpenAI (ou tout service compatible avec le format de l'API OpenAI)
 
-### 安装
+### Installation
 
 ```bash
-# 使用 uv（推荐）
+# Avec uv (recommandé)
 uv sync
 
-# 或 pip
+# Ou avec pip
 pip install -r requirements.txt
 ```
 
-### 启动
+### Lancement
 
 ```bash
-python app.py          # 或 uv run python app.py / ./start.sh
+python app.py          # ou uv run python app.py / ./start.sh
 ```
 
-服务默认运行在 **http://localhost:5001**。
+Le service tourne par défaut sur **http://localhost:5001**.
 
-### ⚙️ 首次配置
+### ⚙️ Première configuration
 
-打开设置面板，填入文本模型和视觉模型的名称、API Key、Base URL。配置保存到 `config.json`。
+Ouvrez le panneau des paramètres et renseignez le nom, la clé API et la Base URL du modèle texte et du modèle vision. La configuration est enregistrée dans `config.json`.
 
 ---
 
-## 🏗️ 技术架构
+## 🏗️ Architecture technique
 
-### 📁 项目目录
+### 📁 Arborescence du projet
 
 ```
 PageIndex_Chat_UI/
-├── app.py                  # Flask 应用入口
-├── config.py               # 配置管理
-├── config.json             # 运行时配置（含 API Key）
-├── pyproject.toml          # 项目元数据 & 依赖
-├── start.sh                # 启动脚本
+├── app.py                  # Point d'entrée de l'application Flask
+├── config.py               # Gestion de la configuration
+├── config.json             # Configuration d'exécution (avec clé API)
+├── pyproject.toml          # Métadonnées du projet & dépendances
+├── start.sh                # Script de lancement
 │
-├── pageindex/              # PageIndex 索引引擎
-│   ├── page_index.py       #   树结构构建：目录检测→页码对齐→递归分裂
-│   ├── utils.py            #   PDF 解析、LLM 调用封装
-│   └── config.yaml         #   索引参数
+├── pageindex/              # Moteur d'indexation PageIndex
+│   ├── page_index.py       #   Construction de l'arborescence : détection de la TOC → alignement des pages → division récursive
+│   ├── utils.py            #   Analyse PDF, encapsulation des appels LLM
+│   └── config.yaml         #   Paramètres d'indexation
 │
-├── services/               # 业务逻辑层
-│   ├── agent.py            #   Agent：分解 / ReAct / 反思 / 分析
-│   ├── rag_service.py      #   RAG 服务 + LLM/VLM 调用
-│   ├── indexing_service.py #   索引调度
-│   ├── skill_manager.py    #   技能管理
-│   └── tools/              #   8 个 Agent 工具
+├── services/               # Couche de logique métier
+│   ├── agent.py            #   Agent : décomposition / ReAct / réflexion / analyse
+│   ├── rag_service.py      #   Service RAG + appels LLM/VLM
+│   ├── indexing_service.py #   Ordonnancement de l'indexation
+│   ├── skill_manager.py    #   Gestion des compétences
+│   └── tools/              #   8 outils de l'Agent
 │       ├── base.py
 │       ├── tree_search.py  ├── node_reader.py  ├── keyword_search.py
 │       ├── page_viewer.py  ├── summarizer.py
 │       ├── list_documents.py  ├── read_toc.py  ├── cross_search.py
 │
-├── skills/                 # 自定义技能（Markdown）
+├── skills/                 # Compétences personnalisées (Markdown)
 │   ├── key_info_extraction.md
 │   ├── structured_comparison.md
 │   └── table_extraction.md
 │
-├── models/                 # 数据模型
+├── models/                 # Modèles de données
 │   ├── document.py         #   Document / DocumentStore
 │   └── session.py          #   ChatSession / Message / SessionStore
 │
 ├── routes/
-│   ├── api.py              #   REST API
-│   └── socket_handlers.py  #   Socket.IO 流式聊天
+│   ├── api.py              #   API REST
+│   └── socket_handlers.py  #   Chat en streaming Socket.IO
 │
-├── templates/index.html    # 前端 SPA
+├── templates/index.html    # SPA frontend
 ├── static/
 │   ├── css/app.css
 │   └── js/app.js
 │
-├── uploads/                # PDF 上传（gitignored）
-├── results/                # 索引结果与会话数据（gitignored）
-│   ├── _index/             #   会话索引（per-mode）
-│   ├── _sessions/          #   会话数据（per-mode 隔离）
-│   └── documents/          #   文档索引结果
-└── image/                  # README 插图
+├── uploads/                # Téléversements de PDF (gitignored)
+├── results/                # Résultats d'indexation et données de session (gitignored)
+│   ├── _index/             #   Index des sessions (par mode)
+│   ├── _sessions/          #   Données de session (isolées par mode)
+│   └── documents/          #   Résultats d'indexation des documents
+└── image/                  # Illustrations du README
 ```
 
-### 🔑 架构要点
+### 🔑 Points clés de l'architecture
 
-**Session 与 Document 解耦**
+**Découplage entre Session et Document**
 
-重构的核心变化：Session 不再绑定 Document 的生命周期。每个 Session 独立存储，可绑定一个或多个文档：
+Le changement central de la refonte : la Session n'est plus liée au cycle de vie du Document. Chaque Session est stockée indépendamment et peut être associée à un ou plusieurs documents :
 
-* `single` 模式会话按文档分组，删除文档时自动清理关联会话
-* `kb` 模式会话扁平存储，独立于单一文档
+* Les sessions en mode `single` sont regroupées par document ; supprimer un document nettoie automatiquement les sessions associées.
+* Les sessions en mode `kb` sont stockées à plat, indépendamment d'un document unique.
 
-两种模式的会话互不干扰，存储和索引均按模式隔离。
+Les sessions des deux modes n'interfèrent pas entre elles ; le stockage et l'indexation sont isolés par mode.
 
-**KB 模式的渐进式披露**
+**Divulgation progressive en mode KB**
 
-KB 模式下系统提示词不内联完整目录树（token 成本过高），而是让 Agent 自行决策探索深度：`list_documents`（元数据）→ `read_document_toc`（目录）→ `tree_search`（具体内容）。
+En mode KB, le system prompt n'intègre pas l'arborescence complète (coût en tokens trop élevé) ; l'Agent décide lui-même de la profondeur d'exploration : `list_documents` (métadonnées) → `read_document_toc` (table des matières) → `tree_search` (contenu détaillé).
 
 ---
 
-## 🔌 API / 模型说明
+## 🔌 API / Modèles
 
-本项目通过 **OpenAI Python SDK**（`openai` >= 1.0）调用 LLM，兼容任何 Chat Completions API 端点。
+Ce projet appelle les LLM via le **SDK Python OpenAI** (`openai` >= 1.0) et est compatible avec tout point de terminaison de l'API Chat Completions.
 
-| 用途 | 默认模型 | 说明 |
+| Usage | Modèle par défaut | Description |
 |------|----------|------|
-| 索引构建 | `gpt-5-mini` | 目录检测、结构解析、摘要生成 |
-| 文本问答 | `gpt-5-mini` | Agent 推理、工具调用、回答生成 |
-| 视觉问答 | `gpt-5-mini` | 图表/公式/表格的视觉分析 |
+| Construction de l'index | `gpt-5-mini` | Détection de la TOC, analyse de structure, génération de résumés |
+| Questions-réponses texte | `gpt-5-mini` | Raisonnement de l'Agent, appels d'outils, génération des réponses |
+| Questions-réponses vision | `gpt-5-mini` | Analyse visuelle de graphiques/formules/tableaux |
 
-本项目**不使用 Embedding 模型，不使用向量数据库**。
+Ce projet **n'utilise pas de modèle d'Embedding ni de base de données vectorielle**.
 
-### ⚙️ 关键参数
+### ⚙️ Paramètres clés
 
-| 参数 | 值 | 说明 |
+| Paramètre | Valeur | Description |
 |------|-----|------|
-| `MAX_REACT_STEPS` | 5 | ReAct 最大步数 |
-| `MAX_RETRY` | 1 | 反思未通过的最大重试次数 |
-| `REFLECT_ACCEPT_THRESHOLD` | 6 | 反思评分低于此触发重试（满分 10） |
-| `max_page_num_each_node` | 10 | 单节点最大页数 |
-| `max_token_num_each_node` | 20000 | 单节点最大 Token 数 |
+| `MAX_REACT_STEPS` | 5 | Nombre maximal d'étapes ReAct |
+| `MAX_RETRY` | 1 | Nombre maximal de nouvelles tentatives en cas d'échec de la réflexion |
+| `REFLECT_ACCEPT_THRESHOLD` | 6 | Une note de réflexion inférieure déclenche une nouvelle tentative (sur 10) |
+| `max_page_num_each_node` | 10 | Nombre maximal de pages par nœud |
+| `max_token_num_each_node` | 20000 | Nombre maximal de tokens par nœud |
 
 ---
 
-## 📦 依赖
+## 📦 Dépendances
 
-| 依赖 | 用途 |
+| Dépendance | Usage |
 |------|------|
-| Flask + Flask-SocketIO | Web 框架 + 实时通信 |
-| openai | LLM / VLM API |
-| PyMuPDF | PDF 渲染、文本提取 |
-| PyPDF2 | PDF 文本提取 |
-| tiktoken | Token 计数 |
-| PyYAML | 配置解析 |
+| Flask + Flask-SocketIO | Framework web + communication en temps réel |
+| openai | API LLM / VLM |
+| PyMuPDF | Rendu PDF, extraction de texte |
+| PyPDF2 | Extraction de texte PDF |
+| tiktoken | Comptage de tokens |
+| PyYAML | Analyse de la configuration |
 
 ---
 
-## 🙏 致谢
+## 🙏 Remerciements
 
-核心 PageIndex 索引算法参考自 [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex)。
+L'algorithme central d'indexation PageIndex s'inspire de [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex).
 
 ---
 

@@ -79,7 +79,7 @@ class PageViewerTool(BaseTool):
                 f"figures, tables, charts, diagrams, images, colors, and layouts.{focus_instruction}\n\n"
                 f"Nodes being examined: {', '.join(node_titles)}\n"
                 f"Pages: {sorted(all_pages)}\n\n"
-                f"Provide a thorough description in Chinese (简体中文)."
+                f"Provide a thorough description in French (français)."
             )
 
             try:

@@ -36,7 +36,7 @@ class IndexingService:
         try:
             # Update status
             self.store.update_document(doc_id, status='indexing')
-            self.store.set_stage(doc_id, 'parsing', '正在读取 PDF 文件...')
+            self.store.set_stage(doc_id, 'parsing', 'Lecture du fichier PDF...')
             
             # Get model configuration (can be updated via web UI)
             model_config = config_manager.get_model_config('text')
@@ -67,7 +67,7 @@ class IndexingService:
             logger.info(f"Starting indexing for {pdf_path}")
             self.store.set_stage(
                 doc_id, 'tree_build',
-                '正在构建文档结构树（识别目录、切分节点）...'
+                'Construction de l\'arbre de structure (détection du sommaire, découpage des nœuds)...'
             )
 
             # Progress callback for the per-node summary phase — this is the
@@ -78,11 +78,11 @@ class IndexingService:
                 try:
                     if total <= 0:
                         return
-                    # Keep the leading label consistent with image_extract's
-                    # "第 X/Y 页" format so the frontend regex picks it up.
+                    # Keep the "X/Y" counter format consistent with
+                    # image_extract so the frontend regex picks it up.
                     self.store.set_stage(
                         doc_id, 'tree_build',
-                        f'正在生成节点摘要：第 {done}/{total} 个节点'
+                        f'Génération des résumés de nœuds : nœud {done}/{total}'
                     )
                 except Exception:
                     pass
@@ -118,7 +118,7 @@ class IndexingService:
             logger.error(f"Indexing error: {e}")
             self.store.update_document(
                 doc_id, status='error', error_message=str(e),
-                stage='error', stage_message=f'索引失败: {e}'
+                stage='error', stage_message=f'Échec de l\'indexation : {e}'
             )
             return False
     

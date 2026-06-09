@@ -1,68 +1,68 @@
 ---
-name: 文档速读（通用）
-description: 为任意类型文档生成结构化速读卡：研究论文/技术报告/白皮书/用户手册/财报/合同/政策文件 均适用
+name: Lecture rapide de document (générique)
+description: Génère une fiche de lecture rapide structurée pour tout type de document : articles de recherche / rapports techniques / livres blancs / manuels utilisateur / rapports financiers / contrats / documents de politique
 enabled: true
 ---
 
-## 激活条件 (Triggers)
-用户问题满足以下任一模式时激活：
-- 概览类：`这篇文档讲了什么 / 帮我读一下这份 / summarize / TL;DR / 一句话告诉我`
-- 速览类：`核心结论 / 主要内容 / 重点 / 这个报告的亮点`
-- 浏览类：`有哪些章节 / 文档结构`
+## Conditions d'activation (Triggers)
+Activer la skill lorsque la question de l'utilisateur correspond à l'un des schémas suivants :
+- Type aperçu : `de quoi parle ce document / lis-moi ce document / summarize / TL;DR / résume-moi en une phrase`
+- Type survol : `conclusions principales / contenu principal / points clés / les points forts de ce rapport`
+- Type navigation : `quels sont les chapitres / structure du document`
 
-## 禁止触发 (Anti-triggers)
-以下情况**不要**套用本 skill，而应按具体问题作答：
-- 用户问具体数字、具体条款、具体算法步骤 → 走精确检索流程
-- 用户指定了章节名/页码 → 直接用 `read_node` 读取，不要全文速读
-- 用户要求对比 → 改走"对比分析" skill
+## Cas de non-déclenchement (Anti-triggers)
+Dans les situations suivantes, **ne pas** appliquer cette skill, mais répondre à la question spécifique posée :
+- L'utilisateur demande un chiffre précis, une clause précise, une étape d'algorithme précise → suivre le flux de recherche exacte
+- L'utilisateur a indiqué un nom de chapitre / un numéro de page → lire directement avec `read_node`, ne pas faire une lecture rapide de tout le document
+- L'utilisateur demande une comparaison → basculer vers la skill « analyse comparative »
 
-## 执行流程
-1. `tree_search` 以用户问题为 query（若用户只是说"这篇讲了啥"，query 用文档主题词）：定位 3–6 个最具代表性的顶层节点。
-2. 对定位到的节点调用 `summarize_nodes`，**一次性批量传入 node_ids**，避免多轮碎片摘要。
-3. 如果是视觉模式且文档包含明显图表页，对 1–2 个最关键节点补一次 `view_pages(focus="总体结论/核心图")`。
-4. 综合所有观察，按下方输出格式输出。**不要**做第 4 轮无意义的 `tree_search` 兜底——3 轮内应收敛。
+## Flux d'exécution
+1. `tree_search` avec la question de l'utilisateur comme query (si l'utilisateur dit seulement « de quoi ça parle », utiliser les mots-clés du sujet du document comme query) : localiser 3 à 6 nœuds de premier niveau les plus représentatifs.
+2. Appeler `summarize_nodes` sur les nœuds localisés, en **passant tous les node_ids en une seule fois par lot**, afin d'éviter des résumés fragmentés sur plusieurs tours.
+3. En mode visuel, si le document contient des pages comportant des figures ou tableaux manifestes, ajouter un appel `view_pages(focus="conclusion générale/figure clé")` sur 1 ou 2 nœuds les plus importants.
+4. Synthétiser toutes les observations et produire le résultat selon le format de sortie ci-dessous. **Ne pas** effectuer un 4e tour de `tree_search` de secours inutile — la convergence doit se faire en 3 tours.
 
-## 自适应输出结构
-**先判断文档类型**（从标题、目录、摘要中推断），再选择对应模板：
+## Structure de sortie adaptative
+**Déterminer d'abord le type de document** (déduit du titre, de la table des matières, du résumé), puis choisir le modèle correspondant :
 
-### A. 研究/学术类
-- **文档类型**：研究论文 / 技术报告
-- **一句话速读**：…
-- **研究问题 / 解决的痛点**：…
-- **核心方法**：…
-- **关键结论**：…（列 2–4 条）
-- **局限 / 未来方向**：…
+### A. Recherche / Académique
+- **Type de document** : article de recherche / rapport technique
+- **Lecture rapide en une phrase** : …
+- **Question de recherche / problème résolu** : …
+- **Méthode principale** : …
+- **Conclusions clés** : … (lister 2 à 4 points)
+- **Limites / perspectives futures** : …
 
-### B. 商业/财务类
-- **文档类型**：财报 / 白皮书 / 市场分析
-- **一句话速读**：…
-- **关键指标**：…（若提到数字，必须附节点号与页码）
-- **主要风险 / 机会**：…
-- **结论建议**：…
+### B. Commercial / Financier
+- **Type de document** : rapport financier / livre blanc / analyse de marché
+- **Lecture rapide en une phrase** : …
+- **Indicateurs clés** : … (si des chiffres sont mentionnés, indiquer obligatoirement le numéro de nœud et la page)
+- **Principaux risques / opportunités** : …
+- **Recommandations finales** : …
 
-### C. 工程/操作类
-- **文档类型**：用户手册 / 技术规范 / SOP
-- **一句话速读**：…
-- **覆盖范围**：适用产品/版本/场景
-- **核心流程**：分步骤列出
-- **注意事项 / 常见陷阱**：…
+### C. Ingénierie / Opérationnel
+- **Type de document** : manuel utilisateur / spécification technique / mode opératoire standard (SOP)
+- **Lecture rapide en une phrase** : …
+- **Périmètre couvert** : produits / versions / scénarios applicables
+- **Processus principal** : à détailler étape par étape
+- **Points de vigilance / pièges courants** : …
 
-### D. 法律/合规类
-- **文档类型**：合同 / 政策 / 条款
-- **一句话速读**：…
-- **各方主体**：…
-- **核心义务/权利**：…
-- **期限 / 终止条件 / 违约**：…
+### D. Juridique / Conformité
+- **Type de document** : contrat / politique / clauses
+- **Lecture rapide en une phrase** : …
+- **Parties concernées** : …
+- **Obligations / droits principaux** : …
+- **Durée / conditions de résiliation / défaillance** : …
 
-### E. 通用（类型不明确时）
-- **文档类型**：未分类
-- **一句话速读**：…
-- **主要章节**：…
-- **关键信息**：列 3–5 条
-- **潜在可追问的问题**：列 2–3 条
+### E. Générique (lorsque le type n'est pas clair)
+- **Type de document** : non classé
+- **Lecture rapide en une phrase** : …
+- **Chapitres principaux** : …
+- **Informations clés** : lister 3 à 5 points
+- **Questions de suivi potentielles** : lister 2 à 3 points
 
-## Guardrails（防幻觉）
-- **不允许**编造 Abstract / Introduction 里没有出现的结论。
-- 如果 `summarize_nodes` 返回内容单薄（<100 字），必须追一次 `read_node` 再总结，而非硬编。
-- 所有数字、年份、百分比、人名 → 必须附来源节点号。
-- 如果多轮检索仍未找到核心信息，诚实回答"文档中未明确提及该信息"，不要凑字数。
+## Guardrails (anti-hallucination)
+- **Interdit** d'inventer des conclusions absentes de l'Abstract / de l'Introduction.
+- Si `summarize_nodes` renvoie un contenu trop maigre (< 100 caractères), il faut faire un appel supplémentaire à `read_node` avant de résumer, plutôt que de combler artificiellement.
+- Tous les chiffres, années, pourcentages, noms de personnes → doivent être accompagnés du numéro de nœud source.
+- Si après plusieurs tours de recherche l'information centrale reste introuvable, répondre honnêtement « cette information n'est pas explicitement mentionnée dans le document », sans remplir pour faire du volume.

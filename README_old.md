@@ -1,367 +1,367 @@
 🤖 PageIndex Chat UI
 
-> **基于树状结构推理的 Agentic RAG 文档问答系统**
-> 无向量、无 Embedding —— 让 LLM 像人类一样阅读文档
+> **Système de questions-réponses documentaires de type Agentic RAG fondé sur le raisonnement par structure arborescente**
+> Sans vecteur, sans Embedding — permettre au LLM de lire les documents comme un humain
 
 <p align="center">
-  <a href="#-项目简介">简介</a> •
-  <a href="#-核心特性">特性</a> •
-  <a href="#-快速开始">快速开始</a> •
-  <a href="#-技术架构">架构</a> •
-  <a href="#-api--模型说明">API/模型</a> •
-  <a href="#-成本估算">成本</a> •
-  <a href="#-致谢">致谢</a>
+  <a href="#-présentation-du-projet">Présentation</a> •
+  <a href="#-fonctionnalités-clés">Fonctionnalités</a> •
+  <a href="#-démarrage-rapide">Démarrage rapide</a> •
+  <a href="#️-architecture-technique">Architecture</a> •
+  <a href="#-api--modèles">API/Modèles</a> •
+  <a href="#-estimation-des-coûts">Coûts</a> •
+  <a href="#-remerciements">Remerciements</a>
 </p>
 
 ---
 
-## 📖 项目简介
+## 📖 Présentation du projet
 
-**PageIndex Chat UI** 是一个面向 PDF 文档的智能问答系统。它基于开源项目 PageIndex 的核心索引算法，并在其上搭建了完整的 **Agentic RAG**交互界面。
+**PageIndex Chat UI** est un système de questions-réponses intelligent dédié aux documents PDF. Il s'appuie sur l'algorithme d'indexation central du projet open source PageIndex, par-dessus lequel il bâtit une interface d'interaction **Agentic RAG** complète.
 
 ![ui](image/WebUI1.png)
 
-### 💡 核心理念：相似度 ≠ 相关性
+### 💡 Idée centrale : similarité ≠ pertinence
 
-传统 RAG 系统依赖向量 Embedding 进行检索 —— 语义相似的片段未必是回答问题所需的上下文。PageIndex 采用完全不同的路线：
-* **建索引时**：将 PDF 解析为层级化的树状结构（类似书的目录），并为每个节点生成摘要。
-* **问答时**：让 LLM 基于树结构进行推理式导航，逐层定位答案所在的章节/段落。
+Les systèmes RAG traditionnels s'appuient sur des Embeddings vectoriels pour la recherche — or un fragment sémantiquement similaire n'est pas nécessairement le contexte requis pour répondre à la question. PageIndex adopte une approche radicalement différente :
+* **Lors de l'indexation** : le PDF est analysé en une structure arborescente hiérarchique (semblable à la table des matières d'un livre), et un résumé est généré pour chaque nœud.
+* **Lors des questions-réponses** : le LLM navigue par raisonnement dans la structure arborescente et localise, niveau par niveau, le chapitre/paragraphe contenant la réponse.
 
-*没有任何 Embedding、没有向量数据库，完全依靠 LLM 的推理能力完成检索。*
+*Aucun Embedding, aucune base de données vectorielle : la recherche repose entièrement sur les capacités de raisonnement du LLM.*
 
 
 ---
 
-## ✨ 核心特性
+## ✨ Fonctionnalités clés
 
-### 🧠 Agent 系统（五大能力）
-本项目的问答引擎不是简单的「检索 → 生成」管线，而是一个具备完整推理链路的 Agent：
+### 🧠 Système d'Agent (cinq capacités)
+Le moteur de questions-réponses de ce projet n'est pas un simple pipeline « recherche → génération », mais un Agent doté d'une chaîne de raisonnement complète :
 
-| 能力 | 说明 |
+| Capacité | Description |
 | :--: | :--: |
-| **ReAct 循环** | Think → Act → Observe 迭代推理，最多 5 轮 |
-| **多工具调度** | 5 种内置工具，Agent 自主选择每一步使用哪个 |
-| **问题分解** | 复杂问题自动拆解为子问题，分别检索后综合 |
-| **自我反思** | 生成答案后自动评估质量，不达标则补充检索并重新作答 |
-| **主动分析** | 文档索引完成后自动生成摘要、关键发现和推荐问题 |
+| **Boucle ReAct** | Raisonnement itératif Think → Act → Observe, jusqu'à 5 tours |
+| **Orchestration multi-outils** | 5 outils intégrés ; l'Agent choisit lui-même lequel utiliser à chaque étape |
+| **Décomposition des questions** | Les questions complexes sont automatiquement décomposées en sous-questions, recherchées séparément puis synthétisées |
+| **Auto-réflexion** | Après génération, la qualité de la réponse est évaluée automatiquement ; si elle est insuffisante, une recherche complémentaire est lancée et la réponse réécrite |
+| **Analyse proactive** | Une fois l'indexation du document terminée, un résumé, des découvertes clés et des questions suggérées sont générés automatiquement |
 
-### 🛠️ 内置工具
-Agent 在每轮 ReAct 循环中可以调用以下工具：
+### 🛠️ Outils intégrés
+À chaque tour de boucle ReAct, l'Agent peut appeler les outils suivants :
 
-| 工具名称 | 功能描述 |
+| Nom de l'outil | Description fonctionnelle |
 | :--: | :--: |
-| `tree_search` | 在文档树结构上进行推理搜索，定位相关章节 |
-| `read_node` | 读取指定节点的完整文本内容 |
-| `keyword_search`| 在全文中进行精确关键词/短语匹配 |
-| `view_pages` | 查看页面图像（视觉模式下通过 VLM 分析图表/公式/表格） |
-| `summarize_nodes`| 对节点内容生成 LLM 摘要，用于信息压缩 |
+| `tree_search` | Recherche par raisonnement sur l'arborescence du document pour localiser les chapitres pertinents |
+| `read_node` | Lit le texte complet d'un nœud donné |
+| `keyword_search`| Correspondance exacte de mots-clés/expressions sur l'ensemble du texte |
+| `view_pages` | Consulte les images de pages (en mode vision, analyse graphiques/formules/tableaux via le VLM) |
+| `summarize_nodes`| Génère un résumé LLM du contenu des nœuds pour compresser l'information |
 
-### 🌗 双模式 RAG
+### 🌗 RAG en double mode
 
-| 模式 | 说明 | 适用场景 |
+| Mode | Description | Cas d'usage |
 | :--: | :--: | :--: |
-| **文本模式** | 以节点文本为上下文，调用文本模型 | 文字为主的文档 |
-| **视觉模式** | 以页面图像为上下文，调用多模态模型 | 图表、公式、表格丰富的文档 |
+| **Mode texte** | Utilise le texte des nœuds comme contexte et appelle le modèle texte | Documents principalement textuels |
+| **Mode vision** | Utilise les images de pages comme contexte et appelle le modèle multimodal | Documents riches en graphiques, formules et tableaux |
 
-### 🧩 自定义技能（Skills）
-通过 Markdown 文件定义 Agent 的专项技能，无需修改代码即可扩展 Agent 行为。每个 skill 都包含：激活条件 / 禁止触发 / 工具调用流程 / 输出格式 / 防幻觉守则。内置 7 个技能：
+### 🧩 Compétences personnalisées (Skills)
+Des fichiers Markdown définissent des compétences spécialisées de l'Agent, permettant d'étendre son comportement sans modifier le code. Chaque skill comprend : conditions d'activation / conditions de non-déclenchement / flux d'appels d'outils / format de sortie / règles anti-hallucination. 7 compétences sont intégrées :
 
-| 技能 | 默认状态 | 作用 |
+| Compétence | État par défaut | Rôle |
 | :--: | :--: | :-- |
-| **证据优先与溯源** `evidence_grounding` | ✅ 启用 | **元技能**：所有回答必须附节点号/页码，未知必声明，严禁编造 |
-| **文档速读（通用）** `key_info_extraction` | ✅ 启用 | 论文/报告/手册/合同/财报的通用速读卡，按文档类型自适应输出 |
-| **结构化对比分析** `structured_comparison` | ⚪ 按需启用 | 章节/方法/条款/版本/产品多维度对比 |
-| **表格抽取与还原** `table_extraction` | ⚪ 按需启用 | 文本/视觉双模，精确还原为 Markdown 表格 |
-| **公式讲解** `formula_explainer` | ⚪ 按需启用 | 原式/符号/直觉/推导，严格 LaTeX 规范 |
-| **交叉引用追踪** `cross_reference_tracing` | ⚪ 按需启用 | 自动跟随 "见第 X 节 / Figure Y / Appendix Z" 跳读整合 |
-| **数据与指标问答** `quantitative_qa` | ⚪ 按需启用 | 定量问题严格溯源，禁止估算，保留原精度与单位 |
+| **Priorité aux preuves et traçabilité** `evidence_grounding` | ✅ Activée | **Méta-compétence** : toute réponse doit être accompagnée des ID de nœuds/numéros de page ; toute incertitude doit être déclarée ; toute invention est interdite |
+| **Lecture rapide de document (générique)** `key_info_extraction` | ✅ Activée | Fiche de lecture rapide générique pour articles/rapports/manuels/contrats/rapports financiers, avec sortie adaptée au type de document |
+| **Comparaison structurée** `structured_comparison` | ⚪ À la demande | Comparaison multidimensionnelle de chapitres/méthodes/clauses/versions/produits |
+| **Extraction et restitution de tableaux** `table_extraction` | ⚪ À la demande | Double mode texte/vision, restitution précise sous forme de tableau Markdown |
+| **Explication de formules** `formula_explainer` | ⚪ À la demande | Formule originale/symboles/intuition/démonstration, respect strict des conventions LaTeX |
+| **Suivi des références croisées** `cross_reference_tracing` | ⚪ À la demande | Suit automatiquement les renvois « voir section X / Figure Y / Appendix Z » pour lire et intégrer le contenu |
+| **Questions-réponses sur données et indicateurs** `quantitative_qa` | ⚪ À la demande | Traçabilité stricte des questions quantitatives, estimation interdite, conservation de la précision et des unités d'origine |
 
-### 🌟 其他亮点
-* **流式输出**：回答和推理过程实时流式展示
-* **多轮对话记忆**：保留最近 5 轮对话历史作为上下文
-* **答案溯源**：每个回答标注引用的节点 ID 和页码，可直接跳转查看
-* **页面高亮**：在 PDF 页面图像上高亮显示对应文本块的来源节点
-* **Web 界面在线配置**：模型、API Key、Base URL 均可在界面中动态修改
+### 🌟 Autres points forts
+* **Sortie en streaming** : la réponse et le processus de raisonnement s'affichent en temps réel
+* **Mémoire conversationnelle multi-tours** : conserve les 5 derniers tours de conversation comme contexte
+* **Traçabilité des réponses** : chaque réponse indique les ID de nœuds et numéros de page cités, avec redirection directe possible
+* **Surlignage des pages** : surligne sur l'image de la page PDF les nœuds source des blocs de texte correspondants
+* **Configuration en ligne via l'interface web** : modèle, API Key et Base URL peuvent tous être modifiés dynamiquement depuis l'interface
 
 ---
 
-## 🚀 快速开始
+## 🚀 Démarrage rapide
 
-### 环境要求
+### Prérequis
 * Python >= 3.11
-* OpenAI API Key（或任何兼容 OpenAI API 格式的服务）
+* Une clé API OpenAI (ou tout service compatible avec le format de l'API OpenAI)
 
-### 安装
+### Installation
 
 ```bash
-# 使用 pip
+# Avec pip
 pip install -r requirements.txt
 
-# 或使用 uv（推荐，速度更快）
+# Ou avec uv (recommandé, plus rapide)
 uv sync
 ```
 
-### 启动
+### Lancement
 
 ```bash
-# 方式一：直接运行
+# Méthode 1 : exécution directe
 python app.py
 
-# 方式二：使用 uv
+# Méthode 2 : avec uv
 uv run python app.py
 
-# 方式三：使用启动脚本（Linux/macOS）
+# Méthode 3 : avec le script de lancement (Linux/macOS)
 ./start.sh
 ```
 
-服务默认运行在 **http://localhost:5001**
+Le service tourne par défaut sur **http://localhost:5001**
 
-### ⚙️首次配置
+### ⚙️ Première configuration
 
-启动后打开浏览器访问 `http://localhost:5001`，点击界面左上角的设置图标，配置：
+Une fois lancé, ouvrez votre navigateur à l'adresse `http://localhost:5001`, cliquez sur l'icône des paramètres en haut à gauche de l'interface, puis configurez :
 
-1. **文本模型**：填入模型名称、API Key 和 Base URL
-2. **视觉模型**（可选）：如需使用视觉模式，填入多模态模型的配置
+1. **Modèle texte** : renseignez le nom du modèle, l'API Key et la Base URL
+2. **Modèle vision** (facultatif) : pour utiliser le mode vision, renseignez la configuration du modèle multimodal
 
-配置会保存到 `config.json`
+La configuration est enregistrée dans `config.json`
 
 
 
-## 🏗️技术架构
+## 🏗️ Architecture technique
 
-### 🗺️系统架构图
+### 🗺️ Schéma de l'architecture système
 
-![架构图](image/architecture.png)
+![Schéma de l'architecture](image/architecture.png)
 
-### 🔄Agent 工作流程
+### 🔄 Flux de travail de l'Agent
 
-![工作流](image/workflow.png)
+![Flux de travail](image/workflow.png)
 
-### 📁项目目录结构
+### 📁 Arborescence du projet
 
 ```
 PageIndex_Agent_UI/
-├── app.py                  # Flask 应用初始化、路由注册
-├── main.py                 # 主入口（读取 config 启动）
-├── config.py               # 配置管理（单例 ConfigManager）
-├── config.json             # 运行时配置（gitignored，含 API Key）
-├── requirements.txt        # Python 依赖
-├── pyproject.toml          # 项目元数据 & 依赖（uv 兼容）
-├── start.sh                # 启动脚本
+├── app.py                  # Initialisation de l'application Flask, enregistrement des routes
+├── main.py                 # Point d'entrée principal (lit config et lance)
+├── config.py               # Gestion de la configuration (singleton ConfigManager)
+├── config.json             # Configuration d'exécution (gitignored, avec API Key)
+├── requirements.txt        # Dépendances Python
+├── pyproject.toml          # Métadonnées du projet & dépendances (compatible uv)
+├── start.sh                # Script de lancement
 │
-├── pageindex/              # PageIndex 核心索引引擎
-│   ├── page_index.py       #   树结构构建：目录检测→页码对齐→递归分裂
-│   ├── utils.py            #   PDF 解析、Token 计算、LLM 调用封装
-│   └── config.yaml         #   索引参数默认值
+├── pageindex/              # Moteur d'indexation central PageIndex
+│   ├── page_index.py       #   Construction de l'arborescence : détection de la TOC → alignement des pages → division récursive
+│   ├── utils.py            #   Analyse PDF, comptage de tokens, encapsulation des appels LLM
+│   └── config.yaml         #   Valeurs par défaut des paramètres d'indexation
 │
-├── services/               # 业务逻辑层
-│   ├── agent.py            #   DocumentAgent：ReAct / 分解 / 反思 / 分析
-│   ├── rag_service.py      #   RAG 服务 + PageIndex 封装（LLM/VLM 调用）
-│   ├── indexing_service.py #   PDF 索引调度
-│   ├── skill_manager.py    #   技能文件加载与管理
-│   └── tools/              #   Agent 可调用的 5 个工具
+├── services/               # Couche de logique métier
+│   ├── agent.py            #   DocumentAgent : ReAct / décomposition / réflexion / analyse
+│   ├── rag_service.py      #   Service RAG + encapsulation PageIndex (appels LLM/VLM)
+│   ├── indexing_service.py #   Ordonnancement de l'indexation PDF
+│   ├── skill_manager.py    #   Chargement et gestion des fichiers de compétences
+│   └── tools/              #   Les 5 outils appelables par l'Agent
 │       ├── base.py         #     BaseTool + ToolRegistry
-│       ├── tree_search.py  #     树搜索工具
-│       ├── node_reader.py  #     节点阅读工具
-│       ├── keyword_search.py#    关键词搜索工具
-│       ├── page_viewer.py  #     页面查看工具（VLM）
-│       └── summarizer.py   #     摘要工具
+│       ├── tree_search.py  #     Outil de recherche arborescente
+│       ├── node_reader.py  #     Outil de lecture de nœuds
+│       ├── keyword_search.py#    Outil de recherche par mots-clés
+│       ├── page_viewer.py  #     Outil de consultation de pages (VLM)
+│       └── summarizer.py   #     Outil de résumé
 │
-├── skills/                 # 自定义技能（Markdown 格式）
+├── skills/                 # Compétences personnalisées (format Markdown)
 │   ├── formula_explainer.md
 │   ├── key_info_extraction.md
 │   ├── paper_comparison.md
 │   └── table_extraction.md
 │
-├── models/                 # 数据模型
+├── models/                 # Modèles de données
 │   └── document.py         #   Document / Message / DocumentStore
 │
-├── routes/                 # 路由 & 通信
-│   ├── api.py              #   REST API（文件上传、配置、技能管理）
-│   └── socket_handlers.py  #   WebSocket 处理（聊天、索引进度）
+├── routes/                 # Routes & communication
+│   ├── api.py              #   API REST (téléversement de fichiers, configuration, gestion des compétences)
+│   └── socket_handlers.py  #   Traitement WebSocket (chat, progression de l'indexation)
 │
 ├── templates/
-│   └── index.html          # 前端页面（单文件 SPA）
+│   └── index.html          # Page frontend (SPA en un seul fichier)
 ├── static/
-│   └── js/app.js           # 前端逻辑
+│   └── js/app.js           # Logique frontend
 │
-├── uploads/                # PDF 上传存储（gitignored）
-└── results/                # 索引结果存储（gitignored）
+├── uploads/                # Stockage des PDF téléversés (gitignored)
+└── results/                # Stockage des résultats d'indexation (gitignored)
 ```
 
 
-## 🔌API / 模型说明
+## 🔌 API / Modèles
 
-### 调用方式
+### Modes d'appel
 
-本项目通过 **OpenAI Python SDK**（`openai` >= 1.0）调用 LLM，同时支持同步和异步两种方式：
+Ce projet appelle les LLM via le **SDK Python OpenAI** (`openai` >= 1.0) et prend en charge à la fois les appels synchrones et asynchrones :
 
-| 场景 | 调用方式 | 说明 |
+| Scénario | Mode d'appel | Description |
 |------|----------|------|
-| 索引构建（PageIndex Core） | `openai.OpenAI` 同步调用 | `pageindex/utils.py` 中的 `ChatGPT_API` 系列函数 |
-| 问答推理（Agent / RAG） | `openai.AsyncOpenAI` 异步调用 | `services/rag_service.py` 中的 `call_llm` / `call_vlm` |
+| Construction de l'index (PageIndex Core) | Appel synchrone `openai.OpenAI` | Famille de fonctions `ChatGPT_API` dans `pageindex/utils.py` |
+| Raisonnement de questions-réponses (Agent / RAG) | Appel asynchrone `openai.AsyncOpenAI` | `call_llm` / `call_vlm` dans `services/rag_service.py` |
 
-所有调用均通过 `base_url` 参数配置 API 端点，因此**任何兼容 OpenAI Chat Completions API 格式的服务均可使用**（如第三方代理、本地部署的模型等）。
+Tous les appels configurent le point de terminaison de l'API via le paramètre `base_url` ; par conséquent, **tout service compatible avec le format de l'API OpenAI Chat Completions peut être utilisé** (proxys tiers, modèles déployés localement, etc.).
 
-### 涉及的模型
+### Modèles concernés
 
-本项目**不使用 Embedding 模型，不使用向量数据库**。所有能力仅依赖 Chat Completion API。
+Ce projet **n'utilise pas de modèle d'Embedding ni de base de données vectorielle**. Toutes les capacités reposent uniquement sur l'API Chat Completion.
 
-| 用途 | 配置位置 | 默认模型 | 说明 |
+| Usage | Emplacement de configuration | Modèle par défaut | Description |
 |------|----------|----------|------|
-| **索引构建** | `pageindex/config.yaml` 或 Web UI 文本模型 | `gpt-4o-2024-11-20` | 用于目录检测、结构解析、页码对齐、摘要生成。索引质量对此模型的推理能力要求较高 |
-| **问答 - 文本模式** | Web UI → 文本模型 | `gpt-4o-mini` | Agent 推理、树搜索、回答生成、自我反思。推荐使用性价比高的模型 |
-| **问答 - 视觉模式** | Web UI → 视觉模型 | `gpt-4.1` | 需要多模态能力（接受图片输入），用于图表/公式/表格的视觉分析 |
+| **Construction de l'index** | `pageindex/config.yaml` ou modèle texte de l'interface web | `gpt-4o-2024-11-20` | Détection de la TOC, analyse de structure, alignement des pages, génération de résumés. La qualité de l'index dépend fortement des capacités de raisonnement de ce modèle |
+| **Questions-réponses - mode texte** | Interface web → modèle texte | `gpt-4o-mini` | Raisonnement de l'Agent, recherche arborescente, génération des réponses, auto-réflexion. Un modèle au bon rapport qualité-prix est recommandé |
+| **Questions-réponses - mode vision** | Interface web → modèle vision | `gpt-4.1` | Nécessite des capacités multimodales (entrée d'images), pour l'analyse visuelle de graphiques/formules/tableaux |
 
-> 以上默认模型仅为推荐配置，可在 Web UI 设置面板中自由更换为任何 OpenAI 兼容模型。
-> 在测试阶段，文本模型和视觉模型均为'gpt-5-mini'
+> Les modèles par défaut ci-dessus ne sont que des configurations recommandées ; ils peuvent être librement remplacés par tout modèle compatible OpenAI dans le panneau des paramètres de l'interface web.
+> En phase de test, le modèle texte et le modèle vision étaient tous deux 'gpt-5-mini'
 
-### ⚙️配置参数
+### ⚙️ Paramètres de configuration
 
-#### 模型配置（`config.json` / Web UI）
+#### Configuration des modèles (`config.json` / interface web)
 
-| 参数 | 说明 |
+| Paramètre | Description |
 |------|------|
-| `models.text.name` | 文本模型名称（如 `gpt-4o-mini`） |
-| `models.text.api_key` | 文本模型 API Key |
-| `models.text.base_url` | 文本模型 API 端点（如 `https://api.openai.com/v1`） |
-| `models.vision.name` | 视觉模型名称（如 `gpt-4.1`） |
-| `models.vision.api_key` | 视觉模型 API Key |
-| `models.vision.base_url` | 视觉模型 API 端点 |
+| `models.text.name` | Nom du modèle texte (ex. `gpt-4o-mini`) |
+| `models.text.api_key` | API Key du modèle texte |
+| `models.text.base_url` | Point de terminaison de l'API du modèle texte (ex. `https://api.openai.com/v1`) |
+| `models.vision.name` | Nom du modèle vision (ex. `gpt-4.1`) |
+| `models.vision.api_key` | API Key du modèle vision |
+| `models.vision.base_url` | Point de terminaison de l'API du modèle vision |
 
-#### 索引参数（`pageindex/config.yaml`）
+#### Paramètres d'indexation (`pageindex/config.yaml`)
 
-| 参数 | 默认值 | 说明 |
+| Paramètre | Valeur par défaut | Description |
 |------|--------|------|
-| `model` | `gpt-4o-2024-11-20` | 索引构建使用的模型 |
-| `toc_check_page_num` | `20` | 扫描前 N 页检测目录 |
-| `max_page_num_each_node` | `10` | 单节点最大页数，超过则递归分裂 |
-| `max_token_num_each_node` | `20000` | 单节点最大 Token 数，超过则递归分裂 |
-| `if_add_node_id` | `yes` | 是否为节点分配 ID |
-| `if_add_node_summary` | `yes` | 是否生成节点摘要 |
-| `if_add_doc_description` | `no` | 是否生成全文档描述 |
-| `if_add_node_text` | `no` | 是否在结构中保留节点原文 |
+| `model` | `gpt-4o-2024-11-20` | Modèle utilisé pour la construction de l'index |
+| `toc_check_page_num` | `20` | Nombre de pages à scanner en début de document pour détecter la TOC |
+| `max_page_num_each_node` | `10` | Nombre maximal de pages par nœud ; au-delà, division récursive |
+| `max_token_num_each_node` | `20000` | Nombre maximal de tokens par nœud ; au-delà, division récursive |
+| `if_add_node_id` | `yes` | Attribuer ou non un ID aux nœuds |
+| `if_add_node_summary` | `yes` | Générer ou non un résumé de nœud |
+| `if_add_doc_description` | `no` | Générer ou non une description du document entier |
+| `if_add_node_text` | `no` | Conserver ou non le texte original du nœud dans la structure |
 
-#### Agent 参数（`services/agent.py` 中的常量）
+#### Paramètres de l'Agent (constantes dans `services/agent.py`)
 
-| 参数 | 值 | 说明 |
+| Paramètre | Valeur | Description |
 |------|-----|------|
-| `MAX_REACT_STEPS` | `5` | 每个子问题的 ReAct 最大轮数 |
-| `MAX_RETRY` | `1` | 反思不通过后的最大重试次数 |
-| `REFLECT_ACCEPT_THRESHOLD` | `6` | 反思评分低于此值触发重试（满分 10） |
+| `MAX_REACT_STEPS` | `5` | Nombre maximal de tours ReAct par sous-question |
+| `MAX_RETRY` | `1` | Nombre maximal de nouvelles tentatives après échec de la réflexion |
+| `REFLECT_ACCEPT_THRESHOLD` | `6` | Une note de réflexion inférieure à cette valeur déclenche une nouvelle tentative (sur 10) |
 
 
-## 💰成本估算
+## 💰 Estimation des coûts
 
-由于本项目完全通过 LLM API 驱动，使用成本取决于所选模型的定价。以下基于 OpenAI 官方价格估算（2025 年），仅供参考。
+Comme ce projet est entièrement piloté par l'API d'un LLM, le coût d'utilisation dépend de la tarification du modèle choisi. Les estimations ci-dessous se fondent sur les prix officiels d'OpenAI (2025) et sont fournies à titre indicatif uniquement.
 
-> 实际上只要不使用类似`GPT5.2 Pro`这种高消费模型，本项目的api花销是完全可以接受的。
+> En pratique, tant que l'on n'utilise pas un modèle très coûteux comme `GPT5.2 Pro`, les dépenses d'API de ce projet restent tout à fait acceptables.
 
-### 索引阶段（一次性，每篇文档）
+### Phase d'indexation (ponctuelle, par document)
 
-索引过程涉及大量 LLM 调用：目录检测、结构解析、页码对齐与验证、节点摘要生成等。
+Le processus d'indexation implique de nombreux appels LLM : détection de la TOC, analyse de structure, alignement et vérification des pages, génération des résumés de nœuds, etc.
 
-| 文档规模 | 预计 LLM 调用次数 | 使用 gpt-4o-mini | 使用 gpt-4o | 使用gpt-5-mini |
+| Taille du document | Nb estimé d'appels LLM | Avec gpt-4o-mini | Avec gpt-4o | Avec gpt-5-mini |
 |----------|-------------------|-----------------|-------------|-------------|
-| 短文档（~10 页） | 30–60 次 | $0.01–0.04 | $0.20–0.60 | $0.03–0.10 |
-| 论文（~20 页） | 50–100 次 | $0.02–0.08 | $0.40–1.20 | $0.05–0.20 |
-| 长文档（~100 页） | 150–400 次 | $0.08–0.30 | $1.50–5.00 | $0.20–0.80 |
+| Document court (~10 pages) | 30–60 appels | $0.01–0.04 | $0.20–0.60 | $0.03–0.10 |
+| Article (~20 pages) | 50–100 appels | $0.02–0.08 | $0.40–1.20 | $0.05–0.20 |
+| Document long (~100 pages) | 150–400 appels | $0.08–0.30 | $1.50–5.00 | $0.20–0.80 |
 
-> **说明**：索引过程的调用次数与文档结构复杂度强相关。有清晰目录的文档调用次数较少；无目录文档需要从头构建结构，调用次数更多。
+> **Remarque** : le nombre d'appels du processus d'indexation est fortement corrélé à la complexité structurelle du document. Les documents dotés d'une table des matières claire nécessitent moins d'appels ; les documents sans table des matières exigent de reconstruire la structure de zéro, d'où un nombre d'appels plus élevé.
 
-### 问答阶段（每次提问）
+### Phase de questions-réponses (par question)
 
-每次提问经历：问题分解（1 次）→ ReAct 循环（3–10 次）→ 回答生成（1 次）→ 反思（1 次），可能还有重试。
+Chaque question passe par : décomposition de la question (1 appel) → boucle ReAct (3–10 appels) → génération de la réponse (1 appel) → réflexion (1 appel), avec d'éventuelles nouvelles tentatives.
 
-| 场景 | 预计 LLM 调用次数 | 使用 gpt-4o-mini | 使用 gpt-4o / gpt-4.1 | 使用gpt-5-mini |
+| Scénario | Nb estimé d'appels LLM | Avec gpt-4o-mini | Avec gpt-4o / gpt-4.1 | Avec gpt-5-mini |
 |------|-------------------|-----------------|----------------------|-------------|
-| 简单问题（单步检索） | 4–6 次 | $0.003–0.008 | $0.05–0.10 | $0.008–0.02 |
-| 常规问题（多步推理） | 6–12 次 | $0.005–0.015 | $0.08–0.20 | $0.015–0.04 |
-| 复杂问题（分解 + 重试） | 12–20 次 | $0.01–0.03 | $0.15–0.40 | $0.03–0.09 |
-| 视觉模式（含图像输入） | 6–15 次 | — | $0.10–0.50 | $0.01–0.05 |
+| Question simple (recherche en une étape) | 4–6 appels | $0.003–0.008 | $0.05–0.10 | $0.008–0.02 |
+| Question courante (raisonnement multi-étapes) | 6–12 appels | $0.005–0.015 | $0.08–0.20 | $0.015–0.04 |
+| Question complexe (décomposition + nouvelles tentatives) | 12–20 appels | $0.01–0.03 | $0.15–0.40 | $0.03–0.09 |
+| Mode vision (avec entrée d'images) | 6–15 appels | — | $0.10–0.50 | $0.01–0.05 |
 
-> **说明**：视觉模式因需传输页面图像（base64），Token 消耗显著高于纯文本模式。
+> **Remarque** : le mode vision, qui doit transmettre les images de pages (base64), consomme nettement plus de tokens que le mode texte pur.
 
-### 典型使用成本示例
+### Exemples de coûts d'utilisation typiques
 
-| 场景 | 模型配置 | 预计费用 |
+| Scénario | Configuration des modèles | Coût estimé |
 |------|----------|---------|
-| 索引一篇 20 页论文 + 问 10 个问题 | 索引用 gpt-4o-mini，问答用 gpt-4o-mini | ~$0.10–0.20 |
-| 索引一篇 20 页论文 + 问 10 个问题 | 索引用 gpt-4o，问答用 gpt-4o-mini | ~$0.50–1.50 |
-| 索引一篇 20 页论文 + 问 10 个问题	| 索引用 gpt-5-mini，问答用 gpt-5-mini | ~$0.20–0.60 |
+| Indexer un article de 20 pages + poser 10 questions | Indexation gpt-4o-mini, questions-réponses gpt-4o-mini | ~$0.10–0.20 |
+| Indexer un article de 20 pages + poser 10 questions | Indexation gpt-4o, questions-réponses gpt-4o-mini | ~$0.50–1.50 |
+| Indexer un article de 20 pages + poser 10 questions	| Indexation gpt-5-mini, questions-réponses gpt-5-mini | ~$0.20–0.60 |
 
-### 实际测试参考
+### Référence de tests réels
 
-**文档：Attention is All You need**
+**Document : Attention is All You need**
 
-> 该文档共11页PDF，文本和视觉均使用模型gpt5mini
+> Ce document est un PDF de 11 pages ; le modèle gpt5mini est utilisé pour le texte comme pour la vision
 
-**构建索引花销：$0.11**
+**Coût de construction de l'index : $0.11**
 
-#### 1、常规问答-文本模型
+#### 1. Questions-réponses courantes - modèle texte
 
-Q：为我总结这篇的论文的核心内容
+Q : Résume-moi le contenu central de cet article.
 
-**花销$0.01**
+**Coût $0.01**
 
-#### 2、常规问答-视觉模型
+#### 2. Questions-réponses courantes - modèle vision
 
-Q：Figure 1描述了什么内容？绘图时用了哪些颜色？
+Q : Que décrit la Figure 1 ? Quelles couleurs ont été utilisées pour la réaliser ?
 
-**花销$0.02**
+**Coût $0.02**
 
-#### 3、Skill-公式解读-文本模型
+#### 3. Skill - Explication de formules - modèle texte
 
-Q：为我解读一下公式（1）
+Q : Explique-moi la formule (1).
 
-**花销$0.03**
+**Coût $0.03**
 
-#### 4、Skill-关键信息提取-文本模型
+#### 4. Skill - Extraction d'informations clés - modèle texte
 
-Q：Multi‑Head 注意力具体如何缓解信息表示的限制，为什么比单头更有效？
+Q : Comment l'attention Multi-Head atténue-t-elle concrètement les limites de la représentation de l'information, et pourquoi est-elle plus efficace qu'une seule tête ?
 
-**花销$0.04**
+**Coût $0.04**
 
-#### 5、Skill-论文对比分析-文本模型
+#### 5. Skill - Comparaison d'articles - modèle texte
 
-Q：在低资源或延迟敏感的场景下，Transformer 相比循环/卷积模型有哪些优势或劣势？
+Q : Dans des scénarios à faibles ressources ou sensibles à la latence, quels sont les avantages ou inconvénients du Transformer par rapport aux modèles récurrents/convolutifs ?
 
-**花销$0.03**
+**Coût $0.03**
 
-#### 6、Skill-表格数据提取-文本模型
+#### 6. Skill - Extraction de données de tableaux - modèle texte
 
-Q：为我提取Table 2的内容
+Q : Extrais-moi le contenu du Table 2.
 
-**花销$0.02**
+**Coût $0.02**
 
-#### 7、Skill-表格数据提取-视觉模型
+#### 7. Skill - Extraction de données de tableaux - modèle vision
 
-Q：为我提取Table 2的内容
+Q : Extrais-moi le contenu du Table 2.
 
-**花销$0.03**
+**Coût $0.03**
 
 
-## 📦项目依赖
+## 📦 Dépendances du projet
 
-| 依赖 | 版本 | 用途 |
+| Dépendance | Version | Usage |
 |------|------|------|
-| Flask | >= 3.0 | Web 框架 |
-| Flask-SocketIO | >= 5.3 | WebSocket 实时通信 |
-| Flask-CORS | >= 4.0 | 跨域支持 |
-| openai | >= 1.0 | LLM / VLM API 调用 |
-| tiktoken | >= 0.5 | Token 计数 |
-| PyMuPDF (fitz) | >= 1.23 | PDF 页面渲染为图像、文本提取 |
-| PyPDF2 | >= 3.0 | PDF 文本提取 |
-| python-dotenv | >= 1.0 | 环境变量加载 |
-| PyYAML | >= 6.0 | 配置文件解析 |
+| Flask | >= 3.0 | Framework web |
+| Flask-SocketIO | >= 5.3 | Communication WebSocket en temps réel |
+| Flask-CORS | >= 4.0 | Prise en charge du cross-origin |
+| openai | >= 1.0 | Appels d'API LLM / VLM |
+| tiktoken | >= 0.5 | Comptage de tokens |
+| PyMuPDF (fitz) | >= 1.23 | Rendu des pages PDF en images, extraction de texte |
+| PyPDF2 | >= 3.0 | Extraction de texte PDF |
+| python-dotenv | >= 1.0 | Chargement des variables d'environnement |
+| PyYAML | >= 6.0 | Analyse des fichiers de configuration |
 
 
-## 🙏致谢
+## 🙏 Remerciements
 
-本项目的核心 PageIndex 索引算法参考自 [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) 开源项目。
+L'algorithme central d'indexation PageIndex de ce projet s'inspire du projet open source [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex).
 
 
-## 📄License
+## 📄 License
 
 MIT License
 
