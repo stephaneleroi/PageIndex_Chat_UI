@@ -937,6 +937,18 @@ body {
     background: linear-gradient(135deg, #34d399, #10b981);
 }
 
+/* Clickable inline citation woven into the answer text, e.g. "(node_0007, page 3)".
+ * Kept lightweight so it reads as part of the prose, not a button. */
+.cite-link {
+    color: var(--primary);
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 1px dotted var(--primary);
+    padding: 0 1px;
+    transition: background 0.15s;
+}
+.cite-link:hover { background: #eef2ff; border-radius: 3px; }
+
 /* ============================================
  * CHAT INPUT
  * ============================================ */

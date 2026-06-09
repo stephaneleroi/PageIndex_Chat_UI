@@ -45,7 +45,8 @@ LANG_INSTRUCTION = (
 GROUNDING_INSTRUCTION_SINGLE = (
     "Grounding rules (MUST follow):\n"
     "1. Ground every concrete claim in the Context. Cite the source inline as "
-    "`(node_..., page N)` when available. Preserve original numbers and units verbatim.\n"
+    "`(node_<id>, page N)`, always using the REAL node id verbatim (e.g. `(node_0007, page 3)`) "
+    "so it can be linked. Preserve original numbers and units verbatim.\n"
     "2. If the Context does not cover the question, say so explicitly "
     "(e.g. `Non mentionné dans le document...`). Never fabricate facts, citations, or fill gaps from prior knowledge."
 )
@@ -53,8 +54,9 @@ GROUNDING_INSTRUCTION_SINGLE = (
 GROUNDING_INSTRUCTION_KB = (
     "Grounding rules (MUST follow):\n"
     "1. Ground every concrete claim in the Context. Cite the source inline as "
-    "`(doc: <filename>, node_..., page N)` so the reader knows WHICH document each claim came from. "
-    "Preserve original numbers and units verbatim.\n"
+    "`(doc: <filename>, node_<id>, page N)`, always using the REAL node id verbatim "
+    "(e.g. `(doc: rapport.pdf, node_0007, page 3)`) so the reader knows WHICH document each claim "
+    "came from and the citation can be linked. Preserve original numbers and units verbatim.\n"
     "2. If the Context does not cover the question, say so explicitly "
     "(e.g. `Non mentionné dans les documents sélectionnés...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
     "3. When comparing across documents, make the document identity unambiguous in every bullet "

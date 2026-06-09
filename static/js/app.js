@@ -36,6 +36,7 @@ const State = {
     // Streaming
     isStreaming: false,
     streamingRawText: '',
+    streamingNodes: [],               // qualified node refs for the answer in progress
 
     // Caches
     nodeMapCache: {},
@@ -1167,6 +1168,7 @@ function sendChatQuery(page, sessionId, text, opts) {
     }
     showTypingIndicator(ui.messages);
     State.isStreaming = true;
+    State.streamingNodes = [];
     updateSendButton();
 
     const payload = {
@@ -1420,6 +1422,7 @@ function onStreamThinking(content) {
 }
 
 function onStreamNodes(nodes) {
+    State.streamingNodes = nodes || [];   // remembered so we can link inline citations on done
     const msgs = activeChatUI()?.messages; if (!msgs) return;
     const anchor = msgs.querySelector('#thinkingBox') || msgs.querySelector('#agentTimeline');
     if (!anchor) return;
@@ -1441,6 +1444,64 @@ function parseNodeRef(ref, fallbackDocId) {
         };
     }
     return { docId: fallbackDocId || '', nodeId: ref, label: ref };
+}
+
+// Build a { nodeId -> docId } lookup from a list of (possibly qualified)
+// node refs. Used to resolve which document an inline citation belongs to
+// when linkifying the answer text (essential in multi-doc / kb mode).
+function buildNodeDocMap(nodes, fallbackDocId) {
+    const map = {};
+    for (const ref of (nodes || [])) {
+        const { docId, nodeId } = parseNodeRef(ref, fallbackDocId);
+        if (nodeId && !(nodeId in map)) map[nodeId] = docId || fallbackDocId || '';
+    }
+    return map;
+}
+
+// Turn inline citations the model wrote as plain text (e.g. "(node_0007, page 3)")
+// into clickable links that open the source panel scrolled to — and highlighting —
+// that node. Walks text nodes so Markdown/HTML/KaTeX structure is preserved; skips
+// code, links, math and tags we've already produced.
+const CITE_RE = /node_[A-Za-z0-9_.\-]+/;
+function linkifyCitations(container, nodeDocMap, fallbackDocId) {
+    if (!container) return;
+    const SKIP = new Set(['CODE', 'PRE', 'A', 'BUTTON']);
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            if (!node.nodeValue || !CITE_RE.test(node.nodeValue)) return NodeFilter.FILTER_REJECT;
+            for (let p = node.parentElement; p && p !== container; p = p.parentElement) {
+                if (SKIP.has(p.tagName) || p.classList.contains('katex')
+                    || p.classList.contains('cite-link')) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+            }
+            return NodeFilter.FILTER_ACCEPT;
+        },
+    });
+    const targets = [];
+    let t;
+    while ((t = walker.nextNode())) targets.push(t);
+
+    for (const textNode of targets) {
+        const s = textNode.nodeValue;
+        const re = /node_[A-Za-z0-9_.\-]+/g;
+        const frag = document.createDocumentFragment();
+        let last = 0, m;
+        while ((m = re.exec(s))) {
+            const nodeId = m[0];
+            if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+            const docId = (nodeDocMap && nodeDocMap[nodeId]) || fallbackDocId || '';
+            const span = document.createElement('span');
+            span.className = 'cite-link';
+            span.textContent = nodeId;
+            span.title = 'Voir la source';
+            span.addEventListener('click', (e) => { e.stopPropagation(); showNodePreview(nodeId, docId); });
+            frag.appendChild(span);
+            last = m.index + nodeId.length;
+        }
+        if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+        textNode.parentNode.replaceChild(frag, textNode);
+    }
 }
 
 // Group retrieved node refs by their source document and render one line per
@@ -1494,7 +1555,9 @@ function onStreamFullResponse(content) {
     box.className = 'message message-assistant';
     box.innerHTML = `<div class="message-content">${renderMarkdown(content)}</div>`;
     msgs.appendChild(box);
-    renderMathInContainer(box.querySelector('.message-content'));
+    const contentEl = box.querySelector('.message-content');
+    renderMathInContainer(contentEl);
+    linkifyCitations(contentEl, buildNodeDocMap(State.streamingNodes, State.docChat.docId), State.docChat.docId);
     scrollChatToBottom();
 }
 
@@ -1509,6 +1572,7 @@ function onStreamDone(wasStopped) {
             const finalText = wasStopped ? State.streamingRawText + '\n\n---\n*(génération interrompue)*' : State.streamingRawText;
             rc.innerHTML = renderMarkdown(finalText);
             renderMathInContainer(rc);
+            linkifyCitations(rc, buildNodeDocMap(State.streamingNodes, State.docChat.docId), State.docChat.docId);
         }
         ['responseBox', 'responseContent', 'thinkingBox', 'agentTimeline', 'agentSteps'].forEach(id => {
             msgs.querySelector('#' + id)?.removeAttribute('id');
@@ -1728,7 +1792,11 @@ function appendHistoryMessage(msgs, m, ctx) {
     }
     div.innerHTML = `${supersededBadge}<div class="message-content">${rendered}</div>${actionsHtml}`;
     msgs.appendChild(div);
-    if (m.role === 'assistant') renderMathInContainer(div.querySelector('.message-content'));
+    if (m.role === 'assistant') {
+        const contentEl = div.querySelector('.message-content');
+        renderMathInContainer(contentEl);
+        linkifyCitations(contentEl, buildNodeDocMap(m.nodes, State.docChat.docId), State.docChat.docId);
+    }
 }
 
 function parseAgentSteps(thinking) {
@@ -2000,7 +2068,7 @@ function getNodeColor(nodeId, nodeMap) {
     return NODE_COLORS[(idx >= 0 ? idx : 0) % NODE_COLORS.length];
 }
 
-function showPagePreviewModal(docId, nodeId, nodeInfo, allPages) {
+async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighlight = true) {
     let modal = document.getElementById('pagePreviewModal');
     if (!modal) {
         modal = document.createElement('div');
@@ -2075,6 +2143,16 @@ function showPagePreviewModal(docId, nodeId, nodeInfo, allPages) {
         }).join('');
         imgs.querySelectorAll('.page-preview-image').forEach(img => {
             img.addEventListener('click', () => openFullscreen(img.src));
+            // Highlights are drawn in image-pixel space, so a page can only be
+            // highlighted once its image has real dimensions. Redraw on load so
+            // an auto-activated highlight appears even before the user scrolls.
+            img.addEventListener('load', () => {
+                if (!State.activeHighlightNodeId) return;
+                const container = img.closest('.page-image-container');
+                if (!container) return;
+                const idx = parseInt(container.dataset.index);
+                drawHighlightsOnPage(container, idx + 1, State.highlightsCache[docId], nMap, State.activeHighlightNodeId);
+            });
         });
         imgs.querySelectorAll('.page-node-tag').forEach(tag => {
             tag.addEventListener('click', e => {
@@ -2093,7 +2171,10 @@ function showPagePreviewModal(docId, nodeId, nodeInfo, allPages) {
     const main = document.querySelector('.page.active .main-content');
     main?.classList.add('preview-open');
 
-    initHighlightsForModal(modal, nMap, docId);
+    await initHighlightsForModal(modal, nMap, docId);
+    // Land directly on the highlighted source (matching the "scroll to and
+    // highlight" UX) rather than requiring the user to click the node tag.
+    if (autoHighlight) activateNodeHighlight(nodeId);
     setTimeout(() => {
         const target = modal.querySelectorAll('.page-image-container')[si];
         const scrollParent = modal.querySelector('.page-preview-body');
