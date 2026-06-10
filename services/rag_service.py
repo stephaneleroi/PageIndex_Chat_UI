@@ -18,7 +18,7 @@ from openai import AsyncOpenAI
 
 from models.document import Document, DocumentStore, document_store
 from models.session import Message, SessionStore, session_store
-from config import config_manager
+from config import config_manager, PLACEHOLDER_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,16 @@ class PageIndexService:
         self.store = store
     
     def _get_client(self, model_type: str = 'text') -> AsyncOpenAI:
-        """Get OpenAI client with current configuration"""
+        """Get OpenAI client with current configuration.
+
+        Local OpenAI-compatible servers (Ollama, vLLM, LM Studio…) don't need a
+        key, but the SDK requires a non-empty one — fall back to a placeholder
+        so a base_url alone is enough to point at a local model.
+        """
         config = config_manager.get_model_config(model_type)
         return AsyncOpenAI(
-            api_key=config.get('api_key'),
-            base_url=config.get('base_url')
+            api_key=config.get('api_key') or PLACEHOLDER_API_KEY,
+            base_url=config.get('base_url') or None
         )
     
     def _get_model_name(self, model_type: str = 'text') -> str:

@@ -30,20 +30,32 @@ DEFAULT_SERVER_CONFIG = {
 # Default Model Configurations (hardcoded defaults)
 # Le modèle par défaut a été unifié sur gpt-5-mini (2026-05)
 # ============================================================
+DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
+
+# Clé factice pour les serveurs compatibles OpenAI exécutés en local
+# (Ollama, vLLM, LM Studio…) qui n'exigent pas d'authentification, alors que
+# le SDK OpenAI réclame tout de même une clé non vide.
+PLACEHOLDER_API_KEY = 'ollama-local'
+
 DEFAULT_MODELS = {
     'text': {
         'name': 'gpt-5-mini',
         'api_key': '',
-        'base_url': 'https://api.openai.com/v1',
+        'base_url': DEFAULT_OPENAI_BASE_URL,
         'type': 'text'
     },
     'vision': {
         'name': 'gpt-5-mini',
         'api_key': '',
-        'base_url': 'https://api.openai.com/v1',
+        'base_url': DEFAULT_OPENAI_BASE_URL,
         'type': 'vision'
     }
 }
+
+
+def is_custom_base_url(base_url: str) -> bool:
+    """True si l'URL pointe ailleurs que l'API OpenAI publique (ex. Ollama)."""
+    return bool(base_url) and base_url.rstrip('/') != DEFAULT_OPENAI_BASE_URL
 
 @dataclass
 class ModelConfig:

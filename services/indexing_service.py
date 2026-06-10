@@ -11,7 +11,10 @@ import logging
 from typing import Optional
 
 from models.document import Document, DocumentStore, document_store
-from config import config_manager
+from config import (
+    config_manager, is_custom_base_url, PLACEHOLDER_API_KEY,
+    DEFAULT_OPENAI_BASE_URL,
+)
 from pageindex import page_index_main, set_api_config, ConfigLoader
 from types import SimpleNamespace as pageindex_config
 
@@ -42,11 +45,13 @@ class IndexingService:
             model_config = config_manager.get_model_config('text')
             model_name = model_config.get('name', 'gpt-4o-mini')
             api_key = model_config.get('api_key', '')
-            base_url = model_config.get('base_url', 'https://api.openai.com/v1')
-            
-            # Set API configuration for PageIndex
-            if api_key:
-                set_api_config(api_key, base_url)
+            base_url = model_config.get('base_url', DEFAULT_OPENAI_BASE_URL)
+
+            # Set API configuration for PageIndex. Apply it whenever a key is
+            # given OR the base_url points at a local/compatible server (e.g.
+            # Ollama), which needs no key but a non-empty placeholder for the SDK.
+            if api_key or is_custom_base_url(base_url):
+                set_api_config(api_key or PLACEHOLDER_API_KEY, base_url)
             
             logger.info(f"Using model: {model_name}, base_url: {base_url}")
             

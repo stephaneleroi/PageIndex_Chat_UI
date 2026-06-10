@@ -126,6 +126,8 @@ Le service tourne par défaut sur **http://localhost:5001**.
 
 Ouvrez le panneau des paramètres et renseignez le nom, la clé API et la Base URL du modèle texte et du modèle vision. La configuration est enregistrée dans `config.json`.
 
+> Vous pouvez aussi utiliser un fournisseur compatible OpenAI ou un modèle **local via Ollama** — voir [API / Modèles](#-api--modèles).
+
 ---
 
 ## 🏗️ Architecture technique
@@ -210,6 +212,38 @@ Ce projet appelle les LLM via le **SDK Python OpenAI** (`openai` >= 1.0) et est 
 | Questions-réponses vision | `gpt-5-mini` | Analyse visuelle de graphiques/formules/tableaux |
 
 Ce projet **n'utilise pas de modèle d'Embedding ni de base de données vectorielle**.
+
+### 🔧 Configurer le LLM (URL personnalisée, fournisseurs compatibles)
+
+Chaque modèle (texte **et** vision) se configure indépendamment via **trois champs** — *Nom du modèle*, *API Key*, *Base URL* — dans le panneau ⚙️ (« Configuration des modèles ») ou dans `config.py` / `config.json`.
+
+Le `base_url` est pleinement pris en charge à la fois pour **l'indexation** et pour **les réponses**. Vous pouvez donc pointer vers n'importe quel point de terminaison compatible OpenAI :
+
+```
+Base URL : https://votre-fournisseur/v1
+API Key  : votre-clé
+Nom      : nom-du-modèle
+```
+
+Exemples compatibles : Azure OpenAI, OpenRouter, Together, Groq, vLLM, LM Studio, LiteLLM…
+
+### 🦙 Utilisation avec Ollama en local
+
+Ollama expose une API compatible OpenAI. Après avoir récupéré un modèle (`ollama pull llama3.1`), configurez :
+
+| Champ | Valeur |
+|------|------|
+| **Base URL** | `http://localhost:11434/v1` |
+| **API Key** | *(facultatif)* — laissez vide ou mettez n'importe quoi ; une clé factice est injectée automatiquement |
+| **Nom du modèle** | un modèle installé, ex. `llama3.1`, `qwen2.5` (texte) ; `llama3.2-vision`, `llava` (vision) |
+
+> 💡 Dès que la *Base URL* n'est pas celle d'OpenAI, l'application n'exige plus de clé : une valeur factice est fournie au SDK aussi bien pour l'indexation que pour le chat.
+
+**À garder en tête avec des modèles locaux :**
+
+* **JSON.** L'Agent attend du JSON strict (décomposition, ReAct, auto-évaluation, analyse). Les petits modèles peuvent produire du JSON imparfait — des *fallbacks* évitent tout plantage, mais la qualité du raisonnement dépend de la capacité du modèle (privilégiez ≥ 14B).
+* **Vision.** Le mode vision envoie des images en base64 ; utilisez un modèle multimodal et vérifiez sa prise en charge.
+* **Vitesse.** L'indexation déclenche de nombreux appels LLM (TOC, résumé de chaque nœud) : cela peut être lent sur CPU local.
 
 ### ⚙️ Paramètres clés
 
