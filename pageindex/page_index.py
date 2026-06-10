@@ -889,7 +889,7 @@ async def fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorr
 
 
 ################### verify toc #########################################################
-async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
+async def verify_toc(page_list, list_result, start_index=1, N=None, model=None, skip_coverage_check=False):
     print('start verify_toc')
     # Find the last non-None physical_index
     last_physical_index = None
@@ -897,9 +897,14 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
         if item.get('physical_index') is not None:
             last_physical_index = item['physical_index']
             break
-    
-    # Early return if we don't have valid physical indices
-    if last_physical_index is None or last_physical_index < len(page_list)/2:
+
+    # Early return if we don't have valid physical indices. The half-document
+    # coverage heuristic catches truncated generations, but it also rejects
+    # legitimate structures whose long final section starts in the first half
+    # (e.g. a tale book with few long chapters) — callers can bypass it.
+    if last_physical_index is None:
+        return 0, []
+    if not skip_coverage_check and last_physical_index < len(page_list)/2:
         return 0, []
     
     # Determine which items to check
@@ -988,6 +993,22 @@ async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=N
         logger.info(f"process_no_toc fallback: accuracy {accuracy:.2f} below threshold, attempting fix anyway")
         toc_with_page_number, incorrect_results = await fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorrect_results, start_index=start_index, max_attempts=3, model=opt.model, logger=logger)
         return toc_with_page_number
+    elif mode == 'process_no_toc' and accuracy == 0 and len(incorrect_results) == 0 and toc_with_page_number:
+        # verify_toc refused to check (coverage heuristic: last section starts
+        # in the first half — legitimate when the final chapter is long).
+        # Verify for real, bypassing the heuristic, and accept/fix on that basis.
+        accuracy, incorrect_results = await verify_toc(page_list, toc_with_page_number, start_index=start_index, model=opt.model, skip_coverage_check=True)
+        logger.info({
+            'mode': 'process_no_toc (coverage check bypassed)',
+            'accuracy': accuracy,
+            'incorrect_results': incorrect_results
+        })
+        if accuracy == 1.0 and len(incorrect_results) == 0:
+            return toc_with_page_number
+        if accuracy > 0.6 and len(incorrect_results) > 0:
+            toc_with_page_number, incorrect_results = await fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorrect_results, start_index=start_index, max_attempts=3, model=opt.model, logger=logger)
+            return toc_with_page_number
+        raise Exception('Processing failed')
     else:
         raise Exception('Processing failed')
         
