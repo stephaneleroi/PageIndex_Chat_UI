@@ -606,9 +606,10 @@ def add_node_text_with_labels(node, pdf_pages):
 
 
 async def generate_node_summary(node, model=None):
-    prompt = f"""You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.                                 
+    prompt = f"""You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
     Partial Document Text: {node['text']}
-    
+
+    Write the description in the same language as the document text (e.g. French for a French document).
     Directly return the description, do not include any other text.
     """
     response = await ChatGPT_API_async(model, prompt)

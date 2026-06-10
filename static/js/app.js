@@ -404,6 +404,18 @@ function renderLibrary(allSessions = []) {
             retryDocument(el.dataset.docId);
         });
     });
+    grid.querySelectorAll('[data-action="tree"]').forEach(el => {
+        el.addEventListener('click', e => {
+            e.stopPropagation();
+            showDocTree(el.dataset.docId);
+        });
+    });
+    grid.querySelectorAll('[data-action="preview"]').forEach(el => {
+        el.addEventListener('click', e => {
+            e.stopPropagation();
+            showDocPreview(el.dataset.docId);
+        });
+    });
 }
 
 function renderDocCard(d) {
@@ -423,6 +435,12 @@ function renderDocCard(d) {
         footer = `
             <button class="doc-card-btn chat-btn" data-action="chat" data-doc-id="${d.doc_id}">
                 <i class="bi bi-chat-square-text"></i> Discuter
+            </button>
+            <button class="doc-card-btn" data-action="tree" data-doc-id="${d.doc_id}" title="Voir la structure PageIndex">
+                <i class="bi bi-diagram-3"></i> Structure
+            </button>
+            <button class="doc-card-btn" data-action="preview" data-doc-id="${d.doc_id}" title="Feuilleter le document">
+                <i class="bi bi-eye"></i>
             </button>
             <button class="doc-card-btn delete-btn" data-action="delete" data-doc-id="${d.doc_id}" data-filename="${esc(d.filename)}">
                 <i class="bi bi-trash3"></i>
@@ -1459,9 +1477,10 @@ function buildNodeDocMap(nodes, fallbackDocId) {
 }
 
 // Turn inline citations the model wrote as plain text (e.g. "(node_0007, page 3)")
-// into clickable links that open the source panel scrolled to — and highlighting —
-// that node. Walks text nodes so Markdown/HTML/KaTeX structure is preserved; skips
-// code, links, math and tags we've already produced.
+// into numbered badges [1], [2]… (chat.pageindex.ai style) that open the source
+// panel scrolled to — and highlighting — that node. The same node always gets the
+// same number within one message. Walks text nodes so Markdown/HTML/KaTeX structure
+// is preserved; skips code, links, math and tags we've already produced.
 const CITE_RE = /node_[A-Za-z0-9_.\-]+/;
 function linkifyCitations(container, nodeDocMap, fallbackDocId) {
     if (!container) return;
@@ -1482,22 +1501,31 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
     let t;
     while ((t = walker.nextNode())) targets.push(t);
 
+    const numbering = new Map();   // "docId::nodeId" -> citation number (per message)
     for (const textNode of targets) {
         const s = textNode.nodeValue;
-        const re = /node_[A-Za-z0-9_.\-]+/g;
+        // Branch 1 swallows a whole parenthetical "(node_0007, page 3)" so the
+        // page mention moves into the badge tooltip; branch 2 catches bare ids.
+        const re = /\(\s*(node_[A-Za-z0-9_.\-]+)\s*(?:,\s*((?:pages?|p\.)[^)]*?))?\s*\)|(node_[A-Za-z0-9_.\-]+)/g;
         const frag = document.createDocumentFragment();
         let last = 0, m;
         while ((m = re.exec(s))) {
-            const nodeId = m[0];
+            const nodeId = m[1] || m[3];
+            const pageInfo = (m[2] || '').trim();
             if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
-            const docId = (nodeDocMap && nodeDocMap[nodeId]) || fallbackDocId || '';
+            // [NODES] refs use bare ids ("0004") while the model writes
+            // "node_0004" — try both when resolving the source document.
+            const bareId = nodeId.replace(/^node_/, '');
+            const docId = (nodeDocMap && (nodeDocMap[nodeId] || nodeDocMap[bareId])) || fallbackDocId || '';
+            const key = docId + '::' + bareId;
+            if (!numbering.has(key)) numbering.set(key, numbering.size + 1);
             const span = document.createElement('span');
-            span.className = 'cite-link';
-            span.textContent = nodeId;
-            span.title = 'Voir la source';
+            span.className = 'cite-link cite-num';
+            span.textContent = numbering.get(key);
+            span.title = nodeId + (pageInfo ? ' · ' + pageInfo : '') + ' — voir la source';
             span.addEventListener('click', (e) => { e.stopPropagation(); showNodePreview(nodeId, docId); });
             frag.appendChild(span);
-            last = m.index + nodeId.length;
+            last = m.index + m[0].length;
         }
         if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
         textNode.parentNode.replaceChild(frag, textNode);
@@ -2028,22 +2056,97 @@ window.startNewDocSession = startNewDocSession;
 // ========================================================================
 //  Page preview modal (per-document, unchanged core logic)
 // ========================================================================
+async function ensurePreviewData(docId) {
+    if (State.nodeMapCache[docId] && State.allPagesCache[docId]) return true;
+    try {
+        const r = await fetch(`/api/documents/${docId}/node-info`);
+        const d = await r.json();
+        if (!d.node_map) return false;
+        State.nodeMapCache[docId] = d.node_map;
+        State.allPagesCache[docId] = d.all_pages || [];
+        return true;
+    } catch { return false; }
+}
+
 async function showNodePreview(nodeId, docId) {
     if (!docId) docId = State.docChat.docId;
     if (!docId) return;
-    if (!State.nodeMapCache[docId] || !State.allPagesCache[docId]) {
-        try {
-            const r = await fetch(`/api/documents/${docId}/node-info`);
-            const d = await r.json();
-            if (d.node_map) {
-                State.nodeMapCache[docId] = d.node_map;
-                State.allPagesCache[docId] = d.all_pages || [];
-            } else return;
-        } catch { return; }
+    if (!(await ensurePreviewData(docId))) return;
+    // The model cites "node_0004" but node_map / highlight keys are "0004":
+    // resolve to whichever form the map actually uses.
+    const map = State.nodeMapCache[docId] || {};
+    if (!(nodeId in map) && nodeId.startsWith('node_') && nodeId.slice(5) in map) {
+        nodeId = nodeId.slice(5);
     }
-    const info = State.nodeMapCache[docId]?.[nodeId];
+    const info = map[nodeId];
     if (!info) { showNotification('Informations du nœud introuvables', 'error'); return; }
     showPagePreviewModal(docId, nodeId, info, State.allPagesCache[docId]);
+}
+
+// Browse the whole document from the library — same side panel, no active node.
+async function showDocPreview(docId) {
+    if (!(await ensurePreviewData(docId))) {
+        showNotification('Aperçu indisponible pour ce document', 'error');
+        return;
+    }
+    showPagePreviewModal(docId, null, { start_index: 1 }, State.allPagesCache[docId], false);
+}
+
+// PageIndex tree (table of contents) viewer, fed by /api/documents/<id>/tree.
+async function showDocTree(docId) {
+    let tree;
+    try {
+        const r = await fetch(`/api/documents/${docId}/tree`);
+        const d = await r.json();
+        if (!r.ok || !d.tree) { showNotification(d.error || 'Structure introuvable', 'error'); return; }
+        tree = d.tree;
+    } catch {
+        showNotification('Impossible de charger la structure', 'error');
+        return;
+    }
+    let modal = document.getElementById('docTreeModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'docTreeModal';
+        modal.className = 'doc-tree-modal';
+        modal.innerHTML = `<div class="doc-tree-content">
+            <div class="doc-tree-header">
+                <h5 class="doc-tree-title"><i class="bi bi-diagram-3"></i> <span></span></h5>
+                <button class="doc-tree-close"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="doc-tree-body"></div>
+        </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('.doc-tree-close').addEventListener('click', () => modal.classList.remove('active'));
+        modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('active'); });
+    }
+    const docInfo = (State.documents || []).find(x => x.doc_id === docId);
+    modal.querySelector('.doc-tree-title span').textContent = docInfo?.filename || 'Structure du document';
+    modal.querySelector('.doc-tree-body').innerHTML = renderTreeNodes(tree);
+    modal.querySelectorAll('.tree-node-row[data-node-id]').forEach(row => {
+        row.addEventListener('click', () => {
+            modal.classList.remove('active');
+            showNodePreview(row.dataset.nodeId, docId);
+        });
+    });
+    modal.classList.add('active');
+}
+
+function renderTreeNodes(node, depth = 0) {
+    if (Array.isArray(node)) return node.map(n => renderTreeNodes(n, depth)).join('');
+    if (!node || typeof node !== 'object') return '';
+    const children = node.children || node.nodes || [];
+    if (!node.title) return renderTreeNodes(children, depth);
+    const pages = node.start_index
+        ? `<span class="tree-node-pages">p. ${node.start_index}${node.end_index && node.end_index !== node.start_index ? '–' + node.end_index : ''}</span>`
+        : '';
+    return `
+        <div class="tree-node" style="--tree-depth:${depth}">
+            <div class="tree-node-row" ${node.node_id ? `data-node-id="${esc(node.node_id)}"` : ''} title="Voir dans le document">
+                <span class="tree-node-title">${esc(node.title)}</span>${pages}
+            </div>
+            ${node.summary ? `<div class="tree-node-summary">${esc(node.summary)}</div>` : ''}
+        </div>` + renderTreeNodes(children, depth + 1);
 }
 window.showNodePreview = showNodePreview;
 
@@ -2110,7 +2213,9 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     modal.querySelector('.page-preview-title').textContent = docInfo?.filename || 'Aperçu du PDF';
 
     const infoCard = modal.querySelector('#nodeInfoCard');
-    infoCard.innerHTML = `
+    if (nodeId) {
+        infoCard.style.display = '';
+        infoCard.innerHTML = `
         <div class="node-info-badge" style="background:${nodeColor.bg};color:${nodeColor.text}">${esc(nodeId)}</div>
         <div class="node-info-detail">
             <div class="node-info-title">${esc(nodeInfo.title || 'Nœud sans titre')}</div>
@@ -2119,6 +2224,11 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
             </div>
             ${nodeInfo.summary ? `<div class="node-info-summary">${esc(nodeInfo.summary)}</div>` : ''}
         </div>`;
+    } else {
+        // Whole-document browsing (library "Aperçu"): no active node to describe.
+        infoCard.style.display = 'none';
+        infoCard.innerHTML = '';
+    }
 
     const imgs = modal.querySelector('.page-preview-images');
     if (!allPages?.length) {
@@ -2126,7 +2236,7 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     } else {
         imgs.innerHTML = allPages.map((p, i) => {
             const pageNum = p.page;
-            const isCurrent = pageNum >= currentStart && pageNum <= currentEnd;
+            const isCurrent = !!nodeId && pageNum >= currentStart && pageNum <= currentEnd;
             const nodes = pageNodeMap[pageNum] || [];
             const tags = nodes.map(n => {
                 const isActive = n.id === nodeId;
@@ -2174,7 +2284,7 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     await initHighlightsForModal(modal, nMap, docId);
     // Land directly on the highlighted source (matching the "scroll to and
     // highlight" UX) rather than requiring the user to click the node tag.
-    if (autoHighlight) activateNodeHighlight(nodeId);
+    if (autoHighlight && nodeId) activateNodeHighlight(nodeId);
     setTimeout(() => {
         const target = modal.querySelectorAll('.page-image-container')[si];
         const scrollParent = modal.querySelector('.page-preview-body');

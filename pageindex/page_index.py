@@ -505,10 +505,10 @@ def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
 
     The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
-    For the title, you need to extract the original title from the text, only fix the space inconsistency.
+    For the title, you need to extract the original title from the text, only fix the space inconsistency. Keep titles in the document's original language; never translate them. If a part has no explicit title, name it in the document's language.
 
     The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X. \
-    
+
     For the physical_index, you need to extract the physical index of the start of the section from the text. Keep the <physical_index_X> format.
 
     The response should be in the following format. 
@@ -538,9 +538,9 @@ def generate_toc_init(part, model=None):
 
     The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
-    For the title, you need to extract the original title from the text, only fix the space inconsistency.
+    For the title, you need to extract the original title from the text, only fix the space inconsistency. Keep titles in the document's original language; never translate them. If a part has no explicit title, name it in the document's language.
 
-    The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X. 
+    The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X.
 
     For the physical_index, you need to extract the physical index of the start of the section from the text. Keep the <physical_index_X> format.
 

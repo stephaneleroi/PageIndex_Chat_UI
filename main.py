@@ -30,4 +30,5 @@ if __name__ == '__main__':
 ╚══════════════════════════════════════════════════════════════╝
     """)
     
-    socketio.run(app, host=host, port=port, debug=debug)
+    socketio.run(app, host=host, port=port, debug=debug,
+                 allow_unsafe_werkzeug=True)

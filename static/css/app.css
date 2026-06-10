@@ -948,6 +948,56 @@ body {
     transition: background 0.15s;
 }
 .cite-link:hover { background: #eef2ff; border-radius: 3px; }
+/* Numbered citation badge [1] (chat.pageindex.ai style) */
+.cite-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 17px; height: 17px; padding: 0 4px; margin: 0 1px;
+    font-size: 11px; line-height: 1;
+    background: #eef2ff; border: 1px solid var(--primary); border-radius: 9px;
+    vertical-align: text-top;
+}
+.cite-num:hover { background: var(--primary); color: white; }
+
+/* ============================================
+ * DOCUMENT TREE (PageIndex structure) MODAL
+ * ============================================ */
+.doc-tree-modal {
+    position: fixed; inset: 0; z-index: 10000; display: none;
+    background: rgba(15, 23, 42, 0.45);
+    align-items: center; justify-content: center;
+}
+.doc-tree-modal.active { display: flex; }
+.doc-tree-content {
+    background: white; border-radius: 14px; width: min(680px, 92vw);
+    max-height: 82vh; display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+.doc-tree-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+}
+.doc-tree-header h5 { margin: 0; font-size: 15px; font-weight: 700; }
+.doc-tree-header h5 i { color: var(--primary); margin-right: 6px; }
+.doc-tree-close {
+    border: none; background: none; cursor: pointer; font-size: 16px;
+    color: var(--text-secondary); padding: 4px 8px; border-radius: 6px;
+}
+.doc-tree-close:hover { background: var(--bg); color: var(--text-primary); }
+.doc-tree-body { overflow-y: auto; padding: 12px 18px 18px; }
+.tree-node { margin-left: calc(var(--tree-depth, 0) * 18px); }
+.tree-node-row {
+    display: flex; align-items: baseline; gap: 8px; cursor: pointer;
+    padding: 5px 8px; border-radius: 6px; margin-top: 2px;
+}
+.tree-node-row:hover { background: #eef2ff; }
+.tree-node-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
+.tree-node-pages { font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; }
+.tree-node-summary {
+    font-size: 12px; color: var(--text-secondary); line-height: 1.45;
+    padding: 0 8px 4px; margin-left: 8px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+}
 
 /* ============================================
  * CHAT INPUT
