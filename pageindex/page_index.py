@@ -1100,7 +1100,9 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
         if opt.if_add_node_id == 'yes':
             write_node_id(structure)    
         if opt.if_add_node_text == 'yes':
-            add_node_text(structure, page_list)
+            # Page-labeled variant (<page_N>…</page_N>) so the answering LLM
+            # can cite the precise page of each claim inside a multi-page node.
+            add_node_text_with_labels(structure, page_list)
         if opt.if_add_node_summary == 'yes':
             if opt.if_add_node_text == 'no':
                 add_node_text(structure, page_list)

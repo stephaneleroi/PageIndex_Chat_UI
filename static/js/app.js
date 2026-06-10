@@ -1523,7 +1523,10 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
             span.className = 'cite-link cite-num';
             span.textContent = numbering.get(key);
             span.title = nodeId + (pageInfo ? ' · ' + pageInfo : '') + ' — voir la source';
-            span.addEventListener('click', (e) => { e.stopPropagation(); showNodePreview(nodeId, docId); });
+            // Jump to the precise page cited, not just the node's first page.
+            const pageMatch = pageInfo.match(/\d+/);
+            const citedPage = pageMatch ? parseInt(pageMatch[0], 10) : null;
+            span.addEventListener('click', (e) => { e.stopPropagation(); showNodePreview(nodeId, docId, citedPage); });
             frag.appendChild(span);
             last = m.index + m[0].length;
         }
@@ -2068,7 +2071,7 @@ async function ensurePreviewData(docId) {
     } catch { return false; }
 }
 
-async function showNodePreview(nodeId, docId) {
+async function showNodePreview(nodeId, docId, focusPage = null) {
     if (!docId) docId = State.docChat.docId;
     if (!docId) return;
     if (!(await ensurePreviewData(docId))) return;
@@ -2080,7 +2083,7 @@ async function showNodePreview(nodeId, docId) {
     }
     const info = map[nodeId];
     if (!info) { showNotification('Informations du nœud introuvables', 'error'); return; }
-    showPagePreviewModal(docId, nodeId, info, State.allPagesCache[docId]);
+    showPagePreviewModal(docId, nodeId, info, State.allPagesCache[docId], true, focusPage);
 }
 
 // Browse the whole document from the library — same side panel, no active node.
@@ -2171,7 +2174,7 @@ function getNodeColor(nodeId, nodeMap) {
     return NODE_COLORS[(idx >= 0 ? idx : 0) % NODE_COLORS.length];
 }
 
-async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighlight = true) {
+async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighlight = true, focusPage = null) {
     let modal = document.getElementById('pagePreviewModal');
     if (!modal) {
         modal = document.createElement('div');
@@ -2273,7 +2276,7 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     }
 
     modal.dataset.pages = JSON.stringify(allPages);
-    const si = Math.max(0, Math.min(currentStart - 1, allPages.length - 1));
+    const si = Math.max(0, Math.min((focusPage || currentStart) - 1, allPages.length - 1));
     modal.dataset.currentIndex = si;
     updatePageNav();
     modal.classList.add('active');

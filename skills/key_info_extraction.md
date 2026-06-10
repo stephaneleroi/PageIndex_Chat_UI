@@ -36,7 +36,7 @@ Dans les situations suivantes, **ne pas** appliquer cette skill, mais répondre 
 ### B. Commercial / Financier
 - **Type de document** : rapport financier / livre blanc / analyse de marché
 - **Lecture rapide en une phrase** : …
-- **Indicateurs clés** : … (si des chiffres sont mentionnés, indiquer obligatoirement le numéro de nœud et la page)
+- **Indicateurs clés** : … (si des chiffres sont mentionnés, citer obligatoirement au format `(node_<id>, page N)`)
 - **Principaux risques / opportunités** : …
 - **Recommandations finales** : …
 
@@ -64,5 +64,5 @@ Dans les situations suivantes, **ne pas** appliquer cette skill, mais répondre 
 ## Guardrails (anti-hallucination)
 - **Interdit** d'inventer des conclusions absentes de l'Abstract / de l'Introduction.
 - Si `summarize_nodes` renvoie un contenu trop maigre (< 100 caractères), il faut faire un appel supplémentaire à `read_node` avant de résumer, plutôt que de combler artificiellement.
-- Tous les chiffres, années, pourcentages, noms de personnes → doivent être accompagnés du numéro de nœud source.
+- Tous les chiffres, années, pourcentages, noms de personnes → doivent être accompagnés d'une citation au format exact `(node_<id>, page N)`, la page étant lue dans les balises `<page_N>` du contexte (jamais devinée). Chaque point de la liste « Informations clés » se termine par sa citation.
 - Si après plusieurs tours de recherche l'information centrale reste introuvable, répondre honnêtement « cette information n'est pas explicitement mentionnée dans le document », sans remplir pour faire du volume.

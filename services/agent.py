@@ -47,7 +47,11 @@ GROUNDING_INSTRUCTION_SINGLE = (
     "1. Ground every concrete claim in the Context. Cite the source inline as "
     "`(node_<id>, page N)`, always using the REAL node id verbatim (e.g. `(node_0007, page 3)`) "
     "so it can be linked. Preserve original numbers and units verbatim.\n"
-    "2. If the Context does not cover the question, say so explicitly "
+    "2. Node text in the Context is wrapped in `<page_N>…</page_N>` markers: take the page "
+    "number of each claim from its enclosing marker — NEVER guess a page. Cite the specific "
+    "page for EACH claim or paragraph (not just once per section), and never echo the "
+    "`<page_N>` markers themselves in your answer.\n"
+    "3. If the Context does not cover the question, say so explicitly "
     "(e.g. `Non mentionné dans le document...`). Never fabricate facts, citations, or fill gaps from prior knowledge."
 )
 
@@ -57,9 +61,13 @@ GROUNDING_INSTRUCTION_KB = (
     "`(doc: <filename>, node_<id>, page N)`, always using the REAL node id verbatim "
     "(e.g. `(doc: rapport.pdf, node_0007, page 3)`) so the reader knows WHICH document each claim "
     "came from and the citation can be linked. Preserve original numbers and units verbatim.\n"
-    "2. If the Context does not cover the question, say so explicitly "
+    "2. Node text in the Context is wrapped in `<page_N>…</page_N>` markers: take the page "
+    "number of each claim from its enclosing marker — NEVER guess a page. Cite the specific "
+    "page for EACH claim or paragraph (not just once per section), and never echo the "
+    "`<page_N>` markers themselves in your answer.\n"
+    "3. If the Context does not cover the question, say so explicitly "
     "(e.g. `Non mentionné dans les documents sélectionnés...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
-    "3. When comparing across documents, make the document identity unambiguous in every bullet "
+    "4. When comparing across documents, make the document identity unambiguous in every bullet "
     "(e.g. `Le document A utilise X, le document B utilise Y`)."
 )
 
@@ -899,11 +907,15 @@ Output JSON only:
         seen_refs = set()
 
         def _add_node_text(did, nid):
+            dctx = docs.get(did) or {}
+            node_map = dctx.get("node_map") or {}
+            # Observations mix "node_0001" and bare "0001" spellings while the
+            # node_map keys are bare — normalise before lookup.
+            if nid not in node_map and nid.startswith("node_") and nid[5:] in node_map:
+                nid = nid[5:]
             ref = _qual(did, nid)
             if ref in seen_refs or ref in analytically_processed:
                 return
-            dctx = docs.get(did) or {}
-            node_map = dctx.get("node_map") or {}
             if nid not in node_map:
                 return
             info = node_map[nid]
@@ -925,7 +937,9 @@ Output JSON only:
 
             elif tool == "tree_search":
                 obs = g.get("observation", "")
-                for nid in re.findall(r"(node_\S+)", obs):
+                # tree_search lists nodes with bare ids ("- 0001: Title") —
+                # the node_ prefix only appears if the model echoed it.
+                for nid in re.findall(r"node_\S+|\b\d{4}\b", obs):
                     _add_node_text(did, nid)
 
             elif tool == "cross_search":
@@ -939,7 +953,7 @@ Output JSON only:
                     if m:
                         cur_did = m.group(1)
                         continue
-                    for nid in re.findall(r"(node_\S+)", line):
+                    for nid in re.findall(r"node_\S+|\b\d{4}\b", line):
                         if cur_did:
                             _add_node_text(cur_did, nid)
 

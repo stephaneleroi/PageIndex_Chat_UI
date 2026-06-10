@@ -48,7 +48,7 @@ class SummarizerTool(BaseTool):
             title = node.get("title", nid) if isinstance(node, dict) else nid
             text = node.get("text", "") if isinstance(node, dict) else ""
             if text:
-                texts.append(f"[{title}]\n{text[:3000]}")
+                texts.append(f"[{title}]\n{text[:8000]}")
 
         if not texts:
             return {
@@ -59,8 +59,11 @@ class SummarizerTool(BaseTool):
 
         combined = "\n\n---\n\n".join(texts)
         prompt = (
-            f"Summarize the following document sections concisely "
-            f"(max 300 words):\n\n{combined}"
+            "Summarize the following document sections concisely (max 300 words).\n"
+            "The text contains <page_N>…</page_N> markers: annotate every fact you keep "
+            "with its source page as `(page N)`, taken from the fact's enclosing marker "
+            "— never guess a page and never echo the markers themselves.\n\n"
+            f"{combined}"
         )
 
         try:

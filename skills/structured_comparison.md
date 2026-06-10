@@ -62,5 +62,5 @@ Donner, sur la base des informations du document :
 ## Guardrails (anti-hallucination)
 - **Strictement interdit** d'inventer une information de dimension non mentionnée pour l'une des parties. Ce que l'objet A n'indique pas s'écrit `—` ou `non mentionné dans le document`.
 - **Strictement interdit** de donner une préférence subjective de soi-même — sauf si le document exprime lui-même une position. Pour une question du type « lequel est le meilleur », vérifier d'abord si le document contient une conclusion d'évaluation.
-- Chaque point de différence clé doit être accompagné d'une référence au numéro de nœud ou à la page.
+- Chaque point de différence clé doit être accompagné d'une citation au format `(node_<id>, page N)` (page issue des balises `<page_N>` du contexte).
 - Si un seul des objets est trouvable dans le document et que l'autre est totalement absent → arrêter la comparaison et indiquer à l'utilisateur « aucune information relative à B trouvée dans le document, impossible de réaliser la comparaison ».
