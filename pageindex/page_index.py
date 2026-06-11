@@ -1005,7 +1005,13 @@ async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=N
         })
         if accuracy == 1.0 and len(incorrect_results) == 0:
             return toc_with_page_number
-        if accuracy > 0.6 and len(incorrect_results) > 0:
+        if accuracy > 0 and len(incorrect_results) > 0:
+            # Same policy as the terminal no_toc branch above: this is the
+            # last chance, so attempt the repair whatever the accuracy —
+            # fix_incorrect_toc_with_retries relocates each wrong title from
+            # the surrounding correct anchors (e.g. a structure copied from a
+            # stale Word TOC whose page counts no longer match the PDF).
+            logger.info(f"coverage-bypass fallback: accuracy {accuracy:.2f}, attempting fix anyway")
             toc_with_page_number, incorrect_results = await fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorrect_results, start_index=start_index, max_attempts=3, model=opt.model, logger=logger)
             return toc_with_page_number
         raise Exception('Processing failed')
