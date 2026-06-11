@@ -800,7 +800,12 @@ Output JSON only:
             # → [improved answer], and the next turn's history_context
             # naturally continues from here.
             retry_gathered = gathered[gathered_cutoff:]
-            retry_nodes = list(dict.fromkeys(all_nodes[nodes_cutoff:]))
+            # The retry answer is grounded in the FULL gathered context (its
+            # prompt embeds answer_context built from every step), so persist
+            # every source node — not just those found during the retry round,
+            # which is often empty and used to strip the final message of its
+            # sources (breaking the nodes box and citation resolution).
+            retry_nodes = list(dict.fromkeys(all_nodes))
 
             def _thinking_summary_renumbered(g_list):
                 return "\n".join(

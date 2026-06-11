@@ -1527,11 +1527,21 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
         return hit ? hit.doc_id : '';
     };
     // Page-only references ("(pages 5-6)") can only link when the target
-    // document is unambiguous: explicit fallback, or a single doc in [NODES].
+    // document is unambiguous: explicit fallback, a single doc in [NODES],
+    // or — last resort — a single doc named by "(doc: …)" citations in the
+    // same message (covers answers whose node list wasn't persisted).
     let pageDocId = fallbackDocId || '';
     if (!pageDocId) {
         const ids = [...new Set(Object.values(nodeDocMap || {}).filter(Boolean))];
         if (ids.length === 1) pageDocId = ids[0];
+    }
+    if (!pageDocId) {
+        const named = new Set();
+        for (const dm of (container.textContent || '').matchAll(/\(\s*doc\s*:\s*([^,()]+)/gi)) {
+            const did = docIdByName(dm[1]);
+            if (did) named.add(did);
+        }
+        if (named.size === 1) pageDocId = [...named][0];
     }
 
     for (const textNode of targets) {
