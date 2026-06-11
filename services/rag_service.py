@@ -221,7 +221,7 @@ Please reply in the following JSON format:
 Directly return the final JSON structure. Do not output anything else.
 """
         
-        result = await self.call_llm(search_prompt, model_type)
+        result = await self.call_llm(search_prompt, 'light')
         
         try:
             if '```json' in result:
@@ -262,7 +262,7 @@ Les nœuds les plus pertinents sont X et Y, car...
         buffer = ""
         node_list_str = ""
         
-        async for chunk in self.call_llm_stream(search_prompt, model_type):
+        async for chunk in self.call_llm_stream(search_prompt, 'light'):
             full_response += chunk
             buffer += chunk
             

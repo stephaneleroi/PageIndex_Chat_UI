@@ -41,8 +41,10 @@ class IndexingService:
             self.store.update_document(doc_id, status='indexing')
             self.store.set_stage(doc_id, 'parsing', 'Lecture du fichier PDF...')
             
-            # Get model configuration (can be updated via web UI)
-            model_config = config_manager.get_model_config('text')
+            # Get model configuration (can be updated via web UI).
+            # Indexing is many cheap calls → 'light' profile (inherits 'text'
+            # until configured).
+            model_config = config_manager.get_model_config('light')
             model_name = model_config.get('name', 'gpt-4o-mini')
             api_key = model_config.get('api_key', '')
             base_url = model_config.get('base_url', DEFAULT_OPENAI_BASE_URL)

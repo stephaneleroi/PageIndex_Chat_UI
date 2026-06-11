@@ -160,15 +160,24 @@
                 <div class="modal-body">
                     <ul class="nav nav-tabs mb-3" id="modelTabs">
                         <li class="nav-item"><a class="nav-link active" href="#textConfig" data-bs-toggle="tab">Modèle texte</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#lightConfig" data-bs-toggle="tab">Modèle rapide</a></li>
                         <li class="nav-item"><a class="nav-link" href="#visionConfig" data-bs-toggle="tab">Modèle vision</a></li>
                     </ul>
                     <div class="tab-content">
                         <div class="tab-pane fade show active" id="textConfig">
+                            <p class="text-secondary" style="font-size:12.5px">Rédige les réponses du chat (qualité prioritaire).</p>
                             <div class="mb-3"><label class="form-label">Nom du modèle</label><input type="text" class="form-control" id="textModelName" placeholder="ex. : gpt-4o-mini"></div>
                             <div class="mb-3"><label class="form-label">API Key</label><input type="password" class="form-control" id="textApiKey" placeholder="sk-..."></div>
                             <div class="mb-3"><label class="form-label">Base URL</label><input type="text" class="form-control" id="textBaseUrl" placeholder="https://api.openai.com/v1"></div>
                         </div>
+                        <div class="tab-pane fade" id="lightConfig">
+                            <p class="text-secondary" style="font-size:12.5px">Tâches internes nombreuses et simples : indexation, recherche dans l'arbre, planification, auto-évaluation. Laissez vide pour utiliser le modèle texte.</p>
+                            <div class="mb-3"><label class="form-label">Nom du modèle</label><input type="text" class="form-control" id="lightModelName" placeholder="ex. : gpt-oss-20b-128k:latest"></div>
+                            <div class="mb-3"><label class="form-label">API Key</label><input type="password" class="form-control" id="lightApiKey" placeholder="(vide pour un serveur local)"></div>
+                            <div class="mb-3"><label class="form-label">Base URL</label><input type="text" class="form-control" id="lightBaseUrl" placeholder="http://localhost:11434/v1"></div>
+                        </div>
                         <div class="tab-pane fade" id="visionConfig">
+                            <p class="text-secondary" style="font-size:12.5px">Réponses fondées sur les images de pages (mode Vision).</p>
                             <div class="mb-3"><label class="form-label">Nom du modèle</label><input type="text" class="form-control" id="visionModelName" placeholder="ex. : gpt-4.1"></div>
                             <div class="mb-3"><label class="form-label">API Key</label><input type="password" class="form-control" id="visionApiKey" placeholder="sk-..."></div>
                             <div class="mb-3"><label class="form-label">Base URL</label><input type="text" class="form-control" id="visionBaseUrl" placeholder="https://api.openai.com/v1"></div>

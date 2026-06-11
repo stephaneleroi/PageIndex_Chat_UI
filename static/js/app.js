@@ -1934,12 +1934,16 @@ async function loadConfig() {
         const r = await fetch('/api/config/models');
         const d = await r.json();
         const tm = d.models?.text || {}, vm = d.models?.vision || {};
+        const lm = d.models?.light || {};
         document.getElementById('textModelName').value = tm.name || '';
         document.getElementById('textApiKey').value = tm.api_key || '';
         document.getElementById('textBaseUrl').value = tm.base_url || '';
         document.getElementById('visionModelName').value = vm.name || '';
         document.getElementById('visionApiKey').value = vm.api_key || '';
         document.getElementById('visionBaseUrl').value = vm.base_url || '';
+        document.getElementById('lightModelName').value = lm.name || '';
+        document.getElementById('lightApiKey').value = lm.api_key || '';
+        document.getElementById('lightBaseUrl').value = lm.base_url || '';
         State.modelType = d.default_type || 'text';
         switchModel(State.modelType);
     } catch (e) { console.error('load config', e); }
@@ -1958,6 +1962,14 @@ async function saveSettings() {
         base_url: document.getElementById('visionBaseUrl').value,
         type: 'vision',
     };
+    // Profil « rapide » optionnel : enregistré seulement si un nom est saisi
+    // (sinon il continue d'hériter du modèle texte côté serveur).
+    const lc = {
+        name: document.getElementById('lightModelName').value,
+        api_key: document.getElementById('lightApiKey').value,
+        base_url: document.getElementById('lightBaseUrl').value,
+        type: 'light',
+    };
     try {
         await fetch('/api/config/models/text', {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -1967,6 +1979,12 @@ async function saveSettings() {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(vc)
         });
+        if (lc.name.trim()) {
+            await fetch('/api/config/models/light', {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(lc)
+            });
+        }
         bootstrap.Modal.getInstance(document.getElementById('settingsModal'))?.hide();
         showNotification('Configuration enregistrée');
     } catch { showNotification('Échec de l\'enregistrement', 'error'); }

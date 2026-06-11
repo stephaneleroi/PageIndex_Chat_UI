@@ -232,7 +232,7 @@ Output JSON only:
     "synthesis_strategy": "compare" | "aggregate" | "sequence" | "direct"
 }}"""
         try:
-            raw = await self.pageindex.call_llm(prompt, model_type)
+            raw = await self.pageindex.call_llm(prompt, 'light')
             raw = self._extract_json_str(raw)
             return json.loads(raw)
         except Exception as e:
@@ -330,7 +330,7 @@ Output JSON only:
     }}
 }}"""
         try:
-            raw = await self.pageindex.call_llm(prompt, model_type)
+            raw = await self.pageindex.call_llm(prompt, 'light')
             raw = self._extract_json_str(raw)
             return json.loads(raw)
         except Exception as e:
@@ -401,7 +401,7 @@ Output JSON only:
     "action": "accept" or "retry"
 }}"""
         try:
-            raw = await self.pageindex.call_llm(prompt, model_type)
+            raw = await self.pageindex.call_llm(prompt, 'light')
             raw = self._extract_json_str(raw)
             return json.loads(raw)
         except Exception as e:
@@ -444,7 +444,7 @@ Output JSON only:
     ]
 }}"""
         try:
-            raw = await self.pageindex.call_llm(prompt, model_type)
+            raw = await self.pageindex.call_llm(prompt, 'light')
             raw = self._extract_json_str(raw)
             analysis = json.loads(raw)
         except Exception as e:

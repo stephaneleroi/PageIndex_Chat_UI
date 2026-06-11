@@ -118,8 +118,17 @@ class ConfigManager:
     # ============================================================
     
     def get_model_config(self, model_type: str) -> Dict:
-        """Get model configuration by type"""
-        return self.config.models.get(model_type, DEFAULT_MODELS.get(model_type, {}))
+        """Get model configuration by type.
+
+        'light' is the profile for cheap internal tasks (indexing, tree
+        search, planning, reflection); until the user configures it, it
+        inherits the 'text' model so behaviour is unchanged.
+        """
+        if model_type in self.config.models:
+            return self.config.models[model_type]
+        if model_type == 'light':
+            return self.get_model_config('text')
+        return DEFAULT_MODELS.get(model_type, {})
     
     def set_model_config(self, model_type: str, config: Dict):
         """Set model configuration"""
