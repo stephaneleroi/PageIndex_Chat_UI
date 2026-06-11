@@ -1489,15 +1489,15 @@ function buildNodeDocMap(nodes, fallbackDocId) {
     return map;
 }
 
-// Turn inline citations the model wrote as plain text into clickable elements:
-//   (node_0007, page 3)                    → badge numéroté [1]
-//   (doc: rapport.pdf, node_0007, page 3)  → badge numéroté (mode multi-docs ;
-//       tolère un id nu : "(doc: rapport.pdf, 1, page 5)")
-//   node_0007 seul                         → badge numéroté
-//   (page 12) / (pages 5-6) seul           → lien de page ouvrant la visionneuse
-// The same node always gets the same number within one message. Walks text nodes
-// so Markdown/HTML/KaTeX structure is preserved; skips code, links, math and tags
-// we've already produced.
+// Turn inline citations the model wrote as plain text into uniform clickable
+// page chips ("p. 5", "p. 5-6") — the node id stays internal (tooltip + click
+// target for highlighting). Recognised forms:
+//   (node_0007, page 3)
+//   (doc: rapport.pdf, node_0007, page 3)   (mode multi-docs ; id nu toléré)
+//   node_0007 seul                          (chip « source », sans page connue)
+//   (page 12) / (pages 5-6) seul            (nœud déduit de la page au clic)
+// Walks text nodes so Markdown/HTML/KaTeX structure is preserved; skips code,
+// links, math and tags we've already produced.
 const CITE_RE = /node_[A-Za-z0-9_.\-]+|\(\s*doc\s*:|\(\s*(?:pages?|p\.)\s*\d/i;
 function linkifyCitations(container, nodeDocMap, fallbackDocId) {
     if (!container) return;
@@ -1517,8 +1517,6 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
     const targets = [];
     let t;
     while ((t = walker.nextNode())) targets.push(t);
-
-    const numbering = new Map();   // "docId::nodeId" -> citation number (per message)
 
     // Resolve a doc id from the filename written in a "(doc: …)" citation.
     const docIdByName = (name) => {
@@ -1565,18 +1563,25 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
             if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
             last = m.index + m[0].length;
 
+            // Toutes les citations s'affichent de la même façon : une pastille
+            // de page « p. 5 » / « p. 5-6 » — la notion de nœud reste interne
+            // (elle pilote le surlignage au clic, et figure dans l'infobulle).
+            const chip = (text, title, onClick) => {
+                const span = document.createElement('span');
+                span.className = 'cite-link cite-num';
+                span.textContent = text;
+                span.title = title;
+                span.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+                frag.appendChild(span);
+            };
+            const pageLabel = (info) => 'p. ' + info.replace(/^(?:pages?|p\.)\s*/i, '').trim();
+
             if (m[7]) {
-                // Page-only reference → link straight to that page in the viewer.
+                // Page-only reference → infer the owning node on click.
                 if (pageDocId) {
                     const page = parseInt(m[7].match(/\d+/)[0], 10);
-                    const span = document.createElement('span');
-                    span.className = 'cite-link cite-page';
-                    span.textContent = m[7];
-                    span.title = 'Voir cette page dans le document';
-                    span.addEventListener('click', (e) => { e.stopPropagation(); showPageRef(pageDocId, page); });
-                    frag.appendChild(document.createTextNode('('));
-                    frag.appendChild(span);
-                    frag.appendChild(document.createTextNode(')'));
+                    chip(pageLabel(m[7]), 'Voir cette page dans le document',
+                        () => showPageRef(pageDocId, page));
                 } else {
                     frag.appendChild(document.createTextNode(m[0]));
                 }
@@ -1591,18 +1596,13 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
             const docId = (m[1] ? docIdByName(m[1]) : '')
                 || (nodeDocMap && (nodeDocMap[rawId] || nodeDocMap[bareId] || nodeDocMap[paddedId]))
                 || fallbackDocId || '';
-            const key = docId + '::' + paddedId;
-            if (!numbering.has(key)) numbering.set(key, numbering.size + 1);
-            const span = document.createElement('span');
-            span.className = 'cite-link cite-num';
-            span.textContent = numbering.get(key);
-            span.title = (m[1] ? m[1].trim() + ' · ' : '') + 'node_' + paddedId
-                + (pageInfo ? ' · ' + pageInfo : '') + ' — voir la source';
             // Jump to the precise page cited, not just the node's first page.
             const pageMatch = pageInfo.match(/\d+/);
             const citedPage = pageMatch ? parseInt(pageMatch[0], 10) : null;
-            span.addEventListener('click', (e) => { e.stopPropagation(); showNodePreview(paddedId, docId, citedPage); });
-            frag.appendChild(span);
+            chip(pageInfo ? pageLabel(pageInfo) : 'source',
+                (m[1] ? m[1].trim() + ' · ' : '') + 'section « node_' + paddedId + ' »'
+                    + (pageInfo ? ' · ' + pageInfo : '') + ' — voir la source',
+                () => showNodePreview(paddedId, docId, citedPage));
         }
         if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
         textNode.parentNode.replaceChild(frag, textNode);

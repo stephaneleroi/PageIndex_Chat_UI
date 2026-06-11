@@ -798,14 +798,15 @@ body {
     transition: background 0.15s;
 }
 .cite-link:hover { background: var(--accent-bg); border-radius: 3px; }
-/* Numbered citation badge [1] (chat.pageindex.ai style) */
+/* Citation chip ("p. 5", "p. 5-6") — uniform for every citation form */
 .cite-num {
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 17px; height: 17px; padding: 0 4px; margin: 0 1px;
+    min-width: 17px; height: 17px; padding: 0 6px; margin: 0 2px;
     font-size: 11px; line-height: 1; font-weight: 600;
     background: var(--accent-bg); color: var(--primary);
-    border: none; border-radius: 6px;
+    border: none; border-radius: 9px;
     vertical-align: text-top;
+    white-space: nowrap;
 }
 .cite-num:hover { background: var(--primary); color: white; }
 /* Page-only reference "(pages 5-6)" — reads as a link, opens the viewer */
