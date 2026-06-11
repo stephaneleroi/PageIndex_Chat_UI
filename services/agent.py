@@ -713,7 +713,6 @@ Output JSON only:
             # as a SEPARATE assistant message (continuing the conversation
             # rather than overwriting the low-score draft).
             gathered_cutoff = len(gathered)
-            nodes_cutoff = len(all_nodes)
 
             missing = reflection.get("missing_info", [])
             if missing:
