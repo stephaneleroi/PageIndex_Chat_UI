@@ -46,7 +46,9 @@ GROUNDING_INSTRUCTION_SINGLE = (
     "Grounding rules (MUST follow):\n"
     "1. Ground every concrete claim in the Context. Cite the source inline as "
     "`(node_<id>, page N)`, always using the REAL node id verbatim (e.g. `(node_0007, page 3)`) "
-    "so it can be linked. Preserve original numbers and units verbatim.\n"
+    "so it can be linked. Use plain ASCII parentheses `( )` — NEVER `【】` or other brackets — "
+    "and never a placeholder like `source` in place of the node id. "
+    "Preserve original numbers and units verbatim.\n"
     "2. Node text in the Context is wrapped in `<page_N>…</page_N>` markers: take the page "
     "number of each claim from its enclosing marker — NEVER guess a page. Cite the specific "
     "page for EACH claim or paragraph (not just once per section), and never echo the "
@@ -60,7 +62,9 @@ GROUNDING_INSTRUCTION_KB = (
     "1. Ground every concrete claim in the Context. Cite the source inline as "
     "`(doc: <filename>, node_<id>, page N)`, always using the REAL node id verbatim "
     "(e.g. `(doc: rapport.pdf, node_0007, page 3)`) so the reader knows WHICH document each claim "
-    "came from and the citation can be linked. Preserve original numbers and units verbatim.\n"
+    "came from and the citation can be linked. Use plain ASCII parentheses `( )` — NEVER `【】` or "
+    "other brackets — and never a placeholder like `source` in place of the node id. "
+    "Preserve original numbers and units verbatim.\n"
     "2. Node text in the Context is wrapped in `<page_N>…</page_N>` markers: take the page "
     "number of each claim from its enclosing marker — NEVER guess a page. Cite the specific "
     "page for EACH claim or paragraph (not just once per section), and never echo the "
@@ -1115,7 +1119,7 @@ Output JSON only:
             context_section = (
                 f"\nAnalysis results from the reasoning process "
                 f"(IMPORTANT — use these findings as primary reference):\n"
-                f"{gathered_context[:12000]}\n"
+                f"{gathered_context[:24000]}\n"
             )
 
         skill_section = skill_manager.build_skill_prompt()
@@ -1133,6 +1137,8 @@ Output JSON only:
 
         return f"""Answer the question based on the images AND the analysis context below.
 The analysis context contains findings from previous reasoning steps — treat it as authoritative.
+The investigation phase is OVER and no tools are available anymore: do NOT output tool calls,
+JSON actions, plans or "next steps" — write the final prose answer for the user, now.
 {mode_note}
 Question: {query}
 {sub_q_note}
@@ -1183,12 +1189,15 @@ Use Markdown formatting for better readability."""
 
         return f"""Answer the question based on the context below.
 The context contains your prior reasoning trace, tool analysis results (processed by AI) and raw source text grouped per document.
+The investigation phase is OVER and no tools are available anymore: do NOT output tool calls,
+JSON actions, plans or "next steps" — write the final prose answer for the user, now,
+from the context you have.
 {mode_note}
 Question: {query}
 {sub_q_note}
 {docs_section}
 Context:
-{context[:14000]}
+{context[:60000]}
 {history_context}
 {skill_note}
 

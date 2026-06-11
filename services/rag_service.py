@@ -71,18 +71,46 @@ class PageIndexService:
         """Non-streaming LLM call"""
         client = self._get_client(model_type)
         model = self._get_model_name(model_type)
-        
+
         try:
             response = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
-            if response.choices and len(response.choices) > 0:
-                return response.choices[0].message.content.strip()
-            else:
+            if not (response.choices and len(response.choices) > 0):
                 logger.error(f"LLM response has no choices")
                 return "[Error: No response from model]"
+            msg = response.choices[0].message
+            content = (msg.content or '').strip()
+            if content:
+                return content
+            # Certains modèles (gpt-oss via Ollama) répondent aux prompts de
+            # type agent par un APPEL D'OUTIL NATIF (finish_reason=tool_calls,
+            # content vide) au lieu du JSON texte demandé. On le re-sérialise
+            # au format attendu par le planificateur ReAct.
+            tool_calls = getattr(msg, 'tool_calls', None)
+            if tool_calls:
+                try:
+                    fn = tool_calls[0].function
+                    # Le modèle préfixe parfois le nom ("functions.tree_search",
+                    # "tool_list_documents") — on normalise vers le registre.
+                    name = (fn.name or '').split('.')[-1]
+                    if name.startswith('tool_'):
+                        name = name[5:]
+                    return json.dumps({
+                        "thought": (getattr(msg, 'reasoning', '') or '').strip()[:300],
+                        "action": {"tool": name,
+                                   "input": json.loads(fn.arguments or '{}')},
+                    }, ensure_ascii=False)
+                except Exception as e:
+                    logger.warning(f"Native tool_call conversion failed: {e}")
+            # Dernier recours : le canal de raisonnement, mieux que du vide.
+            reasoning = (getattr(msg, 'reasoning', '') or '').strip()
+            if reasoning:
+                logger.warning("LLM returned empty content; falling back to reasoning channel")
+                return reasoning
+            return "[Error: empty response from model]"
         except Exception as e:
             logger.error(f"LLM call error: {e}")
             return f"[Error: {str(e)}]"

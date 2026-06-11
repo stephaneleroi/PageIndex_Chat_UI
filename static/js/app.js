@@ -1132,7 +1132,13 @@ async function sendChatMessage(page) {
 
     const text = (ui.input?.value || '').trim();
     if (!text || State.isStreaming) return;
+    // Re-entrancy lock: isStreaming is only set once the query fires, but the
+    // lazy session creation below awaits the network — a second Enter (or key
+    // auto-repeat) during that window used to launch the SAME question twice.
+    if (State._sending) return;
+    State._sending = true;
 
+    try {
     // Ensure a session exists (lazy-create)
     let sessionId;
     if (page === 'doc-chat') {
@@ -1172,6 +1178,9 @@ async function sendChatMessage(page) {
 
     ui.input.value = '';
     sendChatQuery(page, sessionId, text, { appendUserBubble: true });
+    } finally {
+        State._sending = false;
+    }
 }
 
 /**
@@ -1498,7 +1507,7 @@ function buildNodeDocMap(nodes, fallbackDocId) {
 //   (page 12) / (pages 5-6) seul            (nœud déduit de la page au clic)
 // Walks text nodes so Markdown/HTML/KaTeX structure is preserved; skips code,
 // links, math and tags we've already produced.
-const CITE_RE = /node_[A-Za-z0-9_.\-]+|\(\s*doc\s*:|\(\s*(?:pages?|p\.)\s*\d/i;
+const CITE_RE = /node_[A-Za-z0-9_.\-]+|[(【]\s*doc\s*:|[(【]\s*(?:pages?|p\.)\s*\d/i;
 function linkifyCitations(container, nodeDocMap, fallbackDocId) {
     if (!container) return;
     const SKIP = new Set(['CODE', 'PRE', 'A', 'BUTTON']);
@@ -1549,13 +1558,15 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
         // 6:   node_<id> nu
         // 7:   (page N) / (pages N-M) seul
         // Ids must end on an alphanumeric so a sentence-final "node_0001." keeps
-        // its period as prose text.
+        // its period as prose text. Some models write 【】 instead of ( ), or a
+        // "source" placeholder instead of the node id — tolerated.
         const ID = 'node_[A-Za-z0-9_.\\-]*[A-Za-z0-9]';
+        const OPEN = '[(【]', CLOSE = '[)】]', NOTCLOSE = '[^)】]';
         const re = new RegExp(
-            '\\(\\s*doc\\s*:\\s*([^,()]+?)\\s*,\\s*(' + ID + '|(?:node[_\\s]*)?\\d{1,4})\\s*(?:,\\s*((?:pages?|p\\.)[^)]*?))?\\s*\\)'
-            + '|\\(\\s*(' + ID + ')\\s*(?:,\\s*((?:pages?|p\\.)[^)]*?))?\\s*\\)'
+            OPEN + '\\s*doc\\s*:\\s*([^,()【】]+?)\\s*,\\s*(' + ID + '|(?:node[_\\s]*)?\\d{1,4}|source)\\s*(?:,\\s*((?:pages?|p\\.)' + NOTCLOSE + '*?))?\\s*' + CLOSE
+            + '|' + OPEN + '\\s*(' + ID + ')\\s*(?:,\\s*((?:pages?|p\\.)' + NOTCLOSE + '*?))?\\s*' + CLOSE
             + '|(' + ID + ')'
-            + '|\\(\\s*((?:pages?|p\\.)\\s*\\d+(?:\\s*[-–‑—]\\s*\\d+)?)\\s*\\)',
+            + '|' + OPEN + '\\s*((?:pages?|p\\.)\\s*\\d+(?:\\s*[-–‑—]\\s*\\d+)?)\\s*' + CLOSE,
             'gi');
         const frag = document.createDocumentFragment();
         let last = 0, m;
@@ -1599,10 +1610,19 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
             // Jump to the precise page cited, not just the node's first page.
             const pageMatch = pageInfo.match(/\d+/);
             const citedPage = pageMatch ? parseInt(pageMatch[0], 10) : null;
+            // Placeholder id ("source") → no node to highlight; resolve the
+            // owning node from the page instead, like a page-only citation.
+            const isRealNode = /\d/.test(paddedId);
+            const onClick = isRealNode
+                ? () => showNodePreview(paddedId, docId, citedPage)
+                : (citedPage && docId
+                    ? () => showPageRef(docId, citedPage)
+                    : () => docId && showDocPreview(docId));
             chip(pageInfo ? pageLabel(pageInfo) : 'source',
-                (m[1] ? m[1].trim() + ' · ' : '') + 'section « node_' + paddedId + ' »'
+                (m[1] ? m[1].trim() + ' · ' : '')
+                    + (isRealNode ? 'section « node_' + paddedId + ' »' : 'document')
                     + (pageInfo ? ' · ' + pageInfo : '') + ' — voir la source',
-                () => showNodePreview(paddedId, docId, citedPage));
+                onClick);
         }
         if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
         textNode.parentNode.replaceChild(frag, textNode);
