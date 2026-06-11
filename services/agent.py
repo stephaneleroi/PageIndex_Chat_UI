@@ -88,11 +88,18 @@ class DocumentAgent:
         self._register_tools()
 
     def _register_tools(self):
+        # Périmètre volontairement restreint aux outils canoniques PageIndex
+        # (cookbook + examples officiels) : le retrieval se fait par
+        # raisonnement sur l'arbre, puis lecture des nœuds — rien d'autre.
+        # keyword_search (recherche littérale) et summarize_nodes (résumé
+        # intermédiaire) sont conservés dans le code mais NON enregistrés :
+        # si l'arbre ne permet pas de trouver, c'est l'arbre qu'il faut
+        # améliorer, pas le paradigme qu'il faut contourner.
         self.registry.register(TreeSearchTool(self.pageindex))
         self.registry.register(NodeReaderTool())
-        self.registry.register(KeywordSearchTool())
+        # self.registry.register(KeywordSearchTool())          # hors paradigme
         self.registry.register(PageViewerTool(self.pageindex))
-        self.registry.register(SummarizerTool(self.pageindex))
+        # self.registry.register(SummarizerTool(self.pageindex))  # hors paradigme
         self.registry.register(ListDocumentsTool())
         self.registry.register(ReadTocTool())
         self.registry.register(CrossSearchTool(self.pageindex))

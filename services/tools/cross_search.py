@@ -12,6 +12,10 @@ from .base import BaseTool
 
 logger = logging.getLogger(__name__)
 
+# Recherche littérale de secours quand tree_search ne trouve rien.
+# Désactivée : on reste sur le retrieval par raisonnement pur (PageIndex).
+LITERAL_FALLBACK = False
+
 
 class CrossSearchTool(BaseTool):
     name = "cross_search"
@@ -48,11 +52,11 @@ class CrossSearchTool(BaseTool):
             return {"doc_id": doc_id, "filename": filename, "nodes": [], "error": str(e)}
 
         node_list = result.get("node_list", []) or []
-        if not node_list:
-            # Repli littéral : tree_search raisonne sur titres + résumés, qui
-            # ne contiennent pas tout (ex. la signature d'une note). On balaie
-            # donc le texte brut des nœuds, requête entière puis mots
-            # significatifs (noms propres…).
+        if not node_list and LITERAL_FALLBACK:
+            # Repli littéral (DÉSACTIVÉ — hors paradigme PageIndex, conservé
+            # à titre de référence) : balayage du texte brut des nœuds quand
+            # le raisonnement sur l'arbre ne trouve rien. Le bon correctif
+            # est d'enrichir les résumés de nœuds, pas de contourner l'arbre.
             q = query.lower()
             words = [w for w in re.split(r"\W+", q) if len(w) >= 4]
             for nid, info in node_map.items():

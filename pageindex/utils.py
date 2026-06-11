@@ -606,7 +606,15 @@ def add_node_text_with_labels(node, pdf_pages):
 
 
 async def generate_node_summary(node, model=None):
+    # These summaries are the retrieval index: a reasoning LLM picks nodes by
+    # reading them. They must therefore capture how a human would DESIGNATE
+    # this part (its identity), not only what it talks about — e.g. a request
+    # like "the note written by Mr X to judge Y" can only be matched if the
+    # summary names the author, recipient, date and document type.
     prompt = f"""You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
+
+    Start the description by identifying the part itself whenever the text allows it: what kind of piece it is (letter, report, note, court order, form, chapter...), who wrote or signed it, to whom it is addressed, and its date. Then summarize the main points covered. Mention the key names, places and dates that appear.
+
     Partial Document Text: {node['text']}
 
     Write the description in the same language as the document text (e.g. French for a French document).
