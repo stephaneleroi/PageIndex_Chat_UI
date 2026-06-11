@@ -115,8 +115,25 @@ explicite (boutons Réessayer / Supprimer).
    de raisonnement + le texte source balisé (plafond 60 000 caractères) +
    règles de citation `(node_<id>, page N)` ; enquête déclarée close (le
    rédacteur ne doit jamais « continuer » la boucle d'outils).
-4. **Auto-évaluation** (profil rapide) : score /10 ; si < 6 → **retry** (boucle
-   complémentaire + réécriture, sources complètes conservées).
+4. **Auto-évaluation** (« réflexion », profil rapide) — c'est l'encart
+   « Auto-vérification n/10 » de l'IHM :
+   - *Déclenchement* : automatique après chaque réponse, **sauf** pour les
+     tours triviaux (l'agent a répondu sans appeler d'outil de contenu) où
+     elle est sautée.
+   - *Mécanique* (`DocumentAgent.reflect`) : un appel LLM juge la réponse
+     **contre le même dossier de pièces que le rédacteur** (le contexte
+     complet, pas un extrait) sur 4 critères : répond-elle à la question,
+     est-elle étayée par le contexte, contradictions, manques. Sortie JSON
+     `{score, issues, missing_info, action}`.
+   - *Décision* : si `action = retry` **et** `score < 6`
+     (`REFLECT_ACCEPT_THRESHOLD`) → **nouvelle tentative** : une boucle
+     d'outils complémentaire ciblée sur `missing_info`, puis réécriture
+     complète. Le brouillon reste affiché, grisé « Révisée après réflexion » ;
+     la version finale le remplace comme réponse de référence (au plus
+     `MAX_RETRY = 1` cycle).
+   - *Pendant le retry* : l'IHM affiche « Recherche complémentaire en
+     cours… » ; la durée dépend du modèle de rédaction (la réponse est
+     écrite deux fois).
 5. Persistance dans la session (`models/session.py`, `results/_sessions/`).
 
 ## Citations & visionneuse (IHM)

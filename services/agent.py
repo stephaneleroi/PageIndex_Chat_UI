@@ -391,7 +391,7 @@ Question: {query}
 {vision_note}
 {docs_section}
 Context used (tool observations):
-{context_summary[:6000]}
+{context_summary[:30000]}
 
 Generated answer:
 {answer[:3000]}
@@ -703,9 +703,11 @@ Output JSON only:
         if not gathered:
             return
 
-        context_summary = "\n".join(
-            f"[{g['tool']}] {g['observation'][:600]}" for g in gathered
-        )
+        # Judge the answer against the SAME evidence the writer received —
+        # not 600-char observation previews. Those previews made the judge
+        # flag legitimate content as "absent from the extract" (e.g. facts
+        # from the end of a node) and trigger pointless retries.
+        context_summary = answer_context
         reflection = await self.reflect(
             query, full_answer, context_summary, model_type, is_vision,
             docs_overview=context_overview,

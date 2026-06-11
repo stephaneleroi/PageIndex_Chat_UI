@@ -1784,6 +1784,11 @@ function onAgentDecompose(d) {
 
 function onAgentReflect(d) {
     const msgs = activeChatUI()?.messages; if (!msgs) return;
+    // The draft answer is complete at reflection time — make its citations
+    // clickable right away instead of waiting for the (possibly long) retry
+    // phase to finish the whole turn.
+    const rc = msgs.querySelector('#responseContent');
+    if (rc) linkifyCitations(rc, buildNodeDocMap(State.streamingNodes, State.docChat.docId), State.docChat.docId);
     const box = document.createElement('div');
     box.className = 'reflect-box';
     const s = d.score || 0;

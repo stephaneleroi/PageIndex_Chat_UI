@@ -68,9 +68,15 @@ class NodeReaderTool(BaseTool):
             results.append(f"- {nid} ({title}), {len(text)} chars: {preview}")
             found_nodes.append(nid)
 
+        # Make it explicit to the planner that only the PREVIEW is shown here
+        # while the COMPLETE text is forwarded to the final answer — otherwise
+        # it mistakes the preview for a truncated read and wastes steps
+        # re-reading the same node through other tools.
         summary = (
             f"[doc={doc_id}] Read {len(found_nodes)}/{len(ids)} nodes, "
-            f"{total_chars} total chars:\n" + "\n".join(results)
+            f"{total_chars} total chars. The COMPLETE text of these nodes is "
+            f"already available for the final answer — no need to re-read them; "
+            f"previews below are shortened for display only:\n" + "\n".join(results)
         )
 
         all_texts = []
