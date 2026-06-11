@@ -1563,7 +1563,7 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
                     span.className = 'cite-link cite-page';
                     span.textContent = m[7];
                     span.title = 'Voir cette page dans le document';
-                    span.addEventListener('click', (e) => { e.stopPropagation(); showDocPreview(pageDocId, page); });
+                    span.addEventListener('click', (e) => { e.stopPropagation(); showPageRef(pageDocId, page); });
                     frag.appendChild(document.createTextNode('('));
                     frag.appendChild(span);
                     frag.appendChild(document.createTextNode(')'));
@@ -2153,13 +2153,40 @@ async function showNodePreview(nodeId, docId, focusPage = null) {
 }
 
 // Browse the whole document — same side panel, no active node. Optionally
-// lands on a given page (used by "(pages 5-6)" citations in answers).
+// lands on a given page (library "Aperçu" button).
 async function showDocPreview(docId, focusPage = null) {
     if (!(await ensurePreviewData(docId))) {
         showNotification('Aperçu indisponible pour ce document', 'error');
         return;
     }
     showPagePreviewModal(docId, null, { start_index: 1 }, State.allPagesCache[docId], false, focusPage);
+}
+
+// Page-only citation ("(pages 5-6)" without a node id): infer the owning node
+// from the node_map page ranges so the viewer highlights it like a full
+// citation. On boundary pages shared by two sections, prefer the one that
+// STARTS on the cited page (its content dominates it); if still ambiguous,
+// fall back to plain browsing without highlight.
+async function showPageRef(docId, page) {
+    if (!(await ensurePreviewData(docId))) {
+        showNotification('Aperçu indisponible pour ce document', 'error');
+        return;
+    }
+    const map = State.nodeMapCache[docId] || {};
+    let owners = Object.keys(map).filter(nid => {
+        const s = map[nid].start_index || 0;
+        const e = map[nid].end_index || s;
+        return page >= s && page <= e;
+    });
+    if (owners.length > 1) {
+        const starting = owners.filter(nid => map[nid].start_index === page);
+        if (starting.length === 1) owners = starting;
+    }
+    if (owners.length === 1) {
+        showPagePreviewModal(docId, owners[0], map[owners[0]], State.allPagesCache[docId], true, page);
+    } else {
+        showPagePreviewModal(docId, null, { start_index: 1 }, State.allPagesCache[docId], false, page);
+    }
 }
 
 // PageIndex tree (table of contents) viewer, fed by /api/documents/<id>/tree.
