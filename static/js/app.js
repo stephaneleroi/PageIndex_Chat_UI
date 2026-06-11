@@ -1489,12 +1489,16 @@ function buildNodeDocMap(nodes, fallbackDocId) {
     return map;
 }
 
-// Turn inline citations the model wrote as plain text (e.g. "(node_0007, page 3)")
-// into numbered badges [1], [2]… (chat.pageindex.ai style) that open the source
-// panel scrolled to — and highlighting — that node. The same node always gets the
-// same number within one message. Walks text nodes so Markdown/HTML/KaTeX structure
-// is preserved; skips code, links, math and tags we've already produced.
-const CITE_RE = /node_[A-Za-z0-9_.\-]+/;
+// Turn inline citations the model wrote as plain text into clickable elements:
+//   (node_0007, page 3)                    → badge numéroté [1]
+//   (doc: rapport.pdf, node_0007, page 3)  → badge numéroté (mode multi-docs ;
+//       tolère un id nu : "(doc: rapport.pdf, 1, page 5)")
+//   node_0007 seul                         → badge numéroté
+//   (page 12) / (pages 5-6) seul           → lien de page ouvrant la visionneuse
+// The same node always gets the same number within one message. Walks text nodes
+// so Markdown/HTML/KaTeX structure is preserved; skips code, links, math and tags
+// we've already produced.
+const CITE_RE = /node_[A-Za-z0-9_.\-]+|\(\s*doc\s*:|\(\s*(?:pages?|p\.)\s*\d/i;
 function linkifyCitations(container, nodeDocMap, fallbackDocId) {
     if (!container) return;
     const SKIP = new Set(['CODE', 'PRE', 'A', 'BUTTON']);
@@ -1515,33 +1519,80 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
     while ((t = walker.nextNode())) targets.push(t);
 
     const numbering = new Map();   // "docId::nodeId" -> citation number (per message)
+
+    // Resolve a doc id from the filename written in a "(doc: …)" citation.
+    const docIdByName = (name) => {
+        const n = (name || '').trim().toLowerCase();
+        const hit = (State.documents || []).find(d => (d.filename || '').toLowerCase() === n);
+        return hit ? hit.doc_id : '';
+    };
+    // Page-only references ("(pages 5-6)") can only link when the target
+    // document is unambiguous: explicit fallback, or a single doc in [NODES].
+    let pageDocId = fallbackDocId || '';
+    if (!pageDocId) {
+        const ids = [...new Set(Object.values(nodeDocMap || {}).filter(Boolean))];
+        if (ids.length === 1) pageDocId = ids[0];
+    }
+
     for (const textNode of targets) {
         const s = textNode.nodeValue;
-        // Branch 1 swallows a whole parenthetical "(node_0007, page 3)" so the
-        // page mention moves into the badge tooltip; branch 2 catches bare ids.
-        const re = /\(\s*(node_[A-Za-z0-9_.\-]+)\s*(?:,\s*((?:pages?|p\.)[^)]*?))?\s*\)|(node_[A-Za-z0-9_.\-]+)/g;
+        // 1-3: (doc: <fichier>, [node_]<id>[, page N]) — kb mode, id nu toléré
+        // 4-5: (node_<id>[, page N])
+        // 6:   node_<id> nu
+        // 7:   (page N) / (pages N-M) seul
+        // Ids must end on an alphanumeric so a sentence-final "node_0001." keeps
+        // its period as prose text.
+        const ID = 'node_[A-Za-z0-9_.\\-]*[A-Za-z0-9]';
+        const re = new RegExp(
+            '\\(\\s*doc\\s*:\\s*([^,()]+?)\\s*,\\s*(' + ID + '|(?:node[_\\s]*)?\\d{1,4})\\s*(?:,\\s*((?:pages?|p\\.)[^)]*?))?\\s*\\)'
+            + '|\\(\\s*(' + ID + ')\\s*(?:,\\s*((?:pages?|p\\.)[^)]*?))?\\s*\\)'
+            + '|(' + ID + ')'
+            + '|\\(\\s*((?:pages?|p\\.)\\s*\\d+(?:\\s*[-–‑—]\\s*\\d+)?)\\s*\\)',
+            'gi');
         const frag = document.createDocumentFragment();
         let last = 0, m;
         while ((m = re.exec(s))) {
-            const nodeId = m[1] || m[3];
-            const pageInfo = (m[2] || '').trim();
             if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
-            // [NODES] refs use bare ids ("0004") while the model writes
-            // "node_0004" — try both when resolving the source document.
-            const bareId = nodeId.replace(/^node_/, '');
-            const docId = (nodeDocMap && (nodeDocMap[nodeId] || nodeDocMap[bareId])) || fallbackDocId || '';
-            const key = docId + '::' + bareId;
+            last = m.index + m[0].length;
+
+            if (m[7]) {
+                // Page-only reference → link straight to that page in the viewer.
+                if (pageDocId) {
+                    const page = parseInt(m[7].match(/\d+/)[0], 10);
+                    const span = document.createElement('span');
+                    span.className = 'cite-link cite-page';
+                    span.textContent = m[7];
+                    span.title = 'Voir cette page dans le document';
+                    span.addEventListener('click', (e) => { e.stopPropagation(); showDocPreview(pageDocId, page); });
+                    frag.appendChild(document.createTextNode('('));
+                    frag.appendChild(span);
+                    frag.appendChild(document.createTextNode(')'));
+                } else {
+                    frag.appendChild(document.createTextNode(m[0]));
+                }
+                continue;
+            }
+
+            const rawId = m[2] || m[4] || m[6];
+            const pageInfo = (m[3] || m[5] || '').trim();
+            // Normalise "node_0004" / "node 4" / "4" → key used by [NODES] ("0004").
+            const bareId = rawId.replace(/^node[_\s]*/i, '');
+            const paddedId = /^\d+$/.test(bareId) ? bareId.padStart(4, '0') : bareId;
+            const docId = (m[1] ? docIdByName(m[1]) : '')
+                || (nodeDocMap && (nodeDocMap[rawId] || nodeDocMap[bareId] || nodeDocMap[paddedId]))
+                || fallbackDocId || '';
+            const key = docId + '::' + paddedId;
             if (!numbering.has(key)) numbering.set(key, numbering.size + 1);
             const span = document.createElement('span');
             span.className = 'cite-link cite-num';
             span.textContent = numbering.get(key);
-            span.title = nodeId + (pageInfo ? ' · ' + pageInfo : '') + ' — voir la source';
+            span.title = (m[1] ? m[1].trim() + ' · ' : '') + 'node_' + paddedId
+                + (pageInfo ? ' · ' + pageInfo : '') + ' — voir la source';
             // Jump to the precise page cited, not just the node's first page.
             const pageMatch = pageInfo.match(/\d+/);
             const citedPage = pageMatch ? parseInt(pageMatch[0], 10) : null;
-            span.addEventListener('click', (e) => { e.stopPropagation(); showNodePreview(nodeId, docId, citedPage); });
+            span.addEventListener('click', (e) => { e.stopPropagation(); showNodePreview(paddedId, docId, citedPage); });
             frag.appendChild(span);
-            last = m.index + m[0].length;
         }
         if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
         textNode.parentNode.replaceChild(frag, textNode);
@@ -2088,24 +2139,27 @@ async function showNodePreview(nodeId, docId, focusPage = null) {
     if (!docId) docId = State.docChat.docId;
     if (!docId) return;
     if (!(await ensurePreviewData(docId))) return;
-    // The model cites "node_0004" but node_map / highlight keys are "0004":
-    // resolve to whichever form the map actually uses.
+    // The model cites "node_0004" (or even a bare "4") but node_map / highlight
+    // keys are "0004": resolve to whichever form the map actually uses.
     const map = State.nodeMapCache[docId] || {};
-    if (!(nodeId in map) && nodeId.startsWith('node_') && nodeId.slice(5) in map) {
-        nodeId = nodeId.slice(5);
+    if (!(nodeId in map)) {
+        const bare = nodeId.replace(/^node[_\s]*/i, '');
+        if (bare in map) nodeId = bare;
+        else if (/^\d+$/.test(bare) && bare.padStart(4, '0') in map) nodeId = bare.padStart(4, '0');
     }
     const info = map[nodeId];
     if (!info) { showNotification('Informations du nœud introuvables', 'error'); return; }
     showPagePreviewModal(docId, nodeId, info, State.allPagesCache[docId], true, focusPage);
 }
 
-// Browse the whole document from the library — same side panel, no active node.
-async function showDocPreview(docId) {
+// Browse the whole document — same side panel, no active node. Optionally
+// lands on a given page (used by "(pages 5-6)" citations in answers).
+async function showDocPreview(docId, focusPage = null) {
     if (!(await ensurePreviewData(docId))) {
         showNotification('Aperçu indisponible pour ce document', 'error');
         return;
     }
-    showPagePreviewModal(docId, null, { start_index: 1 }, State.allPagesCache[docId], false);
+    showPagePreviewModal(docId, null, { start_index: 1 }, State.allPagesCache[docId], false, focusPage);
 }
 
 // PageIndex tree (table of contents) viewer, fed by /api/documents/<id>/tree.

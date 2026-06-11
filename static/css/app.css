@@ -808,6 +808,11 @@ body {
     vertical-align: text-top;
 }
 .cite-num:hover { background: var(--primary); color: white; }
+/* Page-only reference "(pages 5-6)" — reads as a link, opens the viewer */
+.cite-page {
+    font-weight: 500;
+    border-bottom: 1px dotted var(--primary);
+}
 
 /* ============================================
  * DOCUMENT TREE (PageIndex structure) MODAL
