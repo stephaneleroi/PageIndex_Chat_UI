@@ -321,6 +321,11 @@ Accessible documents overview:
 {mode_guide}
 Based on the question and what you know so far, decide the next step.
 If you already have enough information, choose "final_answer".
+NEVER conclude that something is absent from the documents after a single empty
+search: tree_search/cross_search reason over titles and summaries, which omit
+details (signatures, names, figures). Before answering "not found", you MUST
+try `keyword_search` (literal text match) with the key proper nouns or terms,
+and `read_node` on the most plausible sections.
 {skill_section}
 
 {LANG_INSTRUCTION}

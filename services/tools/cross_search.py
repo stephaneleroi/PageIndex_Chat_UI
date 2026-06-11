@@ -7,6 +7,7 @@ a set of candidate documents without calling tree_search N times manually.
 
 import asyncio
 import logging
+import re
 from .base import BaseTool
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,21 @@ class CrossSearchTool(BaseTool):
             return {"doc_id": doc_id, "filename": filename, "nodes": [], "error": str(e)}
 
         node_list = result.get("node_list", []) or []
+        if not node_list:
+            # Repli littéral : tree_search raisonne sur titres + résumés, qui
+            # ne contiennent pas tout (ex. la signature d'une note). On balaie
+            # donc le texte brut des nœuds, requête entière puis mots
+            # significatifs (noms propres…).
+            q = query.lower()
+            words = [w for w in re.split(r"\W+", q) if len(w) >= 4]
+            for nid, info in node_map.items():
+                node = info.get("node", info)
+                if not isinstance(node, dict):
+                    continue
+                hay = ((node.get("text") or "") + " " + (node.get("title") or "")).lower()
+                if q in hay or any(w in hay for w in words):
+                    node_list.append(nid)
+            node_list = node_list[:5]
         details = []
         for nid in node_list:
             info = node_map.get(nid, {})

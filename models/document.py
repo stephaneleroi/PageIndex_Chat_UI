@@ -181,17 +181,31 @@ class DocumentStore:
                     print(f"Skipping document with missing PDF: {dir_name}")
                     continue
 
+                status = data.get('status', 'ready')
+                error_message = data.get('error_message', '')
+                stage = data.get('stage', '') if status != 'ready' else ''
+                stage_message = data.get('stage_message', '') if status != 'ready' else ''
+                # An indexing run cannot survive a server restart (its thread
+                # died with the old process) — recover such documents as
+                # failed so the UI offers Retry/Delete instead of a card
+                # stuck on "indexation en cours" forever.
+                if status in ('pending', 'indexing', 'indexed'):
+                    status = 'error'
+                    stage = 'error'
+                    error_message = 'Indexation interrompue par un redémarrage du serveur'
+                    stage_message = error_message
+
                 doc = Document(
                     doc_id=doc_id,
                     filename=filename,
                     file_path=pdf_path,
                     result_dir_name=result_dir_name,
-                    status=data.get('status', 'ready'),
+                    status=status,
                     created_at=data.get('created_at', os.path.getctime(doc_dir)),
                     page_count=data.get('page_count', 0),
-                    error_message=data.get('error_message', ''),
-                    stage=data.get('stage', '') if data.get('status') != 'ready' else '',
-                    stage_message=data.get('stage_message', '') if data.get('status') != 'ready' else '',
+                    error_message=error_message,
+                    stage=stage,
+                    stage_message=stage_message,
                     stage_started_at=data.get('stage_started_at', 0.0),
                 )
                 self.documents[doc.doc_id] = doc
