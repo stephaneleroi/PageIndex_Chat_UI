@@ -486,6 +486,159 @@ Output JSON only:
     # ============================================================ #
     #  Main entry: run_session (handles both single and kb modes)
     # ============================================================ #
+    # ============================================================ #
+    #  Voie simple mono-document — pipeline canonique PageIndex
+    #  (cookbook/pageindex_RAG_simple.ipynb)
+    # ============================================================ #
+    SIMPLE_CONTEXT_BUDGET = 60000   # caractères de texte source pour le rédacteur
+    SIMPLE_MAX_NODES = 10
+
+    def _build_simple_answer_prompt(self, query, context, history_context, grounding):
+        return f"""Answer the question based on the context below — the selected sections of the
+document. Their text is wrapped in <page_N>…</page_N> markers.
+
+Question: {query}
+
+Context:
+{context}
+{history_context}
+
+{LANG_INSTRUCTION}
+
+{grounding}
+
+Provide a clear, comprehensive answer in French.
+Use Markdown formatting for better readability."""
+
+    async def _run_single_simple(self, session_id, query, model_type,
+                                 use_memory, tool_context, context_overview):
+        """UNE recherche par raisonnement sur l'arbre → lecture des nœuds
+        retenus → rédaction. Pas de décomposition, pas de boucle ReAct.
+        L'auto-évaluation reste comme garde-fou, avec au plus UNE expansion
+        bornée (tree_search complémentaire sur les manques signalés)."""
+        doc_id = tool_context["primary_doc_id"]
+        dctx = tool_context["docs"][doc_id]
+        tree = dctx["tree"]
+        node_map = dctx.get("node_map") or {}
+        is_vision = model_type != "text"
+
+        def _node_text(nid):
+            info = node_map.get(nid, {})
+            node = info.get("node", info)
+            return (node.get("text") or "") if isinstance(node, dict) else ""
+
+        async def _search(q, exclude):
+            res = await self.pageindex.tree_search(q, tree)
+            nl = [n for n in (res.get("node_list") or [])
+                  if n in node_map and n not in exclude][:self.SIMPLE_MAX_NODES]
+            return nl, (res.get("thinking") or "").strip()
+
+        def _assemble(nids):
+            # Each section is headed by its REAL node id — the writer must
+            # cite "(node_<id>, page N)" and can't invent ids it never saw.
+            parts, dropped, used = [], [], 0
+            for nid in nids:
+                t = _node_text(nid)
+                if not t:
+                    continue
+                if used + len(t) > self.SIMPLE_CONTEXT_BUDGET and parts:
+                    dropped.append(nid)
+                    continue
+                block = f"=== Section node_{nid} ===\n" + t[: self.SIMPLE_CONTEXT_BUDGET - used]
+                parts.append(block)
+                used += len(block)
+            return "\n\n".join(parts), dropped
+
+        # ---- 1. Recherche par raisonnement sur l'arbre ----
+        yield "[SEARCHING]\n"
+        node_list, thinking = await _search(query, set())
+        yield self._step_marker(
+            0, 0, thinking, "tree_search", {"query": query},
+            f"[doc={doc_id}] {len(node_list)} nœud(s) retenu(s) : {', '.join(node_list) or '—'}",
+        )
+
+        # ---- 2. Lecture des nœuds retenus (budget de contexte) ----
+        context, dropped = _assemble(node_list)
+        if dropped:
+            logger.info(f"simple mode: context budget reached, dropped nodes {dropped}")
+
+        refs = [f"{doc_id}::{n}" for n in node_list]
+        if refs:
+            yield f"\n[NODES]{json.dumps(refs)}\n"
+
+        # ---- 3. Rédaction ----
+        yield "[ANSWERING]\n"
+        history_context = self._build_history_context(session_id, use_memory)
+        answer_prompt = self._build_simple_answer_prompt(
+            query, context, history_context, GROUNDING_INSTRUCTION_SINGLE)
+
+        full_answer = ""
+        image_paths = self._collect_images_for_refs(refs, tool_context) if is_vision else []
+        if is_vision and image_paths:
+            vision_prompt = self._build_vision_answer_prompt(
+                query, [query], history_context, "direct",
+                gathered_context=context,
+                grounding=GROUNDING_INSTRUCTION_SINGLE,
+                mode="single", docs_overview=context_overview,
+            )
+            async for chunk in self.pageindex.call_vlm_stream(vision_prompt, image_paths, model_type):
+                full_answer += chunk
+                yield chunk
+        else:
+            async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
+                full_answer += chunk
+                yield chunk
+
+        self.sessions.add_message(session_id, Message(role="user", content=query))
+        self.sessions.add_message(session_id, Message(
+            role="assistant", content=full_answer, nodes=refs,
+            thinking=(f"Step 1 [tree_search]: {thinking}" if thinking else ""),
+        ))
+
+        # ---- 4. Auto-évaluation (garde-fou ; sautée si rien n'a été lu) ----
+        if not node_list:
+            return
+        reflection = await self.reflect(
+            query, full_answer, context, model_type, is_vision,
+            docs_overview=context_overview,
+        )
+        yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
+        if not (reflection.get("action") == "retry"
+                and reflection.get("score", 10) < REFLECT_ACCEPT_THRESHOLD):
+            return
+
+        # ---- 5. Une expansion bornée, puis réécriture (pas de boucle) ----
+        yield "[AGENT_RETRY]\n"
+        missing = "; ".join(reflection.get("missing_info") or []) or query
+        extra, thinking2 = await _search(missing, set(node_list))
+        if extra:
+            yield self._step_marker(
+                0, 1, thinking2, "tree_search", {"query": missing},
+                f"[doc={doc_id}] {len(extra)} nœud(s) complémentaire(s) : {', '.join(extra)}",
+            )
+            node_list = node_list + extra
+            context, _ = _assemble(node_list)
+            refs = [f"{doc_id}::{n}" for n in node_list]
+            yield f"\n[NODES]{json.dumps(refs)}\n"
+
+        yield "[RETRY_ANSWERING]\n"
+        issues = reflection.get("issues") or []
+        issues_note = ""
+        if issues:
+            issues_note = ("\nA first draft was judged insufficient for these reasons — fix them:\n- "
+                           + "\n- ".join(str(i) for i in issues) + "\n")
+        retry_prompt = self._build_simple_answer_prompt(
+            query, context, history_context + issues_note, GROUNDING_INSTRUCTION_SINGLE)
+        full_answer = ""
+        async for chunk in self.pageindex.call_llm_stream(retry_prompt, model_type):
+            full_answer += chunk
+            yield chunk
+        self.sessions.add_message(session_id, Message(
+            role="assistant", content=full_answer, nodes=refs,
+            thinking=(f"Step 1 [tree_search]: {thinking2}" if thinking2 else ""),
+        ))
+        self.sessions.mark_superseded_before_last(session_id, role="assistant")
+
     async def run_session(self, session_id: str, query: str,
                           model_type: str = "text",
                           use_memory: bool = True) -> AsyncGenerator[str, None]:
@@ -527,6 +680,18 @@ Output JSON only:
             tree_str = self._single_doc_tree_summary(tool_context)
             if tree_str:
                 context_overview = context_overview + "\n\nPrimary document TOC (text elided):\n" + tree_str[:6000]
+
+        # ---- Voie simple (mono-document) : pipeline canonique du cookbook
+        # PageIndex (tree_search une fois → lecture des nœuds → rédaction),
+        # sans décomposition ni boucle ReAct. La boucle d'agent reste le
+        # chemin du mode kb (multi-documents).
+        if mode == "single":
+            async for chunk in self._run_single_simple(
+                session_id, query, model_type, use_memory,
+                tool_context, context_overview,
+            ):
+                yield chunk
+            return
 
         # ---- Phase 1: Query decomposition ----
         yield "[SEARCHING]\n"

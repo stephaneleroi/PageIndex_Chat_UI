@@ -98,9 +98,28 @@ Tous ces appels LLM utilisent le profil **« rapide »** (configurable, onglet
 redémarrage du serveur, le document est récupéré en statut « erreur »
 explicite (boutons Réessayer / Supprimer).
 
-## Cycle de vie d'une question (agent — paradigme PageIndex)
+## Cycle de vie d'une question
 
-`services/agent.py`, événement Socket.IO `agent_chat` :
+`services/agent.py`, événement Socket.IO `agent_chat`. Deux voies selon le mode :
+
+### Mode mono-document : la voie simple (canonique cookbook)
+
+`_run_single_simple` reproduit `cookbook/pageindex_RAG_simple.ipynb` :
+1. **Une** recherche par raisonnement sur l'arbre (`tree_search`, profil rapide) ;
+2. lecture des nœuds retenus (≤ 10 nœuds, budget 60 000 caractères, chaque
+   section préfixée de son identifiant réel `node_<id>`) ;
+3. rédaction (profil texte) avec les règles de citation ; mode Vision : images
+   des nœuds retenus + VLM (cookbook vision) ;
+4. auto-évaluation en garde-fou : si score < 6, au plus **une** recherche
+   complémentaire ciblée sur les manques puis une réécriture — pas de boucle.
+
+Ni décomposition, ni boucle ReAct, ni planificateur : 2 à 4 appels LLM par
+question, déroulé prévisible.
+
+### Mode multi-documents (Q-R) : l'agent ReAct
+
+Justifié par les corpus type dossier de procédure (des dizaines de pièces) où
+la divulgation progressive est nécessaire :
 
 1. **Décomposition** (profil rapide) : sous-questions si nécessaire.
 2. **Boucle ReAct** (≤ 5 étapes/sous-question, profil rapide) : le
