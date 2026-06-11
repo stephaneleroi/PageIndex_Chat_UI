@@ -15,11 +15,11 @@
     <!-- Top Navigation -->
     <nav class="top-nav">
         <div class="nav-brand">
-            <div class="logo-icon"><i class="bi bi-robot"></i></div>
+            <div class="logo-icon"><i class="bi bi-journal-text"></i></div>
             <span>PageIndex Agent</span>
         </div>
         <div class="nav-tabs-wrapper">
-            <button class="nav-tab active" data-page="library"><i class="bi bi-collection"></i> Base de connaissances</button>
+            <button class="nav-tab active" data-page="library"><i class="bi bi-collection"></i> Documents</button>
             <button class="nav-tab" data-page="kb-chat"><i class="bi bi-chat-square-dots"></i> Questions-réponses</button>
         </div>
         <div class="nav-actions">
@@ -37,77 +37,6 @@
     <!-- ============================================== -->
     <div class="page page-library active" id="pageLibrary">
         <div class="library-inner">
-            <!-- Hero banner -->
-            <section class="library-hero">
-                <div class="hero-inner">
-                    <div class="hero-text">
-                        <span class="hero-badge">
-                            <i class="bi bi-stars"></i> PageIndex Agent · l'assistant documentaire qui raisonne
-                        </span>
-                        <h1 class="hero-title">
-                            Faire lire les documents au <span class="grad-word">LLM</span><br>
-                            comme un humain
-                        </h1>
-                        <p class="hero-subtitle">
-                            Système de questions-réponses Agentic RAG fondé sur le raisonnement dans une structure arborescente, sans vecteurs / sans Embedding.
-                            L'Agent recherche, lit et synthétise dans l'arbre du document grâce à un raisonnement multi-étapes et à l'appel d'outils,
-                            avec lecture approfondie d'un document et analyse comparative entre plusieurs documents.
-                        </p>
-                        <div class="hero-actions">
-                            <button class="hero-btn primary" id="heroUploadBtn">
-                                <i class="bi bi-cloud-arrow-up-fill"></i> Importer un PDF
-                            </button>
-                            <button class="hero-btn ghost" id="heroKbBtn">
-                                <i class="bi bi-chat-square-dots"></i> Accéder aux questions-réponses
-                            </button>
-                        </div>
-                    </div>
-                    <div class="hero-stats">
-                        <div class="stat-card">
-                            <div class="stat-label">Documents au total</div>
-                            <div class="stat-value" id="statTotalDocs">0</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Prêts</div>
-                            <div class="stat-value" id="statReadyDocs">0</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Pages cumulées</div>
-                            <div class="stat-value" id="statTotalPages">0<span class="unit">pages</span></div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Conversations</div>
-                            <div class="stat-value" id="statTotalSessions">0</div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Feature cards -->
-            <section class="feature-cards">
-                <div class="feature-card">
-                    <div class="feature-icon c1"><i class="bi bi-diagram-3-fill"></i></div>
-                    <div class="feature-body">
-                        <h4>Indexation structurée</h4>
-                        <p>Construction de l'arbre du document avec PageIndex : l'Agent localise le contenu par niveau de chapitre, sans perdre le contexte.</p>
-                    </div>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon c2"><i class="bi bi-cpu-fill"></i></div>
-                    <div class="feature-body">
-                        <h4>Raisonnement multi-étapes de l'Agent</h4>
-                        <p>L'Agent planifie de façon autonome ses étapes de recherche, de lecture et de synthèse, en mode texte ou vision.</p>
-                    </div>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon c3"><i class="bi bi-intersect"></i></div>
-                    <div class="feature-body">
-                        <h4>Comparaison entre documents</h4>
-                        <p>Sélectionnez plusieurs documents dans les questions-réponses : en une seule question, l'Agent agrège et cite automatiquement les sources.</p>
-                    </div>
-                </div>
-            </section>
-
             <!-- Docs section -->
             <div class="docs-section-header">
                 <h3 class="docs-section-title">

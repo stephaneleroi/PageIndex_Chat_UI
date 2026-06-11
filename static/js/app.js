@@ -461,21 +461,34 @@ function renderDocCard(d) {
             </button>`;
     }
 
+    // Cover thumbnail (page 1 render) — produced during indexing; falls back
+    // to a neutral PDF glyph while pending or if the image is missing.
+    const coverUrl = d.result_dir_name
+        ? `/api/results/${encodeURIComponent(d.result_dir_name)}/images/page_1.jpg` : '';
+    const cover = `
+        <div class="doc-card-cover">
+            ${coverUrl ? `<img src="${coverUrl}" alt="" loading="lazy"
+                 onerror="this.style.display='none'">` : ''}
+            <div class="doc-card-cover-fallback" style="z-index:-1"><i class="bi bi-file-earmark-pdf"></i></div>
+        </div>`;
+
     return `
         <div class="doc-card ${d.status === 'error' ? 'status-error' : ''}">
-            <div class="doc-card-top">
-                <div class="doc-card-icon"><i class="bi bi-file-earmark-pdf"></i></div>
-                <div class="doc-card-name">${esc(d.filename)}</div>
+            ${cover}
+            <div class="doc-card-main">
+                <div class="doc-card-top">
+                    <div class="doc-card-name">${esc(d.filename)}</div>
+                </div>
+                <div class="doc-card-meta">
+                    <span class="status-badge status-${d.status}"></span>
+                    <span>${statusLabel}</span>
+                    ${meta}
+                </div>
+                ${summary}
+                ${progressBlock}
+                ${errorMsg}
+                <div class="doc-card-footer">${footer}</div>
             </div>
-            <div class="doc-card-meta">
-                <span class="status-badge status-${d.status}"></span>
-                <span>${statusLabel}</span>
-                ${meta}
-            </div>
-            ${summary}
-            ${progressBlock}
-            ${errorMsg}
-            <div class="doc-card-footer">${footer}</div>
         </div>`;
 }
 
