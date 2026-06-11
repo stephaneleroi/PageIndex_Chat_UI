@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__)
 
+# Les indexations d'un import par lot (ex. 50 pièces d'un dossier de
+# procédure) s'exécutaient toutes en parallèle en se disputant le serveur
+# LLM local. File séquentielle : un document à la fois, les autres restent
+# « En file d'attente d'indexation… » (statut déjà affiché par l'IHM).
+from threading import Semaphore
+_INDEXING_GATE = Semaphore(1)
+
 
 # ============= Configuration Routes =============
 
@@ -90,24 +97,25 @@ def upload_document():
         from threading import Thread
         def run_indexing():
             import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                success = loop.run_until_complete(
-                    indexing_service.index_pdf(doc_id, file_path, filename)
-                )
-                if success:
-                    doc = document_store.get_document(doc_id)
-                    if doc and os.path.exists(doc.structure_path):
-                        loop.run_until_complete(
-                            rag_service.prepare_document(doc_id, file_path, doc.structure_path)
-                        )
-                        try:
-                            loop.run_until_complete(rag_service.auto_analyze_document(doc_id))
-                        except Exception as e:
-                            logger.warning(f"Auto-analysis failed (non-fatal): {e}")
-            finally:
-                loop.close()
+            with _INDEXING_GATE:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    success = loop.run_until_complete(
+                        indexing_service.index_pdf(doc_id, file_path, filename)
+                    )
+                    if success:
+                        doc = document_store.get_document(doc_id)
+                        if doc and os.path.exists(doc.structure_path):
+                            loop.run_until_complete(
+                                rag_service.prepare_document(doc_id, file_path, doc.structure_path)
+                            )
+                            try:
+                                loop.run_until_complete(rag_service.auto_analyze_document(doc_id))
+                            except Exception as e:
+                                logger.warning(f"Auto-analysis failed (non-fatal): {e}")
+                finally:
+                    loop.close()
         
         Thread(target=run_indexing).start()
         

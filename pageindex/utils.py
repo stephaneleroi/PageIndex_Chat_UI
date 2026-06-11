@@ -50,7 +50,7 @@ def ChatGPT_API_with_finish_reason(model, prompt, api_key=None, base_url=None, c
     max_retries = 10
     api_key = api_key or get_api_key()
     base_url = base_url or get_base_url()
-    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=180)
     for i in range(max_retries):
         try:
             if chat_history:
@@ -83,7 +83,7 @@ def ChatGPT_API(model, prompt, api_key=None, base_url=None, chat_history=None):
     max_retries = 10
     api_key = api_key or get_api_key()
     base_url = base_url or get_base_url()
-    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=180)
     for i in range(max_retries):
         try:
             if chat_history:
@@ -116,7 +116,7 @@ async def ChatGPT_API_async(model, prompt, api_key=None, base_url=None):
     messages = [{"role": "user", "content": prompt}]
     for i in range(max_retries):
         try:
-            async with openai.AsyncOpenAI(api_key=api_key, base_url=base_url) as client:
+            async with openai.AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=180) as client:
                 response = await client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -403,27 +403,70 @@ def add_preface_if_needed(data):
     return data
 
 
-def get_page_tokens(pdf_path, model="gpt-4o-2024-11-20", pdf_parser="PyPDF2"):
-    """Extract pages with token counts from PDF"""
+def strip_repeated_page_furniture(page_texts, min_pages=4, ratio=0.6, zone=4):
+    """Remove repeated headers/footers ("Page 3 | 14", letterheads, running
+    titles) before indexing. A line counts as furniture when its
+    digit-insensitive normalised form appears near the top or bottom of at
+    least ``ratio`` of the pages. Heuristic and dependency-free — the light
+    transposition of what layout-aware parsers (RAGFlow/DeepDoc) achieve
+    with vision models. Keeps everything outside the top/bottom zones."""
+    if len(page_texts) < min_pages:
+        return page_texts
+
+    def norm(line):
+        s = re.sub(r'\s+', ' ', line).strip().lower()
+        s = re.sub(r'\d+', '#', s)
+        return s
+
+    from collections import Counter
+    counts = Counter()
+    for text in page_texts:
+        lines = [l for l in text.split('\n') if l.strip()]
+        zone_lines = lines[:zone] + lines[-zone:]
+        seen = {norm(l) for l in zone_lines if len(norm(l)) >= 4}
+        for s in seen:
+            counts[s] += 1
+
+    threshold = max(3, int(len(page_texts) * ratio))
+    furniture = {s for s, c in counts.items() if c >= threshold}
+    if not furniture:
+        return page_texts
+
+    cleaned = []
+    for text in page_texts:
+        lines = text.split('\n')
+        nonempty_idx = [i for i, l in enumerate(lines) if l.strip()]
+        zone_idx = set(nonempty_idx[:zone] + nonempty_idx[-zone:])
+        out = [l for i, l in enumerate(lines)
+               if not (i in zone_idx and norm(l) in furniture)]
+        cleaned.append('\n'.join(out))
+    return cleaned
+
+
+def get_page_tokens(pdf_path, model="gpt-4o-2024-11-20", pdf_parser="PyMuPDF"):
+    """Extract pages with token counts from PDF.
+
+    PyMuPDF is the default extractor: PyPDF2 frequently splits words
+    ("semai ne", "nov embre") and mangles spacing ("P a g e"), which
+    pollutes node summaries and defeats title verification downstream.
+    Repeated page furniture (headers/footers) is stripped before token
+    counting so every consumer sees clean text."""
+    page_texts = []
     if pdf_parser == "PyPDF2":
         pdf_reader = PyPDF2.PdfReader(pdf_path)
-        page_list = []
         for page_num in range(len(pdf_reader.pages)):
-            page = pdf_reader.pages[page_num]
-            page_text = page.extract_text()
-            token_count = count_tokens(page_text, model)
-            page_list.append([page_text, token_count])
-        return page_list
+            page_texts.append(pdf_reader.pages[page_num].extract_text())
     else:
-        # PyMuPDF
-        doc = pymupdf.open(pdf_path)
-        page_list = []
+        # PyMuPDF — accept a file path or an in-memory BytesIO.
+        if isinstance(pdf_path, BytesIO):
+            doc = pymupdf.open(stream=pdf_path.read(), filetype="pdf")
+        else:
+            doc = pymupdf.open(pdf_path)
         for page_num in range(len(doc)):
-            page = doc[page_num]
-            page_text = page.get_text()
-            token_count = count_tokens(page_text, model)
-            page_list.append([page_text, token_count])
-        return page_list
+            page_texts.append(doc[page_num].get_text())
+
+    page_texts = strip_repeated_page_furniture(page_texts)
+    return [[text, count_tokens(text, model)] for text in page_texts]
 
 
 def get_text_of_pdf_pages(pdf_pages, start_page, end_page):
@@ -603,6 +646,44 @@ def add_node_text_with_labels(node, pdf_pages):
         for index in range(len(node)):
             add_node_text_with_labels(node[index], pdf_pages)
     return
+
+
+def split_shared_boundary_pages(structure, page_list):
+    """Découpe le texte des pages de frontière partagées entre deux nœuds.
+
+    Quand une pièce se termine au milieu d'une page et que la suivante
+    commence sur la même page, les deux nœuds contiennent chacun la page
+    ENTIÈRE : chaque pièce est contaminée par sa voisine (résumés faussés,
+    mauvaise sélection par tree_search, fuite de contenu dans les réponses).
+    On coupe le texte de la page partagée à la position du titre du nœud
+    suivant : chacun ne garde que sa part. Les plages de pages restent
+    inchangées (la visionneuse affiche bien les deux pièces sur la page).
+    Titre introuvable dans la page → on ne touche à rien (comportement
+    antérieur, jamais pire)."""
+    nodes = [n for n in structure_to_list(structure) if n.get('start_index')]
+    for a, b in zip(nodes, nodes[1:]):
+        p = a.get('end_index')
+        if not p or b.get('start_index') != p:
+            continue
+        if not a.get('text') or not b.get('text'):
+            continue
+        page_text = page_list[p - 1][0] if p - 1 < len(page_list) else ''
+        title_words = [re.escape(w) for w in (b.get('title') or '').split()[:6] if w]
+        if not page_text or not title_words:
+            continue
+        m = re.search(r'\s+'.join(title_words), page_text, re.IGNORECASE)
+        if not m or m.start() == 0:
+            continue
+        head, tail = page_text[:m.start()], page_text[m.start():]
+        block = re.compile(r'<page_%d>\n.*?\n</page_%d>\n' % (p, p), re.DOTALL)
+        a['text'] = block.sub(lambda _: f'<page_{p}>\n{head}\n</page_{p}>\n', a['text'], count=1)
+        b['text'] = block.sub(lambda _: f'<page_{p}>\n{tail}\n</page_{p}>\n', b['text'], count=1)
+        logging.info(
+            f"split_shared_boundary_pages: page {p} découpée entre "
+            f"[{a.get('node_id')}] {a.get('title', '')[:40]!r} et "
+            f"[{b.get('node_id')}] {b.get('title', '')[:40]!r}"
+        )
+    return structure
 
 
 async def generate_node_summary(node, model=None):

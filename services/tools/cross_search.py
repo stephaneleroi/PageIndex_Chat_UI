@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 # Désactivée : on reste sur le retrieval par raisonnement pur (PageIndex).
 LITERAL_FALLBACK = False
 
+# Chaque document fouillé = un appel LLM ; sur un dossier de 50 pièces, un
+# cross_search non ciblé coûterait 50 appels séquentiels sur Ollama. Au-delà
+# de ce plafond, on traite les premiers documents et on demande à l'agent de
+# cibler via list_documents + doc_ids.
+MAX_DOCS_PER_CALL = 12
+
 
 class CrossSearchTool(BaseTool):
     name = "cross_search"
@@ -23,7 +29,9 @@ class CrossSearchTool(BaseTool):
         "Search the same query across MULTIPLE documents in parallel. "
         "Returns, per document, the matching nodes (IDs + titles + summaries). "
         "Use this to locate which documents cover a topic before drilling in. "
-        "If doc_ids is omitted, all accessible documents are searched."
+        "Each searched document costs one LLM call: on large corpora, FIRST "
+        "narrow the candidates with list_documents (their summaries identify "
+        "each piece) and pass an explicit doc_ids list (max 12 per call)."
     )
     parameters_schema = {
         "query": {
@@ -100,12 +108,23 @@ class CrossSearchTool(BaseTool):
                 "nodes": [],
             }
 
+        capped_note = ""
+        if len(doc_ids) > MAX_DOCS_PER_CALL:
+            capped_note = (
+                f"\n⚠ {len(doc_ids)} documents requested but only the first "
+                f"{MAX_DOCS_PER_CALL} were searched (one LLM call each). "
+                f"Narrow the candidates with list_documents (their summaries "
+                f"identify each piece) and call cross_search again with an "
+                f"explicit doc_ids list for the remaining relevant ones."
+            )
+            doc_ids = doc_ids[:MAX_DOCS_PER_CALL]
+
         model_type = context.get("model_type", "text")
         results = await asyncio.gather(*[
             self._search_one(d, query, docs, model_type) for d in doc_ids
         ])
 
-        lines = [f"cross_search('{query}') across {len(doc_ids)} documents:"]
+        lines = [f"cross_search('{query}') across {len(doc_ids)} documents:" + capped_note]
         all_nodes = []
         per_doc_nodes = {}
         for r in results:

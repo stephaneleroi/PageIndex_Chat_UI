@@ -179,13 +179,38 @@ base personnalisée, clé factice injectée si absente.
 
 ## Modifications locales apportées à la bibliothèque `pageindex/`
 
-Le dossier `pageindex/` reste proche de l'amont, avec quatre ajustements :
-1. texte des nœuds balisé `<page_N>` (citations à la page près) ;
-2. résumés de nœuds « identitaires » (nature, auteur, destinataire, date —
+Le dossier `pageindex/` reste proche de l'amont, avec ces ajustements
+(« quality in, quality out », cf. ETUDE-RAGFLOW.md) :
+1. **extraction PyMuPDF par défaut** (PyPDF2 coupait les mots : « semai ne »,
+   « nov embre ») et **suppression des en-têtes/pieds répétés** avant
+   indexation (heuristique de lignes identiques en haut/bas de page,
+   chiffres normalisés — `strip_repeated_page_furniture`) ;
+2. texte des nœuds balisé `<page_N>` (citations à la page près) ;
+3. **découpage des pages de frontière partagées** entre deux nœuds
+   (`split_shared_boundary_pages`) : quand une pièce finit au milieu d'une
+   page où la suivante commence, chaque nœud ne garde que SA part du texte —
+   fin des contaminations croisées (résumés, sélection, réponses) ;
+4. résumés de nœuds « identitaires » (nature, auteur, destinataire, date —
    voir plus haut) et dans la langue du document, titres jamais traduits ;
-3. contournement de l'heuristique de couverture de `verify_toc` + réparation
+5. garde-fou dans la génération de structure : les pages viennent des
+   balises `<physical_index_X>` où le contenu commence réellement, jamais
+   d'une liste/sommaire interne au document (pagination souvent périmée
+   après conversion Word→PDF) ;
+6. contournement de l'heuristique de couverture de `verify_toc` + réparation
    en dernier recours (documents à long chapitre final, sommaires périmés) ;
-4. tokenizer avec repli `o200k_base` pour les noms de modèles non-OpenAI.
+7. timeout explicite de 180 s sur les clients LLM (une requête perdue se
+   relance en 3 min au lieu de bloquer 10 min) ;
+8. tokenizer avec repli `o200k_base` pour les noms de modèles non-OpenAI.
+
+## Dimensionnement multi-documents (dossiers de procédure)
+
+Validé sur un corpus simulé de 52 pièces (`tests/make_corpus_50_pieces.py`) :
+- l'inventaire des pièces transmis au planificateur est plafonné à 24 000
+  caractères (≈ 70-80 pièces avec résumés identitaires) ;
+- `cross_search` est plafonné à 12 documents par appel (un appel LLM par
+  document) avec message invitant l'agent à cibler via `list_documents` ;
+- les indexations d'un import par lot s'exécutent en **file séquentielle**
+  (un document à la fois, les autres « en file d'attente »).
 
 ## Limites connues
 

@@ -510,6 +510,8 @@ def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
     The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X. \
 
     For the physical_index, you need to extract the physical index of the start of the section from the text. Keep the <physical_index_X> format.
+    CRITICAL: the physical_index of a section is the page where its CONTENT actually starts, as shown by the <physical_index_X> tags surrounding it. If the document contains a table of contents or a list of its parts (e.g. a 'Documents:' list with announced page counts), NEVER derive page numbers from that list — locate each section where its body really begins.
+
 
     The response should be in the following format. 
         [
@@ -543,6 +545,8 @@ def generate_toc_init(part, model=None):
     The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X.
 
     For the physical_index, you need to extract the physical index of the start of the section from the text. Keep the <physical_index_X> format.
+    CRITICAL: the physical_index of a section is the page where its CONTENT actually starts, as shown by the <physical_index_X> tags surrounding it. If the document contains a table of contents or a list of its parts (e.g. a 'Documents:' list with announced page counts), NEVER derive page numbers from that list — locate each section where its body really begins.
+
 
     The response should be in the following format. 
         [
@@ -1109,6 +1113,9 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
             # Page-labeled variant (<page_N>…</page_N>) so the answering LLM
             # can cite the precise page of each claim inside a multi-page node.
             add_node_text_with_labels(structure, page_list)
+            # A node's text must contain ONLY its own piece: split the text of
+            # boundary pages shared between two consecutive nodes.
+            split_shared_boundary_pages(structure, page_list)
         if opt.if_add_node_summary == 'yes':
             if opt.if_add_node_text == 'no':
                 add_node_text(structure, page_list)

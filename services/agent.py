@@ -218,7 +218,7 @@ Analyze the user's question and decide whether it should be broken into simpler 
 Question: {query}
 
 Context overview:
-{context_overview[:4000]}
+{context_overview[:24000]}
 
 Mode: {mode_hint}
 
@@ -322,7 +322,7 @@ Output JSON only:
 Question: {query}
 
 Accessible documents overview:
-{context_overview[:4000]}
+{context_overview[:24000]}
 
 {context_so_far}
 {mode_guide}
@@ -382,7 +382,7 @@ Output JSON only:
                 "(filename / page count / doc_id). Meta-questions like “how many "
                 "documents / which documents / page counts” can be answered purely "
                 "from this block without any tool observation:\n"
-                f"{docs_overview[:3000]}\n"
+                f"{docs_overview[:24000]}\n"
             )
 
         prompt = f"""Evaluate this answer's quality.
@@ -559,8 +559,11 @@ Use Markdown formatting for better readability."""
 
         # ---- 2. Lecture des nœuds retenus (budget de contexte) ----
         context, dropped = _assemble(node_list)
-        if dropped:
-            logger.info(f"simple mode: context budget reached, dropped nodes {dropped}")
+        logger.info(
+            f"voie simple [doc={doc_id}]: nœuds retenus={node_list or '—'}, "
+            f"contexte={len(context)} caractères"
+            + (f", nœuds écartés (budget)={dropped}" if dropped else "")
+        )
 
         refs = [f"{doc_id}::{n}" for n in node_list]
         if refs:
@@ -667,7 +670,10 @@ Use Markdown formatting for better readability."""
             yield "[Error: Aucun des documents sélectionnés n'est prêt]"
             return
 
-        primary = ready_ids[0] if mode == "single" else None
+        # Une session Q-R réduite à UNE pièce se comporte comme le mode
+        # mono-document : rien n'y justifie la boucle d'agent.
+        effective_single = (mode == "single") or (len(ready_ids) == 1)
+        primary = ready_ids[0] if effective_single else None
         tool_context = self._build_tool_context(mode, ready_ids, primary, model_type)
 
         if not tool_context["docs"]:
@@ -676,7 +682,7 @@ Use Markdown formatting for better readability."""
 
         context_overview = self._build_docs_overview(tool_context)
         # In single mode we can afford to inline the TOC too for richer planning.
-        if mode == "single":
+        if effective_single:
             tree_str = self._single_doc_tree_summary(tool_context)
             if tree_str:
                 context_overview = context_overview + "\n\nPrimary document TOC (text elided):\n" + tree_str[:6000]
@@ -684,8 +690,8 @@ Use Markdown formatting for better readability."""
         # ---- Voie simple (mono-document) : pipeline canonique du cookbook
         # PageIndex (tree_search une fois → lecture des nœuds → rédaction),
         # sans décomposition ni boucle ReAct. La boucle d'agent reste le
-        # chemin du mode kb (multi-documents).
-        if mode == "single":
+        # chemin du mode kb (plusieurs documents).
+        if effective_single:
             async for chunk in self._run_single_simple(
                 session_id, query, model_type, use_memory,
                 tool_context, context_overview,
@@ -1289,7 +1295,7 @@ Use Markdown formatting for better readability."""
         if docs_overview:
             docs_section = (
                 f"\n【Available documents — metadata you already know】\n"
-                f"{docs_overview[:4000]}\n"
+                f"{docs_overview[:24000]}\n"
             )
 
         context_section = ""
@@ -1349,7 +1355,7 @@ Use Markdown formatting for better readability."""
         if docs_overview:
             docs_section = (
                 f"\n【Available documents — metadata you already know】\n"
-                f"{docs_overview[:4000]}\n"
+                f"{docs_overview[:24000]}\n"
             )
 
         skill_section = skill_manager.build_skill_prompt()
