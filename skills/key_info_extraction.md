@@ -18,7 +18,7 @@ Dans les situations suivantes, **ne pas** appliquer cette skill, mais répondre 
 
 ## Flux d'exécution
 1. `tree_search` avec la question de l'utilisateur comme query (si l'utilisateur dit seulement « de quoi ça parle », utiliser les mots-clés du sujet du document comme query) : localiser 3 à 6 nœuds de premier niveau les plus représentatifs.
-2. Appeler `summarize_nodes` sur les nœuds localisés, en **passant tous les node_ids en une seule fois par lot**, afin d'éviter des résumés fragmentés sur plusieurs tours.
+2. Appeler `read_node` sur les nœuds localisés, en **passant tous les node_ids en une seule fois par lot** (node_ids=[...]), puis synthétiser depuis le texte lu.
 3. En mode visuel, si le document contient des pages comportant des figures ou tableaux manifestes, ajouter un appel `view_pages(focus="conclusion générale/figure clé")` sur 1 ou 2 nœuds les plus importants.
 4. Synthétiser toutes les observations et produire le résultat selon le format de sortie ci-dessous. **Ne pas** effectuer un 4e tour de `tree_search` de secours inutile — la convergence doit se faire en 3 tours.
 
@@ -63,6 +63,6 @@ Dans les situations suivantes, **ne pas** appliquer cette skill, mais répondre 
 
 ## Guardrails (anti-hallucination)
 - **Interdit** d'inventer des conclusions absentes de l'Abstract / de l'Introduction.
-- Si `summarize_nodes` renvoie un contenu trop maigre (< 100 caractères), il faut faire un appel supplémentaire à `read_node` avant de résumer, plutôt que de combler artificiellement.
+- Si un nœud lu est trop maigre pour répondre, lire les nœuds voisins avec `read_node` plutôt que de combler artificiellement.
 - Tous les chiffres, années, pourcentages, noms de personnes → doivent être accompagnés d'une citation au format exact `(node_<id>, page N)`, la page étant lue dans les balises `<page_N>` du contexte (jamais devinée). Chaque point de la liste « Informations clés » se termine par sa citation.
 - Si après plusieurs tours de recherche l'information centrale reste introuvable, répondre honnêtement « cette information n'est pas explicitement mentionnée dans le document », sans remplir pour faire du volume.

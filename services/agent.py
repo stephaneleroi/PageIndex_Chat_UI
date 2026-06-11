@@ -295,7 +295,7 @@ Output JSON only:
                 "Previous reasoning trace — these are actions YOU have already taken. "
                 "Do NOT repeat an action with identical arguments; based on the latest "
                 "Observation, advance to the next logical step (e.g. read_node / "
-                "view_pages / summarize_nodes) or choose final_answer if you have enough.\n\n"
+                "view_pages) or choose final_answer if you have enough.\n\n"
                 + "\n\n".join(trace_lines)
             )
 
@@ -310,7 +310,7 @@ Output JSON only:
                 "to see their structure before drilling in.\n"
                 "  3. Use `cross_search` to find where a topic is covered across several docs, "
                 "or `tree_search(query, doc_id=...)` to search a single doc.\n"
-                "  4. Always pass `doc_id` to per-document tools (read_node, tree_search, view_pages, keyword_search, summarize_nodes).\n"
+                "  4. Always pass `doc_id` to per-document tools (read_node, tree_search, view_pages).\n"
             )
 
         prompt = f"""You are an intelligent document analysis agent with access to these tools:
@@ -329,10 +329,10 @@ Accessible documents overview:
 Based on the question and what you know so far, decide the next step.
 If you already have enough information, choose "final_answer".
 NEVER conclude that something is absent from the documents after a single empty
-search: tree_search/cross_search reason over titles and summaries, which omit
-details (signatures, names, figures). Before answering "not found", you MUST
-try `keyword_search` (literal text match) with the key proper nouns or terms,
-and `read_node` on the most plausible sections.
+search: tree summaries may phrase things differently than the question. Before
+answering "not found", you MUST retry `tree_search` with a reformulated query
+(synonyms, the key proper nouns alone) and `read_node` the most plausible
+sections to check their actual text.
 {skill_section}
 
 {LANG_INSTRUCTION}

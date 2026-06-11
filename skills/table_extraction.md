@@ -17,7 +17,7 @@ enabled: true
 ## Flux d'exécution
 
 ### Étape 1. Localisation
-- Si l'utilisateur a donné un numéro de tableau (ex. Table 3) : privilégier `keyword_search(keyword="Table 3")`
+- Si l'utilisateur a donné un numéro de tableau (ex. Table 3) : privilégier `tree_search(query="Table 3")` puis lire le nœud correspondant
 - Si l'utilisateur n'a donné qu'un sujet : `tree_search(query="<sujet> tableau")` pour localiser le ou les 1 à 2 nœuds les plus pertinents
 - Noter les nœuds candidats
 

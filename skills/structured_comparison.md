@@ -26,12 +26,12 @@ enabled: true
 ### Étape 2. Rechercher chaque objet séparément
 **Essentiel : appeler `tree_search` indépendamment pour chaque objet**, ne pas chercher plusieurs objets en une seule recherche (ils contaminent mutuellement le rappel).
 
-- Pour l'objet A : `tree_search(query="<objet A>")` → `read_node(...)` ou `summarize_nodes(...)`
-- Pour l'objet B : `tree_search(query="<objet B>")` → `read_node(...)` ou `summarize_nodes(...)`
+- Pour l'objet A : `tree_search(query="<objet A>")` → `read_node(...)`
+- Pour l'objet B : `tree_search(query="<objet B>")` → `read_node(...)`
 - … et ainsi de suite
 
 ### Étape 3. Si les dimensions de comparaison impliquent des indicateurs chiffrés
-- Effectuer en plus un `keyword_search(keyword="<nom de l'indicateur>")` pour s'assurer qu'aucun chiffre n'est omis
+- Relire les nœuds concernés (`read_node`) pour s'assurer qu'aucun chiffre n'est omis
 - En mode visuel, si l'indicateur provient d'une figure ou d'un tableau → `view_pages(focus="comparaison de <nom de l'indicateur>")`
 
 ### Étape 4. Sortie
