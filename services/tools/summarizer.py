@@ -67,7 +67,7 @@ class SummarizerTool(BaseTool):
         )
 
         try:
-            result = await self.pageindex.call_llm(prompt, 'light')
+            result = await self.pageindex.call_llm(prompt, 'text')
             return {
                 "summary": f"[doc={doc_id}] {result}",
                 "nodes": node_ids,

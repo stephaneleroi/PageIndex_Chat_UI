@@ -72,7 +72,7 @@ class PageIndexService:
             logger.error(f"LLM call error: {e}")
             yield f"[Error: {str(e)}]"
     
-    async def call_llm_tools(self, prompt: str, tools: list, model_type: str = 'light') -> dict:
+    async def call_llm_tools(self, prompt: str, tools: list, model_type: str = 'text') -> dict:
         """Appel non-streamé avec function calling NATIF (paramètre `tools`),
         comme l'exemple officiel PageIndex (agentic_vectorless_rag_demo.py).
         Retourne {'content', 'reasoning', 'tool_calls': [{'name', 'arguments'}]}.
@@ -277,7 +277,7 @@ Please reply in the following JSON format:
 Directly return the final JSON structure. Do not output anything else.
 """
         
-        result = await self.call_llm(search_prompt, 'light')
+        result = await self.call_llm(search_prompt, 'text')
         
         try:
             if '```json' in result:
@@ -318,7 +318,7 @@ Les nœuds les plus pertinents sont X et Y, car...
         buffer = ""
         node_list_str = ""
         
-        async for chunk in self.call_llm_stream(search_prompt, 'light'):
+        async for chunk in self.call_llm_stream(search_prompt, 'text'):
             full_response += chunk
             buffer += chunk
             

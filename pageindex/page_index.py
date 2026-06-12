@@ -1108,7 +1108,10 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
     async def page_index_builder():
         structure = await tree_parser(page_list, opt, doc=doc, logger=logger)
         if opt.if_add_node_id == 'yes':
-            write_node_id(structure)    
+            write_node_id(structure)
+        # Pièce courte = un nœud unique (avant textes et résumés : un seul
+        # résumé identitaire au lieu d'un par rubrique interne).
+        structure = collapse_small_doc(structure, page_list)
         if opt.if_add_node_text == 'yes':
             # Page-labeled variant (<page_N>…</page_N>) so the answering LLM
             # can cite the precise page of each claim inside a multi-page node.

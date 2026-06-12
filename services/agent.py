@@ -55,7 +55,10 @@ STYLE_INSTRUCTION = (
     "- No introduction, no recap conclusion, no politeness formulas.\n"
     "- Write in continuous prose with complete sentences. Do NOT use bullet points, "
     "numbered lists, tables, headings/subheadings or bold/italic emphasis — UNLESS the "
-    "user explicitly asks for such a format or provides a template that uses one.\n"
+    "user explicitly asks for such a format or provides a template that uses one. "
+    "When the user asks to DISTINGUISH or SEPARATE categories (e.g. « distingue bien "
+    "X, Y et Z »), that IS an explicit structure request: organise the answer in one "
+    "clearly headed section per requested category.\n"
     "- These remain mandatory in all cases: inline citations `(node_<id>, page N)` and "
     "quotation marks around exact quotes.\n"
 )
@@ -265,7 +268,7 @@ Output JSON only:
     "synthesis_strategy": "compare" | "aggregate" | "sequence" | "direct"
 }}"""
         try:
-            raw = await self.pageindex.call_llm(prompt, 'light')
+            raw = await self.pageindex.call_llm(prompt, 'text')
             raw = self._extract_json_str(raw)
             return json.loads(raw)
         except Exception as e:
@@ -362,7 +365,7 @@ Accessible documents overview:
             msg = await self.pageindex.call_llm_tools(
                 f"You are an intelligent document analysis agent.\n\n{common}\n\n"
                 f"Decide the next step and call EXACTLY ONE tool.",
-                self._to_openai_tools(tool_specs), 'light',
+                self._to_openai_tools(tool_specs), 'text',
             )
             if msg.get("tool_calls"):
                 tc = msg["tool_calls"][0]
@@ -397,7 +400,7 @@ Output JSON only:
     }}
 }}"""
         try:
-            raw = await self.pageindex.call_llm(prompt, 'light')
+            raw = await self.pageindex.call_llm(prompt, 'text')
             raw = self._extract_json_str(raw)
             return json.loads(raw)
         except Exception as e:
@@ -424,7 +427,7 @@ Output JSON only:
         score, checks = 10, []
 
         cites = re.findall(
-            r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*(\w+)\s*,\s*pages?[\s  ]*(\d+)', text)
+            r'\(\s*(doc:[^,]+,\s*)?node[_\s]*(\w+)\s*,\s*pages?[\s  ]*(\d+)', text)
         if len(text) < 200:
             score -= 3
             checks.append("réponse très courte")
@@ -442,8 +445,24 @@ Output JSON only:
             # dans la plage de pages de ce nœud (node_map) ?
             docs = tool_context.get("docs") or {}
             ref_nodes = {r.split('::')[-1] for r in refs}
+            multi_doc = len(docs) > 1
+            if multi_doc:
+                # En multi-pièces, l'inventaire des fiches (nœud racine de
+                # chaque document) est joint au rédacteur : citable même sans
+                # lecture profonde.
+                for d in docs.values():
+                    nm = d.get("node_map") or {}
+                    if nm:
+                        ref_nodes.add(min(nm.keys()))
+                # Une citation sans document est ambiguë quand la session
+                # contient plusieurs pièces : la pastille ne peut pas être
+                # résolue vers le bon fichier.
+                sans_doc = sum(1 for doc_part, _, _ in cites if not doc_part)
+                if sans_doc:
+                    score -= 2
+                    checks.append(f"{sans_doc} citation(s) sans document (ambiguës en multi-pièces)")
             bad_node = bad_page = 0
-            for nid, page_s in cites:
+            for _, nid, page_s in cites:
                 pad = nid.zfill(4) if nid.isdigit() else nid
                 if pad not in ref_nodes:
                     bad_node += 1
@@ -552,7 +571,7 @@ Output JSON only:
     "action": "accept" or "retry"
 }}"""
         try:
-            raw = await self.pageindex.call_llm(prompt, 'light')
+            raw = await self.pageindex.call_llm(prompt, 'text')
             raw = self._extract_json_str(raw)
             return json.loads(raw)
         except Exception as e:
@@ -595,7 +614,7 @@ Output JSON only:
     ]
 }}"""
         try:
-            raw = await self.pageindex.call_llm(prompt, 'light')
+            raw = await self.pageindex.call_llm(prompt, 'text')
             raw = self._extract_json_str(raw)
             analysis = json.loads(raw)
         except Exception as e:
@@ -1390,6 +1409,40 @@ Provide a clear, comprehensive answer in French."""
             parts.append("\n\n".join(doc_sections))
         if visual_observations:
             parts.append("【Analyse visuelle】\n" + "\n\n".join(visual_observations))
+
+        # Mode multi-documents : l'inventaire des fiches identitaires de TOUTES
+        # les pièces de la session est toujours joint comme source citable.
+        # Usage canonique des résumés d'arbre (l'index) : une question de
+        # synthèse de corpus se répond depuis les fiches (nature, auteur,
+        # destinataire, date), pas depuis 2-3 lectures partielles — et chaque
+        # pièce mentionnée porte alors une vraie citation résoluble.
+        if mode == "kb" and len(docs) > 1:
+            inv_lines = []
+            for did, dctx in docs.items():
+                node_map = dctx.get("node_map") or {}
+                if not node_map:
+                    continue
+                root_id = min(node_map.keys())
+                info = node_map.get(root_id) or {}
+                node = info.get("node", info)
+                summary = (node.get("summary") or "").strip() if isinstance(node, dict) else ""
+                if len(summary) > 700:
+                    summary = summary[:700] + "…"
+                s, e = info.get("start_index"), info.get("end_index")
+                pages = f"pages {s}-{e}" if s and e and s != e else f"page {s or 1}"
+                inv_lines.append(
+                    f"📄 {dctx.get('filename', did)} (node_{root_id}, {pages})\n{summary}"
+                )
+            if inv_lines:
+                inventory = "\n\n".join(inv_lines)
+                if len(inventory) > 30000:
+                    inventory = inventory[:30000] + "\n...(inventaire tronqué)"
+                parts.append(
+                    "【Inventaire des pièces — fiche identitaire de CHAQUE document de la session. "
+                    "Source citable au même titre que les extraits : cite "
+                    "`(doc: <fichier>, node_<id>, page N)` avec le fichier et le node indiqués "
+                    "sur la ligne 📄 de la pièce concernée.】\n" + inventory
+                )
 
         return "\n\n".join(parts)
 

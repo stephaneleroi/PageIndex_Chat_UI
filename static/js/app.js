@@ -1550,6 +1550,7 @@ function onStreamNodes(nodes) {
     if (!anchor) return;
     const fallbackDoc = State.docChat.docId;   // single-doc fallback
     anchor.insertAdjacentHTML('afterend', renderNodesGrouped(nodes, fallbackDoc));
+    enrichNodeTags(msgs);
 }
 
 // Split "doc_id::node_id" or plain "node_id" into parts.
@@ -1632,6 +1633,21 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
         }
         if (named.size === 1) pageDocId = [...named][0];
     }
+    // En multi-pièces, une pastille « p. 1 » nue est illisible (vingt pièces
+    // d'une page) : la pastille porte alors le nom de la pièce.
+    const distinctDocs = new Set(Object.values(nodeDocMap || {}).filter(Boolean));
+    for (const dm of (container.textContent || '').matchAll(/\(\s*doc\s*:\s*([^,()]+)/gi)) {
+        const did = docIdByName(dm[1]);
+        if (did) distinctDocs.add(did);
+    }
+    const multiDoc = distinctDocs.size > 1;
+    const shortDocName = (docId) => {
+        const d = (State.documents || []).find(x => x.doc_id === docId);
+        if (!d) return '';
+        let n = (d.filename || '').replace(/\.pdf$/i, '');
+        n = n.replace(/^.*?\d{4}-\d{2}-\d{2}_\d{4}_/, '');   // préfixe lot_date_heure_
+        return n.length > 30 ? n.slice(0, 28) + '…' : n;
+    };
 
     for (const textNode of targets) {
         const s = textNode.nodeValue;
@@ -1673,7 +1689,8 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
                 // Page-only reference → infer the owning node on click.
                 if (pageDocId) {
                     const page = parseInt(m[7].match(/\d+/)[0], 10);
-                    chip(pageLabel(m[7]), 'Voir cette page dans le document',
+                    const lbl = (multiDoc ? shortDocName(pageDocId) + ' · ' : '') + pageLabel(m[7]);
+                    chip(lbl, 'Voir cette page dans le document',
                         () => showPageRef(pageDocId, page));
                 } else {
                     frag.appendChild(document.createTextNode(m[0]));
@@ -1700,7 +1717,8 @@ function linkifyCitations(container, nodeDocMap, fallbackDocId) {
                 : (citedPage && docId
                     ? () => showPageRef(docId, citedPage)
                     : () => docId && showDocPreview(docId));
-            chip(pageInfo ? pageLabel(pageInfo) : 'source',
+            chip((multiDoc && docId ? shortDocName(docId) + ' · ' : '')
+                    + (pageInfo ? pageLabel(pageInfo) : 'source'),
                 (m[1] ? m[1].trim() + ' · ' : '')
                     + (isRealNode ? 'section « node_' + paddedId + ' »' : 'document')
                     + (pageInfo ? ' · ' + pageInfo : '') + ' — voir la source',
@@ -1729,11 +1747,53 @@ function renderNodesGrouped(nodes, fallbackDocId) {
         const docInfo = key ? (State.documents || []).find(x => x.doc_id === key) : null;
         const name = docInfo ? docInfo.filename : (key || 'Document inconnu');
         const tags = items.map(it => (
-            `<span class="node-tag" onclick="showNodePreview('${esc(it.nodeId)}', '${esc(it.docId || '')}')">${esc(it.label)}</span>`
+            `<span class="node-tag" data-doc-id="${esc(it.docId || '')}" data-node-id="${esc(it.nodeId)}" onclick="showNodePreview('${esc(it.nodeId)}', '${esc(it.docId || '')}')">${esc(it.label)}</span>`
         )).join(' ');
         return `<div class="nodes-row"><span class="nodes-doc-name" title="${esc(name)}">${esc(name)}</span><span class="nodes-row-tags">${tags}</span></div>`;
     }).join('');
+    // Les titres des nœuds (lisibles, contrairement aux ids) sont complétés en
+    // différé depuis l'arbre — voir enrichNodeTags(), appelé après insertion.
     return `<div class="nodes-box"><strong>Nœuds récupérés</strong>${rows}</div>`;
+}
+
+// id de nœud → titre, par document (arbres chargés une fois puis mis en cache).
+const _nodeTitleCache = new Map();   // docId -> {nodeId: title} | Promise
+async function _nodeTitles(docId) {
+    if (!docId) return {};
+    if (!_nodeTitleCache.has(docId)) {
+        _nodeTitleCache.set(docId, (async () => {
+            try {
+                const r = await fetch(`/api/documents/${docId}/tree`);
+                const data = await r.json();
+                const map = {};
+                const walk = (n) => {
+                    if (!n) return;
+                    if (n.node_id) map[String(n.node_id)] = n.title || '';
+                    (n.nodes || []).forEach(walk);
+                };
+                const root = data.tree || data.structure || data;
+                (Array.isArray(root) ? root : [root]).forEach(walk);
+                return map;
+            } catch { return {}; }
+        })());
+    }
+    return _nodeTitleCache.get(docId);
+}
+
+// Complète chaque pastille de nœud avec le titre de sa section : « 0003 ·
+// SUR LES FAITS » au lieu de l'identifiant brut, illisible pour l'utilisateur.
+async function enrichNodeTags(container) {
+    const tags = (container || document).querySelectorAll('.node-tag[data-node-id]:not([data-titled])');
+    for (const tag of tags) {
+        tag.setAttribute('data-titled', '1');
+        const titles = await _nodeTitles(tag.getAttribute('data-doc-id'));
+        const id = tag.getAttribute('data-node-id');
+        const title = titles[id] || titles[id.replace(/^node_/, '')] || '';
+        if (title) {
+            tag.textContent = `${tag.textContent} · ${title.length > 40 ? title.slice(0, 38) + '…' : title}`;
+            tag.title = title;
+        }
+    }
 }
 
 function onStreamChunk(content) {
@@ -1983,7 +2043,7 @@ function appendHistoryMessage(msgs, m, ctx) {
         const wrap = document.createElement('div');
         wrap.innerHTML = renderNodesGrouped(m.nodes, primaryDoc);
         const nb = wrap.firstElementChild;
-        if (nb) msgs.appendChild(nb);
+        if (nb) { msgs.appendChild(nb); enrichNodeTags(nb); }
     }
     const div = document.createElement('div');
     div.className = `message message-${m.role}${m.superseded ? ' message-superseded' : ''}`;
