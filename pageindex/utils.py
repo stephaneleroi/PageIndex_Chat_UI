@@ -46,8 +46,9 @@ def _ocr_page_with_vision(png_b64: str) -> str:
     """Transcrit une image de page via le modèle vision configuré."""
     client = openai.OpenAI(api_key=_vision_api_key or 'ollama-local',
                            base_url=_vision_base_url, timeout=300)
+    # Pas de température imposée : les réglages du Modelfile s'appliquent.
     r = client.chat.completions.create(
-        model=_vision_model, temperature=0,
+        model=_vision_model,
         messages=[{"role": "user", "content": [
             {"type": "text", "text":
                 "Transcris fidèlement et intégralement le texte visible sur cette page "
@@ -93,7 +94,6 @@ def ChatGPT_API_with_finish_reason(model, prompt, api_key=None, base_url=None, c
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0,
             )
             if response.choices[0].finish_reason == "length":
                 return response.choices[0].message.content, "max_output_reached"
@@ -126,9 +126,8 @@ def ChatGPT_API(model, prompt, api_key=None, base_url=None, chat_history=None):
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0,
             )
-   
+
             return response.choices[0].message.content
         except Exception as e:
             print('************* Retrying *************')
@@ -151,7 +150,6 @@ async def ChatGPT_API_async(model, prompt, api_key=None, base_url=None):
                 response = await client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    temperature=0,
                 )
                 return response.choices[0].message.content
         except Exception as e:
@@ -693,6 +691,44 @@ def add_node_text_with_labels(node, pdf_pages):
         for index in range(len(node)):
             add_node_text_with_labels(node[index], pdf_pages)
     return
+
+
+def merge_redundant_children(structure):
+    """Fusionne les enfants dont le texte est identique à celui du parent.
+
+    Dans PageIndex, le texte d'un nœud est sa plage de pages : quand la
+    détection de structure sur-découpe une même page (un PV d'une page
+    découpé en AFFAIRE / OBJET / Déclaration / Signature), tous les nœuds
+    portent exactement le même texte. Ces enfants n'apportent rien au
+    retrieval (contenu identique), coûtent un résumé LLM chacun et rendent
+    l'attribution des surlignages ambiguë (tous les blocs tombent sur le
+    dernier nœud). On les supprime ; les vrais découpages multi-pages ont
+    des textes différents et ne sont pas touchés."""
+    def norm(t):
+        return re.sub(r'\s+', '', t or '')
+
+    def walk(node):
+        kids = node.get('nodes') or []
+        for k in kids:
+            walk(k)
+        parent_text = norm(node.get('text'))
+        if not parent_text:
+            return
+        kept = []
+        for k in kids:
+            if not k.get('nodes') and norm(k.get('text')) == parent_text:
+                logging.info(f"Nœud redondant fusionné dans son parent: "
+                             f"{k.get('node_id')} « {(k.get('title') or '')[:50]} »")
+                continue
+            kept.append(k)
+        if kept:
+            node['nodes'] = kept
+        else:
+            node.pop('nodes', None)
+
+    roots = structure if isinstance(structure, list) else [structure]
+    for r in roots:
+        walk(r)
 
 
 def split_shared_boundary_pages(structure, page_list):

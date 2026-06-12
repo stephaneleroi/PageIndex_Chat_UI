@@ -30,6 +30,142 @@ api_bp = Blueprint('api', __name__)
 from threading import Semaphore
 _INDEXING_GATE = Semaphore(1)
 
+# Cache de réimportation : l'arbre PageIndex est sauvegardé en JSON à côté du
+# document source (<nom>.pageindex.json) dans le répertoire de données. À la
+# réimportation du même PDF (empreinte SHA-256 identique), l'arbre est
+# réutilisé : aucun appel LLM, le document est prêt en quelques secondes.
+SOURCE_DATA_DIR = os.environ.get(
+    'SOURCE_DATA_DIR',
+    os.path.abspath(os.path.join(os.path.dirname(UPLOADS_DIR), '..', 'data')),
+)
+
+
+def _sha256_file(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _source_dir(folder: str) -> str:
+    return os.path.join(SOURCE_DATA_DIR, folder) if folder else SOURCE_DATA_DIR
+
+
+def _find_cached_index(folder: str, sha: str):
+    """Cherche un <nom>.pageindex.json dont l'empreinte correspond au PDF."""
+    d = _source_dir(folder)
+    if not os.path.isdir(d):
+        return None
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith('.pageindex.json'):
+            continue
+        try:
+            with open(os.path.join(d, fn), 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if data.get('pdf_sha256') == sha and data.get('structure'):
+                logger.info(f"Cache d'index trouvé : {fn}")
+                return data
+        except Exception as e:
+            logger.warning(f"Cache d'index illisible ({fn}) : {e}")
+    return None
+
+
+def _write_index_cache(doc, sha: str):
+    """Écrit l'arbre indexé à côté du PDF source (retrouvé par empreinte).
+    Source absent du répertoire de données → on n'écrit rien, sans erreur."""
+    d = _source_dir(doc.folder)
+    if not os.path.isdir(d):
+        return
+    for fn in sorted(os.listdir(d)):
+        if not fn.lower().endswith('.pdf'):
+            continue
+        src = os.path.join(d, fn)
+        try:
+            if _sha256_file(src) != sha:
+                continue
+        except Exception:
+            continue
+        with open(doc.structure_path, 'r', encoding='utf-8') as f:
+            structure = json.load(f)
+        analysis = None
+        if os.path.exists(doc.analysis_path):
+            with open(doc.analysis_path, 'r', encoding='utf-8') as f:
+                analysis = json.load(f)
+        cache = {'pdf_sha256': sha, 'page_count': doc.page_count,
+                 'structure': structure, 'analysis': analysis}
+        cache_path = src + '.pageindex.json'
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, indent=1, ensure_ascii=False)
+        logger.info(f"Cache d'index écrit : {cache_path}")
+        return
+
+
+def _launch_indexing(doc_id: str, file_path: str, filename: str):
+    """Fil d'indexation d'un document : cache de réimportation, deux
+    tentatives, préparation locale, analyse, écriture du cache. Utilisé par
+    l'upload et par la relance manuelle (retry)."""
+    from threading import Thread
+
+    def run_indexing():
+        import asyncio
+        with _INDEXING_GATE:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                doc = document_store.get_document(doc_id)
+                sha = _sha256_file(file_path)
+
+                cached = _find_cached_index(doc.folder if doc else '', sha)
+                if cached:
+                    # Réimportation : arbre restauré, aucun appel LLM.
+                    os.makedirs(doc.result_dir, exist_ok=True)
+                    with open(doc.structure_path, 'w', encoding='utf-8') as f:
+                        json.dump(cached['structure'], f, indent=2, ensure_ascii=False)
+                    if cached.get('analysis'):
+                        with open(doc.analysis_path, 'w', encoding='utf-8') as f:
+                            json.dump(cached['analysis'], f, indent=2, ensure_ascii=False)
+                    document_store.update_document(doc_id, status='indexed')
+                    document_store.set_stage(doc_id, 'image_extract',
+                                             'Index réutilisé depuis le cache — préparation locale...')
+                    loop.run_until_complete(
+                        rag_service.prepare_document(doc_id, file_path, doc.structure_path)
+                    )
+                    return
+
+                # Indexation non déterministe : un échec transitoire se
+                # résout souvent par une simple seconde tentative.
+                success = False
+                for attempt in (1, 2):
+                    success = loop.run_until_complete(
+                        indexing_service.index_pdf(doc_id, file_path, filename)
+                    )
+                    if success:
+                        break
+                    if attempt == 1:
+                        logger.warning(f"Indexation échouée pour {filename} — nouvelle tentative")
+                        document_store.set_stage(doc_id, 'tree_build',
+                                                 'Échec de la première tentative — nouvelle tentative...')
+                if success:
+                    doc = document_store.get_document(doc_id)
+                    if doc and os.path.exists(doc.structure_path):
+                        loop.run_until_complete(
+                            rag_service.prepare_document(doc_id, file_path, doc.structure_path)
+                        )
+                        try:
+                            loop.run_until_complete(rag_service.auto_analyze_document(doc_id))
+                        except Exception as e:
+                            logger.warning(f"Auto-analysis failed (non-fatal): {e}")
+                        try:
+                            _write_index_cache(document_store.get_document(doc_id), sha)
+                        except Exception as e:
+                            logger.warning(f"Écriture du cache d'index échouée (non-fatal): {e}")
+            finally:
+                loop.close()
+
+    Thread(target=run_indexing).start()
+
 
 # ============= Configuration Routes =============
 
@@ -133,31 +269,8 @@ def upload_document():
         document_store.add_document(doc)
         document_store.set_stage(doc_id, 'queued', 'En file d\'attente d\'indexation...')
         
-        from threading import Thread
-        def run_indexing():
-            import asyncio
-            with _INDEXING_GATE:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    success = loop.run_until_complete(
-                        indexing_service.index_pdf(doc_id, file_path, filename)
-                    )
-                    if success:
-                        doc = document_store.get_document(doc_id)
-                        if doc and os.path.exists(doc.structure_path):
-                            loop.run_until_complete(
-                                rag_service.prepare_document(doc_id, file_path, doc.structure_path)
-                            )
-                            try:
-                                loop.run_until_complete(rag_service.auto_analyze_document(doc_id))
-                            except Exception as e:
-                                logger.warning(f"Auto-analysis failed (non-fatal): {e}")
-                finally:
-                    loop.close()
-        
-        Thread(target=run_indexing).start()
-        
+        _launch_indexing(doc_id, file_path, filename)
+
         return jsonify({
             'success': True,
             'document': doc.to_dict(),
@@ -166,6 +279,24 @@ def upload_document():
     except Exception as e:
         logger.error(f"Upload error: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/documents/<doc_id>/retry', methods=['POST'])
+def retry_document(doc_id):
+    """Relance l'indexation d'un document en erreur (PDF déjà dans uploads/,
+    pas besoin de réimporter)."""
+    doc = document_store.get_document(doc_id)
+    if not doc:
+        return jsonify({'error': 'Document not found'}), 404
+    if doc.status != 'error':
+        return jsonify({'error': 'Seul un document en erreur peut être relancé'}), 400
+    if not doc.file_path or not os.path.exists(doc.file_path):
+        return jsonify({'error': 'PDF source absent — supprimez le document et réimportez-le'}), 400
+    document_store.update_document(doc_id, status='pending', error_message='')
+    document_store.set_stage(doc_id, 'queued', 'En file d\'attente d\'indexation...')
+    _launch_indexing(doc_id, doc.file_path, doc.filename)
+    return jsonify({'success': True, 'document': doc.to_dict(),
+                    'message': 'Indexation relancée'})
 
 
 @api_bp.route('/documents/<doc_id>', methods=['GET'])

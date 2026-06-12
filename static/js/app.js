@@ -734,8 +734,16 @@ async function deleteDocument(docId, filename) {
 }
 
 async function retryDocument(docId) {
-    await deleteDocument(docId, State.documents.find(d => d.doc_id === docId)?.filename || '');
-    document.getElementById('libraryFileInput')?.click();
+    try {
+        const res = await fetch(`/api/documents/${docId}/retry`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Relance impossible');
+        showNotification('Indexation relancée', 'success');
+        await loadLibrary();
+        ensurePolling(docId);
+    } catch (e) {
+        showNotification(e.message, 'error');
+    }
 }
 
 // ========================================================================

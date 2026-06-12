@@ -56,14 +56,13 @@ class PageIndexService:
         model = self._get_model_name(model_type)
 
         try:
-            # Mode brut (messages) : aucune température imposée — les réglages
-            # du Modelfile s'appliquent (parité avec un chat Ollama direct).
-            kwargs = {} if messages else {"temperature": 0}
+            # Aucune température imposée : les réglages du Modelfile de chaque
+            # modèle s'appliquent (recommandations de l'éditeur, parité avec
+            # un chat Ollama direct).
             stream = await client.chat.completions.create(
                 model=model,
                 messages=messages or [{"role": "user", "content": prompt}],
                 stream=True,
-                **kwargs
             )
             async for chunk in stream:
                 if chunk.choices and len(chunk.choices) > 0:
@@ -84,7 +83,6 @@ class PageIndexService:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             tools=tools,
-            temperature=0,
         )
         msg = response.choices[0].message
         out = {
@@ -109,7 +107,6 @@ class PageIndexService:
             response = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0
             )
             if not (response.choices and len(response.choices) > 0):
                 logger.error(f"LLM response has no choices")
@@ -159,7 +156,6 @@ class PageIndexService:
             response = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": content}],
-                temperature=0
             )
             if response.choices and len(response.choices) > 0:
                 return response.choices[0].message.content.strip()
@@ -181,7 +177,6 @@ class PageIndexService:
             stream = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": content}],
-                temperature=0,
                 stream=True,
             )
             async for chunk in stream:

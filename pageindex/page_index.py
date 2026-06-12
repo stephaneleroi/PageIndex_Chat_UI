@@ -1116,6 +1116,10 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
             # A node's text must contain ONLY its own piece: split the text of
             # boundary pages shared between two consecutive nodes.
             split_shared_boundary_pages(structure, page_list)
+            # Sur-découpage intra-page : les enfants au texte identique au
+            # parent sont fusionnés AVANT les résumés (économie d'appels LLM,
+            # surlignages non ambigus).
+            merge_redundant_children(structure)
         if opt.if_add_node_summary == 'yes':
             if opt.if_add_node_text == 'no':
                 add_node_text(structure, page_list)
