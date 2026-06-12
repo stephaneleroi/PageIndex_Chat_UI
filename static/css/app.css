@@ -327,6 +327,43 @@ body {
     padding: 6px 10px; border-radius: 8px; word-break: break-word;
 }
 
+/* Groupes de dossiers (bibliothèque) */
+.docs-header-actions { display: flex; gap: 8px; }
+.btn-secondary-flat {
+    background: white; color: var(--text-primary);
+    border: 1px solid var(--border-strong); padding: 9px 16px; border-radius: 9px;
+    font-weight: 500; font-size: 13.5px; display: inline-flex;
+    align-items: center; gap: 8px; cursor: pointer; transition: all 0.15s;
+}
+.btn-secondary-flat:hover { background: var(--bg-hover); }
+.folder-group { border: 1px solid var(--border); border-radius: 12px; background: var(--bg-subtle); }
+.folder-group summary {
+    cursor: pointer; padding: 12px 16px;
+    font-size: 14px; font-weight: 600; color: var(--text-primary);
+    display: flex; align-items: center; gap: 8px;
+    list-style: none;
+}
+.folder-group summary::-webkit-details-marker { display: none; }
+.folder-group summary::before {
+    content: '▸'; color: var(--text-secondary); font-size: 11px;
+    transition: transform 0.15s;
+}
+.folder-group[open] summary::before { transform: rotate(90deg); }
+.folder-group summary i { color: var(--text-secondary); }
+.folder-docs { display: flex; flex-direction: column; gap: 10px; padding: 0 12px 12px; }
+
+/* Ligne de dossier dans la liste Q-R */
+.kb-folder-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; border-radius: 7px; margin: 6px 0 2px;
+    cursor: pointer; font-size: 12.5px; font-weight: 600;
+    background: var(--bg-hover);
+}
+.kb-folder-row.disabled { opacity: 0.45; cursor: not-allowed; }
+.kb-folder-row input[type="checkbox"] { accent-color: var(--primary); flex-shrink: 0; }
+.kb-folder-row i { color: var(--text-secondary); }
+.kb-folder-row ~ .kb-doc-item { margin-left: 14px; }
+
 /* ============================================
  * SIDEBAR (doc-chat + kb-chat) — claire et discrète
  * ============================================ */

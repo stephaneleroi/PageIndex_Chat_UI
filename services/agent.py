@@ -163,6 +163,7 @@ class DocumentAgent:
                 "node_map": node_map,
                 "page_images": page_images,
                 "filename": doc.filename,
+                "folder": getattr(doc, 'folder', '') or '',
                 "page_count": doc.page_count,
                 "analysis": analysis,
             }
@@ -189,8 +190,10 @@ class DocumentAgent:
             if summary_txt and len(summary_txt) > 200:
                 summary_txt = summary_txt[:200] + "…"
             topics = ", ".join(analysis.get("main_topics") or []) or "—"
+            folder = d.get('folder') or ''
             lines.append(
-                f"- {doc_id} | {d.get('filename')} | {d.get('page_count', 0)} pages\n"
+                f"- {doc_id} | {d.get('filename')} | {d.get('page_count', 0)} pages"
+                + (f" | dossier: {folder}" if folder else "") + "\n"
                 f"    summary: {summary_txt or '(no analysis)'}\n"
                 f"    topics : {topics}"
             )

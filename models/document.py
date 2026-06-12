@@ -33,6 +33,7 @@ class Document:
     doc_id: str
     filename: str  # original filename without doc_id prefix
     file_path: str  # path to PDF in uploads/
+    folder: str = ''  # répertoire logique d'appartenance (ex. nom du dossier importé)
     result_dir_name: str = ''  # directory name in results/documents/ (defaults to {doc_id}_{filename})
     status: str = 'pending'  # pending, indexing, indexed, ready, error
     created_at: float = field(default_factory=time.time)
@@ -199,6 +200,7 @@ class DocumentStore:
                     doc_id=doc_id,
                     filename=filename,
                     file_path=pdf_path,
+                    folder=data.get('folder', '') or '',
                     result_dir_name=result_dir_name,
                     status=status,
                     created_at=data.get('created_at', os.path.getctime(doc_dir)),
@@ -219,6 +221,7 @@ class DocumentStore:
         metadata = {
             'doc_id': doc.doc_id,
             'filename': doc.filename,
+            'folder': doc.folder,
             'result_dir_name': doc.result_dir_name,
             'status': doc.status,
             'created_at': doc.created_at,

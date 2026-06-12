@@ -271,6 +271,12 @@ function scrollChatToBottom() {
 //  LIBRARY PAGE
 // ========================================================================
 function setupLibraryPage() {
+    document.getElementById('libraryFolderBtn')?.addEventListener('click', () =>
+        document.getElementById('libraryFolderInput')?.click());
+    document.getElementById('libraryFolderInput')?.addEventListener('change', e => {
+        uploadFolder(e.target.files);
+        e.target.value = '';
+    });
     const fileInput = document.getElementById('libraryFileInput');
     const pickFiles = () => fileInput?.click();
 
@@ -386,7 +392,24 @@ function renderLibrary(allSessions = []) {
         });
         return;
     }
-    grid.innerHTML = docs.map(d => renderDocCard(d)).join('');
+    // Regroupement par répertoire : documents à la racine d'abord, puis un
+    // bloc repliable par dossier (l'arborescence d'import est conservée).
+    const byFolder = new Map();
+    docs.forEach(d => {
+        const f = d.folder || '';
+        if (!byFolder.has(f)) byFolder.set(f, []);
+        byFolder.get(f).push(d);
+    });
+    let html = (byFolder.get('') || []).map(d => renderDocCard(d)).join('');
+    [...byFolder.keys()].filter(f => f).sort().forEach(f => {
+        const items = byFolder.get(f);
+        html += `<details class="folder-group" open>
+            <summary><i class="bi bi-folder2"></i> ${esc(f)}
+                <span class="docs-count-badge">${items.length}</span></summary>
+            <div class="folder-docs">${items.map(d => renderDocCard(d)).join('')}</div>
+        </details>`;
+    });
+    grid.innerHTML = html;
     grid.querySelectorAll('[data-action="chat"]').forEach(el => {
         el.addEventListener('click', e => {
             e.stopPropagation();
@@ -602,12 +625,13 @@ function startProgressTick() {
     }, 500);
 }
 
-async function uploadDocument(file) {
+async function uploadDocument(file, folder = '') {
     if (!file || !/\.(pdf|docx)$/i.test(file.name)) {
         showNotification('Veuillez choisir un fichier PDF ou DOCX', 'error'); return;
     }
     const fd = new FormData();
     fd.append('file', file);
+    if (folder) fd.append('folder', folder);
     try {
         const r = await fetch('/api/documents/upload', { method: 'POST', body: fd });
         const d = await r.json();
@@ -621,6 +645,20 @@ async function uploadDocument(file) {
     } catch (e) {
         console.error('Upload error:', e);
         showNotification('Échec de l\'import', 'error');
+    }
+}
+
+async function uploadFolder(fileList) {
+    const files = [...fileList].filter(f =>
+        /\.(pdf|docx)$/i.test(f.name) && !f.name.startsWith('.'));
+    if (!files.length) {
+        showNotification('Aucun PDF ou DOCX dans ce dossier', 'error'); return;
+    }
+    showNotification(`Import du dossier : ${files.length} document(s) — indexation en file séquentielle`);
+    for (const f of files) {
+        const rel = f.webkitRelativePath || f.name;
+        const folder = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+        await uploadDocument(f, folder);
     }
 }
 
@@ -947,7 +985,7 @@ function renderKbDocList() {
         list.innerHTML = '<div style="padding:16px;text-align:center;color:rgba(255,255,255,0.4);font-size:12px">Aucun résultat correspondant</div>';
         return;
     }
-    list.innerHTML = shown.map(d => {
+    const docRow = d => {
         const checked = State.kbChat.selectedDocIds.has(d.doc_id);
         const pc = d.page_count ? `${d.page_count} p.` : '';
         return `
@@ -956,12 +994,45 @@ function renderKbDocList() {
                 <span class="kb-doc-item-name" title="${esc(d.filename)}">${esc(d.filename)}</span>
                 <span class="kb-doc-item-meta">${pc}</span>
             </label>`;
-    }).join('');
-    list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        cb.addEventListener('change', e => {
+    };
+    // Regroupement par dossier, avec case de sélection du dossier entier.
+    const byFolder = new Map();
+    shown.forEach(d => {
+        const f = d.folder || '';
+        if (!byFolder.has(f)) byFolder.set(f, []);
+        byFolder.get(f).push(d);
+    });
+    let html = (byFolder.get('') || []).map(docRow).join('');
+    [...byFolder.keys()].filter(f => f).sort().forEach(f => {
+        const items = byFolder.get(f);
+        const allChecked = items.every(d => State.kbChat.selectedDocIds.has(d.doc_id));
+        html += `
+            <label class="kb-folder-row ${sessionActive ? 'disabled' : ''}" title="Sélectionner tout le dossier">
+                <input type="checkbox" class="kb-folder-cb" data-folder="${esc(f)}"
+                    ${allChecked ? 'checked' : ''} ${sessionActive ? 'disabled' : ''}>
+                <i class="bi bi-folder2"></i>
+                <span class="kb-doc-item-name">${esc(f)}</span>
+                <span class="kb-doc-item-meta">${items.length}</span>
+            </label>` + items.map(docRow).join('');
+    });
+    list.innerHTML = html;
+    list.querySelectorAll('.kb-doc-item input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', () => {
             const id = cb.dataset.docId;
             if (cb.checked) State.kbChat.selectedDocIds.add(id);
             else State.kbChat.selectedDocIds.delete(id);
+            renderKbDocList();
+            updateKbTopbar();
+        });
+    });
+    list.querySelectorAll('.kb-folder-cb').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const f = cb.dataset.folder;
+            (byFolder.get(f) || []).forEach(d => {
+                if (cb.checked) State.kbChat.selectedDocIds.add(d.doc_id);
+                else State.kbChat.selectedDocIds.delete(d.doc_id);
+            });
+            renderKbDocList();
             updateKbTopbar();
         });
     });

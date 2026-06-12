@@ -43,12 +43,18 @@
                     <i class="bi bi-folder2-open"></i> Mes documents
                     <span class="docs-count-badge" id="docsCountBadge">0</span>
                 </h3>
-                <button class="btn-primary-grad" id="libraryUploadBtn">
-                    <i class="bi bi-cloud-upload"></i> Importer un document
-                </button>
+                <div class="docs-header-actions">
+                    <button class="btn-secondary-flat" id="libraryFolderBtn" title="Indexer tous les PDF/DOCX d'un dossier en conservant son nom">
+                        <i class="bi bi-folder-plus"></i> Importer un dossier
+                    </button>
+                    <button class="btn-primary-grad" id="libraryUploadBtn">
+                        <i class="bi bi-cloud-upload"></i> Importer un document
+                    </button>
+                </div>
             </div>
             <div class="library-grid" id="libraryGrid"></div>
             <input type="file" id="libraryFileInput" accept=".pdf,.docx" style="display:none" multiple>
+            <input type="file" id="libraryFolderInput" webkitdirectory style="display:none">
         </div>
     </div>
 

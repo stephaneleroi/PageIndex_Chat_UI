@@ -102,6 +102,11 @@ def upload_document():
     if not lower.endswith(('.pdf', '.docx')):
         return jsonify({'error': 'Formats pris en charge : PDF et DOCX'}), 400
 
+    # Répertoire logique d'appartenance (import de dossier) — simple
+    # étiquette d'organisation, assainie (pas de traversée de chemin).
+    folder = (request.form.get('folder') or '').strip().strip('/')
+    folder = '/'.join(seg for seg in folder.split('/') if seg and seg != '..')[:120]
+
     try:
         now = datetime.now()
         datetime_prefix = now.strftime("%Y%m%d_%H%M%S")
@@ -124,7 +129,7 @@ def upload_document():
             filename = os.path.splitext(filename)[0] + '.pdf'
             logger.info(f"Document .docx converti en PDF : {filename}")
         
-        doc = Document(doc_id=doc_id, filename=filename, file_path=file_path, status='pending')
+        doc = Document(doc_id=doc_id, filename=filename, file_path=file_path, folder=folder, status='pending')
         document_store.add_document(doc)
         document_store.set_stage(doc_id, 'queued', 'En file d\'attente d\'indexation...')
         
