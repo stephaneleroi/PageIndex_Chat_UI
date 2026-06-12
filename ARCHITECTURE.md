@@ -1,4 +1,4 @@
-# Architecture de PageIndex Chat UI
+# Architecture de POC Réponses Sourcées (PageIndex Chat UI)
 
 ## L'idée en une phrase
 
@@ -74,15 +74,29 @@ raisonnement pur trouve la pièce.
 
 ## Cycle de vie d'un document (indexation — 100 % PageIndex)
 
-1. **Upload** (`routes/api.py`) → fichier dans `uploads/`, fil d'indexation lancé.
-2. **`services/indexing_service.py`** appelle **`pageindex.page_index_main`**
-   (la bibliothèque) : extraction du texte (PyPDF2), détection du sommaire
+1. **Upload** (`routes/api.py`) → fichier dans `uploads/`, fil d'indexation
+   lancé (`_launch_indexing`, file séquentielle). Un import de **dossier**
+   est possible (bouton « Importer un dossier ») : chaque fichier porte son
+   répertoire d'origine (`Document.folder`), affiché en groupes dans la
+   bibliothèque et cochable d'un bloc en Q-R.
+2. **Cache de réimportation** : l'empreinte SHA-256 du PDF est comparée aux
+   fichiers `<nom>.pdf.pageindex.json` du répertoire source
+   (`SOURCE_DATA_DIR`, défaut `../data`). Correspondance → l'arbre est
+   restauré tel quel, **aucun appel LLM**, document prêt en quelques
+   secondes. Sinon :
+3. **`services/indexing_service.py`** appelle **`pageindex.page_index_main`**
+   (la bibliothèque) : extraction du texte (PyMuPDF + suppression des
+   en-têtes/pieds répétés, OCR vision en repli), détection du sommaire
    (20 premières pages), construction de la table « titre → page physique »
    (3 stratégies selon présence/qualité du sommaire), **vérification LLM**
    de chaque entrée + réparation, hiérarchisation, identifiants de nœuds,
-   texte balisé `<page_N>…</page_N>`, résumés par nœud.
-3. Résultat figé dans `results/documents/<id>/structure.json`.
-4. **`rag_service.prepare_document`** : rendu JPEG des pages (visionneuse),
+   texte balisé `<page_N>…</page_N>`, découpage des pages partagées,
+   fusion des nœuds au texte identique, résumés par nœud. Échec → **deux
+   tentatives automatiques** avant le statut erreur ; une pièce en erreur
+   se relance d'un clic (« Relancer » → `POST /documents/<id>/retry`).
+4. Résultat figé dans `results/documents/<id>/structure.json`, et copié à
+   côté du PDF source (`.pageindex.json`) pour les réimportations futures.
+5. **`rag_service.prepare_document`** : rendu JPEG des pages (visionneuse),
    `node_map` (nœud → plage de pages), surlignages (bbox par nœud, PyMuPDF),
    analyse automatique (résumé global + questions suggérées).
 
@@ -100,7 +114,23 @@ explicite (boutons Réessayer / Supprimer).
 
 ## Cycle de vie d'une question
 
-`services/agent.py`, événement Socket.IO `agent_chat`. Deux voies selon le mode :
+`services/agent.py`, événement Socket.IO `agent_chat`. Trois voies selon le mode :
+
+### Conversation libre (Q-R sans document) : le modèle NU
+
+Une nouvelle conversation démarre **sans document sélectionné** ; les
+questions posées dans cet état sont un dialogue direct avec le modèle de
+rédaction. **Principe structurant : l'application ne doit pas dégrader le
+modèle.** Hors documents, aucune instruction système, aucun style imposé,
+aucune température forcée : la question part telle quelle, l'historique
+comme vrais tours de dialogue — parité totale avec un chat Ollama direct.
+
+Ce principe vient d'un cas réel documenté dans `DIAGNOSTIC-UEMO.md` : des
+consignes de style anodines (« réponds uniquement à la question, aucune
+digression ») suppriment le réflexe de doute du modèle et le font confabuler
+sur des connaissances fragiles (acronymes métier). Les réponses libres ne
+portent ni citations ni note de qualité — cette frontière est visible dans
+l'IHM (« conversation libre (sans sources) »).
 
 ### Mode mono-document : la voie simple (canonique cookbook)
 
@@ -142,11 +172,15 @@ la divulgation progressive est nécessaire :
    - *Déclenchement* : **conditionnel** — sautée quand la réponse est saine
      (substantielle, citée, sans fuite de syntaxe d'outil), la main revient
      immédiatement ; elle ne tourne que sur signe de faiblesse, avec le
-     statut « Auto-vérification de la réponse… ». Chaque réponse porte un
-     **indicateur de confiance** (badge « Vérifiée n/10 » ou « Non
-     vérifiée ») et un bouton **« Vérifier la réponse »** rejoue le juge à
-     la demande (POST `/sessions/<id>/messages/<i>/verify`, verdict persisté
-     dans le message).
+     statut « Auto-vérification de la réponse… ». Chaque réponse documentée
+     porte une **note de qualité calculée** (badge « Qualité estimée n/10 » —
+     `_estimate_quality`, déterministe et sans LLM : longueur, présence de
+     citations, nœuds cités ∈ sources, pages citées ∈ plages des nœuds,
+     absence de fuite d'outil) qui guide l'utilisateur vers le bouton
+     **« Vérifier la réponse »** (juge LLM à la demande,
+     POST `/sessions/<id>/messages/<i>/verify`, verdict persisté dans le
+     message, invalidé si la réponse est éditée). Les réponses libres (sans
+     sources) n'ont ni note ni vérification.
    - *Mécanique* (`DocumentAgent.reflect`) : un appel LLM juge la réponse
      **contre le même dossier de pièces que le rédacteur** (le contexte
      complet, pas un extrait) sur 4 critères : répond-elle à la question,
@@ -178,17 +212,33 @@ la divulgation progressive est nécessaire :
 
 | Profil | Usage | Exemple local |
 |---|---|---|
-| `text` | rédaction des réponses | nemotron-3-super |
+| `text` | rédaction des réponses, conversation libre | nemotron-3-super |
 | `light` | indexation + toutes les étapes internes de l'agent (hérite de `text` si absent) | gpt-oss-20b-128k |
-| `vision` | réponses sur images de pages | (OpenAI par défaut) |
+| `vision` | réponses sur images de pages, OCR des pages scannées | qwen3.6 |
 
 Tout serveur OpenAI-compatible fonctionne (Ollama, vLLM, LM Studio…) : URL de
 base personnalisée, clé factice injectée si absente.
 
+**Aucune température n'est imposée** : chaque modèle tourne avec les réglages
+de son Modelfile (recommandations de l'éditeur — ex. NVIDIA prescrit
+temp 1 / top_p 0.95 pour Nemotron). Forcer temp 0 dégradait les modèles à
+raisonnement (cf. `DIAGNOSTIC-UEMO.md`) ; en contrepartie, les réponses ne
+sont pas reproductibles à l'identique d'une exécution à l'autre — les
+garde-fous structurels (note de qualité, vérification des pages citées)
+prennent le relais.
+
 ## Modifications locales apportées à la bibliothèque `pageindex/`
 
-Le dossier `pageindex/` reste proche de l'amont, avec ces ajustements
-(« quality in, quality out », cf. ETUDE-RAGFLOW.md) :
+L'indexation repose **exclusivement** sur la bibliothèque embarquée
+(`page_index_main` est l'unique constructeur d'arbre) ; tout le reste du
+projet orchestre *autour* (file, retry, cache) sans jamais construire
+d'index autrement. Le dossier `pageindex/` est une copie de l'amont
+[VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) — un fork de
+fait : les évolutions amont devront être fusionnées manuellement, et
+plusieurs de nos correctifs génériques (3, 9, 10 ci-dessous, OCR de repli)
+seraient de bons candidats à une contribution amont. Le paradigme (arbre par
+raisonnement LLM, prompts canoniques du cookbook) n'est jamais modifié.
+Ajustements locaux (« quality in, quality out », cf. ETUDE-RAGFLOW.md) :
 1. **extraction PyMuPDF par défaut** (PyPDF2 coupait les mots : « semai ne »,
    « nov embre ») et **suppression des en-têtes/pieds répétés** avant
    indexation (heuristique de lignes identiques en haut/bas de page,
@@ -208,7 +258,13 @@ Le dossier `pageindex/` reste proche de l'amont, avec ces ajustements
    en dernier recours (documents à long chapitre final, sommaires périmés) ;
 7. timeout explicite de 180 s sur les clients LLM (une requête perdue se
    relance en 3 min au lieu de bloquer 10 min) ;
-8. tokenizer avec repli `o200k_base` pour les noms de modèles non-OpenAI.
+8. tokenizer avec repli `o200k_base` pour les noms de modèles non-OpenAI ;
+9. **fusion des nœuds au texte identique au parent**
+   (`merge_redundant_children`, avant les résumés) : le sur-découpage d'une
+   même page (un PV d'une page découpé en 5 nœuds au même texte) coûtait un
+   résumé LLM par nœud et rendait les surlignages ambigus ;
+10. **aucune température imposée** dans les appels LLM de la bibliothèque
+    (réglages du Modelfile de chaque modèle).
 
 ## Dimensionnement multi-documents (dossiers de procédure)
 
@@ -246,6 +302,10 @@ interne (planificateur, réflexion) garde ses formats structurés.
   peuvent produire des arbres légèrement différents.
 - La précision des citations dépend de la discipline du modèle rédacteur ;
   l'IHM tolère les écarts de format mais ne peut pas inventer une page absente.
-- Piste d'évolution identifiée : migrer le planificateur vers le function
-  calling natif (comme `examples/agentic_vectorless_rag_demo.py` officiel)
-  plutôt que le JSON-dans-le-texte hérité de l'amont.
+- Le déclencheur de l'OCR vision exige une couche texte quasi vide
+  (< 20 caractères) : un scan portant quelques champs de formulaire passe
+  au travers et échoue (« Processing failed ») — correctif identifié
+  (déclencher aussi sur image + texte < ~200 caractères).
+- Les réponses ne sont pas reproductibles à l'identique (températures des
+  Modelfiles) : les évaluations factuelles se font sur plusieurs tirages,
+  jamais sur une exécution isolée (cf. `DIAGNOSTIC-UEMO.md`).
