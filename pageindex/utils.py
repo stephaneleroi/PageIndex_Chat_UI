@@ -788,15 +788,27 @@ async def generate_node_summary(node, model=None):
     # this part (its identity), not only what it talks about — e.g. a request
     # like "the note written by Mr X to judge Y" can only be matched if the
     # summary names the author, recipient, date and document type.
-    prompt = f"""You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
+    # Gabarit FIXE : l'agent compare les fiches entre elles pour choisir les
+    # pièces — des fiches hétérogènes (prose libre, markdown variable) se
+    # comparent mal. Les champs se projettent directement sur les questions
+    # types d'un dossier (chronologie = Date, intervenants = Auteur/
+    # Destinataire, personnes = Personnes).
+    prompt = f"""You are given a part of a document. Write its identity sheet, which a reasoning agent will use to decide whether this part answers a user request. Follow EXACTLY this template (one line per field; use the em dash — when the text gives no answer):
 
-    Start the description by identifying the part itself whenever the text allows it: what kind of piece it is (letter, report, note, court order, form, chapter...), who wrote or signed it, to whom it is addressed, and its date. Then summarize the main points covered. Mention the key names, places and dates that appear.
+Nature : <kind of piece: letter, report, witness interview record, court order, form, chapter...>
+Auteur : <who wrote or signed it, with role and service>
+Destinataire : <to whom it is addressed>
+Date et heure : <date and time of the piece>
+Personnes : <each person named, with their role in the matter (suspect, victim, witness, parent...)>
+Objet : <one sentence: what this piece is for>
+Points saillants : <2 to 4 sentences in continuous prose covering the main points, with the key names, places, dates and numbers exactly as written>
 
-    Partial Document Text: {node['text']}
+Copy names, dates and relationships EXACTLY as stated in the text — never infer or invert a relationship (author vs recipient, parent vs child).
 
-    Write the description in the same language as the document text (e.g. French for a French document).
-    Directly return the description, do not include any other text.
-    """
+Partial Document Text: {node['text']}
+
+Write the sheet in the same language as the document text (e.g. French for a French document), keeping the field labels above as they are.
+Directly return the sheet, do not include any other text."""
     response = await ChatGPT_API_async(model, prompt)
     return response
 

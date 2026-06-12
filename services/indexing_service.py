@@ -66,10 +66,17 @@ class IndexingService:
             
             logger.info(f"Using model: {model_name}, base_url: {base_url}")
             
+            # Les fiches identitaires sont l'index de recherche : elles sont
+            # confiées au modèle de RÉDACTION (profil text), plus fiable sur
+            # les relations (auteur/destinataire, parent/enfant) — devenu
+            # abordable depuis « un nœud par pièce courte » (1 fiche/pièce).
+            summary_model = config_manager.get_model_config('text').get('name', model_name)
+
             # Create PageIndex options
             loader = ConfigLoader()
             opt = loader.load({
                 'model': model_name,
+                'summary_model': summary_model,
                 'toc_check_page_num': 20,
                 'max_page_num_each_node': 10,
                 'max_token_num_each_node': 20000,

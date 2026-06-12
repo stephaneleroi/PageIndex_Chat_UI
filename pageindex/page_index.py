@@ -1135,7 +1135,8 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
             if opt.if_add_node_text == 'no':
                 add_node_text(structure, page_list)
             await generate_summaries_for_structure(
-                structure, model=opt.model,
+                structure,
+                model=getattr(opt, 'summary_model', None) or opt.model,
                 progress_callback=summary_progress_callback,
             )
             if opt.if_add_node_text == 'no':
