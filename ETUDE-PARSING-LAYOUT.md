@@ -136,3 +136,25 @@ tombent dans la géométrie de la page.
 
 Points 4.2 à 4.5 : améliorations opportunistes, à coût et risque faibles,
 non urgentes. Aucune implémentation n'est lancée sans validation explicite.
+
+## Post-scriptum (13/06/2026) : portée révisée
+
+L'utilisateur a posé la question d'un cran au-dessus de celle traitée ici :
+cette étude comparait deux façons de *découper* les nœuds (LLM vs
+typographie) sans interroger la nécessité du découpage à cette échelle. Or
+les mesures sur les deux corpus tranchent : l'arbre du dossier Théo (~un
+nœud par pièce) a donné l'acceptation 9/9, quand les pièces du corpus de
+procédure (médiane 5 nœuds, jusqu'à 31 pour un bordereau d'une page et
+demie) n'y gagnent rien — les questions réelles désignent des pièces,
+jamais leurs rubriques internes.
+
+Conséquences sur les conclusions ci-dessus :
+- Le verdict central (hiérarchie typographique inadaptée à ce corpus,
+  construction LLM conservée) **tient**, et reste le bon cadre pour les
+  documents longs où une hiérarchie est nécessaire.
+- La recommandation n°1 (bbox par nœud à l'indexation) est **largement
+  caduque** si la règle « un nœud par petite pièce » (fusion des sous-arbres
+  ≤ ~3 pages) est adoptée : elle visait l'ambiguïté d'attribution entre
+  nœuds partageant une page — situation qui disparaît avec la
+  sur-segmentation elle-même.
+- Les points secondaires (4.3 à 4.5) sont inchangés.
