@@ -70,6 +70,27 @@ def list_documents():
     return jsonify({'documents': docs})
 
 
+def _convert_to_pdf_with_libreoffice(src_path: str) -> str:
+    """Convertit un document bureautique (.docx…) en PDF via LibreOffice
+    headless. Une conversion interne contrôlée vaut mieux que les exports
+    manuels approximatifs (sommaire/pagination faussés). Retourne le chemin
+    du PDF produit (même dossier, même nom)."""
+    import shutil
+    import subprocess
+    soffice = shutil.which('soffice') or '/Applications/LibreOffice.app/Contents/MacOS/soffice'
+    if not os.path.exists(soffice):
+        raise RuntimeError("LibreOffice (soffice) introuvable — nécessaire pour convertir le .docx")
+    subprocess.run(
+        [soffice, '--headless', '--convert-to', 'pdf', '--outdir',
+         os.path.dirname(src_path), src_path],
+        check=True, capture_output=True, timeout=180,
+    )
+    pdf_path = os.path.splitext(src_path)[0] + '.pdf'
+    if not os.path.exists(pdf_path):
+        raise RuntimeError('Conversion LibreOffice échouée (pas de PDF produit)')
+    return pdf_path
+
+
 @api_bp.route('/documents/upload', methods=['POST'])
 def upload_document():
     if 'file' not in request.files:
@@ -77,18 +98,31 @@ def upload_document():
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
-    if not file.filename.lower().endswith('.pdf'):
-        return jsonify({'error': 'Only PDF files are supported'}), 400
-    
+    lower = file.filename.lower()
+    if not lower.endswith(('.pdf', '.docx')):
+        return jsonify({'error': 'Formats pris en charge : PDF et DOCX'}), 400
+
     try:
         now = datetime.now()
         datetime_prefix = now.strftime("%Y%m%d_%H%M%S")
         doc_id = f"{datetime_prefix}_{str(uuid.uuid4())[:4]}"
-        
+
         filename = secure_filename(file.filename)
         os.makedirs(UPLOADS_DIR, exist_ok=True)
         file_path = os.path.join(UPLOADS_DIR, f"{doc_id}_{filename}")
         file.save(file_path)
+
+        if lower.endswith('.docx'):
+            try:
+                pdf_path = _convert_to_pdf_with_libreoffice(file_path)
+            except Exception as e:
+                os.remove(file_path)
+                logger.error(f"Conversion .docx échouée: {e}")
+                return jsonify({'error': f'Conversion du .docx en PDF échouée : {e}'}), 500
+            os.remove(file_path)
+            file_path = pdf_path
+            filename = os.path.splitext(filename)[0] + '.pdf'
+            logger.info(f"Document .docx converti en PDF : {filename}")
         
         doc = Document(doc_id=doc_id, filename=filename, file_path=file_path, status='pending')
         document_store.add_document(doc)
@@ -233,6 +267,62 @@ def clear_session_messages(session_id):
     return jsonify({'success': True})
 
 
+@api_bp.route('/sessions/<session_id>/messages/<int:index>/verify', methods=['POST'])
+def verify_message(session_id, index):
+    """Vérification À LA DEMANDE d'une réponse : rejoue l'auto-évaluation
+    (juge LLM) sur le message, avec le texte de ses nœuds sources comme
+    pièces. Le verdict est persisté dans le message (badge dans l'IHM)."""
+    session = session_store.get_session(session_id)
+    if not session or not (0 <= index < len(session.messages)):
+        return jsonify({'error': 'Message introuvable'}), 404
+    msg = session.messages[index]
+    if msg.role != 'assistant':
+        return jsonify({'error': 'Seules les réponses peuvent être vérifiées'}), 400
+
+    # La question = le dernier message utilisateur qui précède.
+    question = next((m.content for m in reversed(session.messages[:index])
+                     if m.role == 'user'), '')
+
+    # Pièces : le texte des nœuds sources du message (refs "doc_id::node_id").
+    parts = []
+    for ref in (msg.nodes or []):
+        doc_id, _, node_id = ref.partition('::')
+        if not node_id:
+            doc_id, node_id = (session.doc_ids[0] if session.doc_ids else ''), ref
+        tree = document_store.get_tree(doc_id)
+        if not tree:
+            continue
+        stack = [tree]
+        while stack:
+            n = stack.pop()
+            if isinstance(n, list):
+                stack.extend(n)
+                continue
+            if n.get('node_id') == node_id and n.get('text'):
+                parts.append(f"=== Section node_{node_id} ===\n{n['text']}")
+            stack.extend(n.get('nodes', []))
+    context = "\n\n".join(parts)[:60000]
+
+    import asyncio
+    import time as _time
+    try:
+        reflection = asyncio.run(rag_service.agent.reflect(
+            question, msg.content, context, 'text', False))
+    except Exception as e:
+        logger.error(f"Vérification à la demande échouée: {e}")
+        return jsonify({'error': str(e)}), 500
+
+    verification = {
+        'score': reflection.get('score'),
+        'issues': reflection.get('issues') or [],
+        'missing_info': reflection.get('missing_info') or [],
+        'auto': False,
+        'verified_at': _time.time(),
+    }
+    session_store.update_message_at(session_id, index, verification=verification)
+    return jsonify({'success': True, 'verification': verification})
+
+
 @api_bp.route('/sessions/<session_id>/truncate', methods=['POST'])
 def truncate_session_messages(session_id):
     """Drop messages at ``index`` and beyond.
@@ -268,6 +358,22 @@ def get_tree_structure(doc_id):
     service = PageIndexService(document_store)
     clean_tree = service.remove_fields(tree, ['text'])
     return jsonify({'tree': clean_tree})
+
+
+@api_bp.route('/documents/<doc_id>/nodes/<node_id>', methods=['PUT'])
+def update_tree_node(doc_id, node_id):
+    """Édition humaine de l'arbre (titre/résumé d'un nœud) — l'arbre est
+    l'index de recherche, le corriger améliore directement le retrieval."""
+    data = request.json or {}
+    if 'title' not in data and 'summary' not in data:
+        return jsonify({'error': 'title ou summary requis'}), 400
+    ok = document_store.update_node(
+        doc_id, node_id,
+        title=data.get('title'), summary=data.get('summary'),
+    )
+    if not ok:
+        return jsonify({'error': 'Document ou nœud introuvable'}), 404
+    return jsonify({'success': True})
 
 
 @api_bp.route('/documents/<doc_id>/analysis', methods=['GET'])

@@ -5,6 +5,7 @@ PageIndex - PDF indexing and tree structure generation
 from .page_index import page_index_main, page_index
 from .utils import (
     set_api_config,
+    set_vision_config,
     get_api_key,
     get_base_url,
     ConfigLoader,
@@ -18,6 +19,7 @@ __all__ = [
     'page_index_main',
     'page_index',
     'set_api_config',
+    'set_vision_config',
     'get_api_key',
     'get_base_url',
     'ConfigLoader',

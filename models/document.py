@@ -323,6 +323,47 @@ class DocumentStore:
                 print(f"Error loading tree from disk: {e}")
         return None
 
+    def update_node(self, doc_id: str, node_id: str,
+                    title: Optional[str] = None,
+                    summary: Optional[str] = None) -> bool:
+        """Met à jour le titre et/ou le résumé d'un nœud de l'arbre, sur
+        disque (structure.json) et en cache. L'arbre étant l'index de
+        recherche, c'est le levier d'intervention humaine le plus rentable
+        (corriger « Document 2 » en « Note d'information UEHC du 07/08 »
+        améliore directement le retrieval par raisonnement)."""
+        doc = self.get_document(doc_id)
+        if not doc or not os.path.exists(doc.structure_path):
+            return False
+        with open(doc.structure_path, 'r', encoding='utf-8') as f:
+            tree_data = json.load(f)
+        structure = tree_data.get('structure', tree_data)
+
+        def find(n):
+            if isinstance(n, list):
+                for x in n:
+                    r = find(x)
+                    if r:
+                        return r
+                return None
+            if n.get('node_id') == node_id:
+                return n
+            return find(n.get('nodes', []))
+
+        node = find(structure)
+        if not node:
+            return False
+        if title is not None and title.strip():
+            node['title'] = title.strip()
+        if summary is not None:
+            node['summary'] = summary.strip()
+        with open(doc.structure_path, 'w', encoding='utf-8') as f:
+            json.dump(tree_data, f, indent=2, ensure_ascii=False)
+        # Invalider les dérivés : l'arbre sera relu du disque, le node_map
+        # (et donc les infos de la visionneuse) reconstruit à la demande.
+        self.tree_cache.pop(doc_id, None)
+        self.node_map_cache.pop(doc_id, None)
+        return True
+
     def cache_node_map(self, doc_id: str, node_map: dict):
         self.node_map_cache[doc_id] = node_map
 

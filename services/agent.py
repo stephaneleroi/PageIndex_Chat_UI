@@ -11,6 +11,7 @@ Session-based execution supporting two modes:
 import json
 import logging
 import os
+import re
 from typing import AsyncGenerator, List, Optional
 
 from models.document import DocumentStore
@@ -39,6 +40,24 @@ LANG_INSTRUCTION = (
     "you MUST wrap them in LaTeX delimiters: use $...$ for inline math (e.g. $s_j$, $f_{MD}$, "
     "$t_{m,i}^{\\mathrm{loc}}$) and \\\\[...\\\\] for display/block math. "
     "NEVER output bare symbols like x_i or s_{j+1} without dollar signs."
+)
+
+
+# Style de la réponse finale (demande utilisateur) : prose continue collée à
+# la question. Inspiré du prompt V5_BIS de l'utilisateur : interdits de
+# format ÉNUMÉRÉS avec exception explicite, périmètre strict, et préservation
+# des exigences de citation. Appliqué aux seuls prompts de RÉDACTION (le
+# raisonnement interne du planificateur garde ses formats structurés).
+STYLE_INSTRUCTION = (
+    "Answer style (MUST follow):\n"
+    "- Answer ONLY what is asked; no digressions, no unsolicited opinions or advice, "
+    "no comments about the document, the question or your own answer.\n"
+    "- No introduction, no recap conclusion, no politeness formulas.\n"
+    "- Write in continuous prose with complete sentences. Do NOT use bullet points, "
+    "numbered lists, tables, headings/subheadings or bold/italic emphasis — UNLESS the "
+    "user explicitly asks for such a format or provides a template that uses one.\n"
+    "- These remain mandatory in all cases: inline citations `(node_<id>, page N)` and "
+    "quotation marks around exact quotes.\n"
 )
 
 # System-wide grounding rules. The multi-doc clause is appended dynamically when mode=='kb'.
@@ -313,29 +332,58 @@ Output JSON only:
                 "  4. Always pass `doc_id` to per-document tools (read_node, tree_search, view_pages).\n"
             )
 
-        prompt = f"""You are an intelligent document analysis agent with access to these tools:
+        persistence_rule = """Based on the question and what you know so far, decide the next step.
+If you already have enough information, choose "final_answer".
+NEVER conclude that something is absent from the documents after a single empty
+search: tree summaries may phrase things differently than the question. Before
+answering "not found", you MUST retry `tree_search` with a reformulated query
+(synonyms, the key proper nouns alone) and `read_node` the most plausible
+sections to check their actual text."""
 
-{tools_desc}
-
-{len(tool_specs)+1}. final_answer: You have gathered enough information to answer. Params: {{}}
-
-Question: {query}
+        common = f"""Question: {query}
 
 Accessible documents overview:
 {context_overview[:24000]}
 
 {context_so_far}
 {mode_guide}
-Based on the question and what you know so far, decide the next step.
-If you already have enough information, choose "final_answer".
-NEVER conclude that something is absent from the documents after a single empty
-search: tree summaries may phrase things differently than the question. Before
-answering "not found", you MUST retry `tree_search` with a reformulated query
-(synonyms, the key proper nouns alone) and `read_node` the most plausible
-sections to check their actual text.
+{persistence_rule}
 {skill_section}
 
-{LANG_INSTRUCTION}
+{LANG_INSTRUCTION}"""
+
+        # --- Voie nominale : function calling NATIF (aligné sur l'exemple
+        # officiel PageIndex). Les modèles récents sont entraînés pour cela ;
+        # c'est plus robuste que de parser du JSON écrit en texte.
+        try:
+            msg = await self.pageindex.call_llm_tools(
+                f"You are an intelligent document analysis agent.\n\n{common}\n\n"
+                f"Decide the next step and call EXACTLY ONE tool.",
+                self._to_openai_tools(tool_specs), 'light',
+            )
+            if msg.get("tool_calls"):
+                tc = msg["tool_calls"][0]
+                name = (tc.get("name") or "").split('.')[-1]
+                if name.startswith('tool_'):
+                    name = name[5:]
+                thought = (msg.get("reasoning") or msg.get("content") or "").strip()[:400]
+                logger.info(f"think_and_act (natif): {name}({json.dumps(tc.get('arguments') or {}, ensure_ascii=False)[:120]})")
+                return {"thought": thought,
+                        "action": {"tool": name, "input": tc.get("arguments") or {}}}
+            # Le modèle a répondu en texte malgré les outils : tenter le JSON.
+            if (msg.get("content") or "").strip():
+                return json.loads(self._extract_json_str(msg["content"]))
+        except Exception as e:
+            logger.warning(f"Think-and-act natif indisponible ({e}), repli JSON texte")
+
+        # --- Repli : JSON dans le texte (serveurs sans support des outils) ---
+        prompt = f"""You are an intelligent document analysis agent with access to these tools:
+
+{tools_desc}
+
+{len(tool_specs)+1}. final_answer: You have gathered enough information to answer. Params: {{}}
+
+{common}
 
 Output JSON only:
 {{
@@ -358,6 +406,31 @@ Output JSON only:
                 "thought": "Falling back to a safe default tool",
                 "action": {"tool": fallback_tool, "input": fallback_input},
             }
+
+    @staticmethod
+    def _to_openai_tools(tool_specs: List[dict]) -> List[dict]:
+        """Convertit les specs du registre au format `tools` de l'API
+        (function calling natif), en ajoutant l'outil final_answer."""
+        tools = []
+        for t in tool_specs:
+            props = {}
+            for pname, p in (t.get("parameters") or {}).items():
+                prop = {"type": p.get("type", "string"),
+                        "description": p.get("description", "")}
+                if prop["type"] == "array":
+                    prop["items"] = {"type": "string"}
+                props[pname] = prop
+            tools.append({"type": "function", "function": {
+                "name": t["name"],
+                "description": (t.get("description") or "")[:1024],
+                "parameters": {"type": "object", "properties": props},
+            }})
+        tools.append({"type": "function", "function": {
+            "name": "final_answer",
+            "description": "You have gathered enough information to answer the question.",
+            "parameters": {"type": "object", "properties": {}},
+        }})
+        return tools
 
     # ============================================================ #
     #  Direction 4: Self-reflection
@@ -507,8 +580,9 @@ Context:
 
 {grounding}
 
-Provide a clear, comprehensive answer in French.
-Use Markdown formatting for better readability."""
+{STYLE_INSTRUCTION}
+
+Provide a clear, comprehensive answer in French."""
 
     async def _run_single_simple(self, session_id, query, model_type,
                                  use_memory, tool_context, context_overview):
@@ -592,20 +666,38 @@ Use Markdown formatting for better readability."""
                 full_answer += chunk
                 yield chunk
 
+        # La rédaction est terminée : le front peut rendre la réponse
+        # exploitable (pastilles) sans attendre l'éventuelle auto-évaluation.
+        yield "[ANSWER_DONE]\n"
+
         self.sessions.add_message(session_id, Message(role="user", content=query))
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking=(f"Step 1 [tree_search]: {thinking}" if thinking else ""),
         ))
 
-        # ---- 4. Auto-évaluation (garde-fou ; sautée si rien n'a été lu) ----
-        if not node_list:
+        # ---- 4. Auto-évaluation CONDITIONNELLE ----
+        # La réflexion est un garde-fou, pas un péage : une réponse saine
+        # (substantielle, citée, sans fuite de syntaxe d'outil) rend la main
+        # immédiatement. Elle ne tourne que sur signe de faiblesse.
+        healthy = (
+            len(full_answer) > 400
+            and len(re.findall(r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*\w+\s*,\s*pages?', full_answer)) >= 2
+            and '"thought"' not in full_answer
+        )
+        if not node_list or healthy:
+            logger.info(f"voie simple: auto-évaluation sautée (réponse saine={healthy})")
             return
+        yield "[REFLECTING]\n"
         reflection = await self.reflect(
             query, full_answer, context, model_type, is_vision,
             docs_overview=context_overview,
         )
         yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
+        self.sessions.update_last_message(session_id, "assistant", verification={
+            "score": reflection.get("score"), "issues": reflection.get("issues") or [],
+            "missing_info": reflection.get("missing_info") or [], "auto": True,
+        })
         if not (reflection.get("action") == "retry"
                 and reflection.get("score", 10) < REFLECT_ACCEPT_THRESHOLD):
             return
@@ -636,6 +728,7 @@ Use Markdown formatting for better readability."""
         async for chunk in self.pageindex.call_llm_stream(retry_prompt, model_type):
             full_answer += chunk
             yield chunk
+        yield "[ANSWER_DONE]\n"
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking=(f"Step 1 [tree_search]: {thinking2}" if thinking2 else ""),
@@ -844,6 +937,7 @@ Use Markdown formatting for better readability."""
             async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
                 full_answer += chunk
                 yield chunk
+        yield "[ANSWER_DONE]\n"
 
         # ---- Persist to session history (BEFORE reflection) ----
         # Persisting here (rather than at the very end of run_session) means:
@@ -879,11 +973,16 @@ Use Markdown formatting for better readability."""
         # flag legitimate content as "absent from the extract" (e.g. facts
         # from the end of a node) and trigger pointless retries.
         context_summary = answer_context
+        yield "[REFLECTING]\n"
         reflection = await self.reflect(
             query, full_answer, context_summary, model_type, is_vision,
             docs_overview=context_overview,
         )
         yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
+        self.sessions.update_last_message(session_id, "assistant", verification={
+            "score": reflection.get("score"), "issues": reflection.get("issues") or [],
+            "missing_info": reflection.get("missing_info") or [], "auto": True,
+        })
 
         if (reflection.get("action") == "retry"
                 and reflection.get("score", 10) < REFLECT_ACCEPT_THRESHOLD):
@@ -1335,8 +1434,9 @@ Question: {query}
 
 {grounding}
 
-Provide a clear, comprehensive answer in French.
-Use Markdown formatting for better readability."""
+{STYLE_INSTRUCTION}
+
+Provide a clear, comprehensive answer in French."""
 
     def _build_answer_prompt(self, query, sub_questions, context,
                              history_context, strategy,
@@ -1389,9 +1489,10 @@ Context:
 
 {grounding}
 
+{STYLE_INSTRUCTION}
+
 Provide a clear, comprehensive answer in French.
-If sub-questions were used, synthesize a unified answer.
-Use Markdown formatting for better readability."""
+If sub-questions were used, synthesize a unified answer."""
 
     @staticmethod
     def _extract_json_str(text: str) -> str:

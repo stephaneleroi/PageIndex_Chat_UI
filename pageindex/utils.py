@@ -28,6 +28,37 @@ def set_api_config(api_key: str, base_url: str):
     _global_api_key = api_key
     _global_base_url = base_url
 
+# --- OCR de secours par modèle VISION (PDF scannés sans couche texte) ---
+# Configuré par l'application (indexing_service) depuis le profil « vision »
+# quand celui-ci est utilisable ; sinon l'OCR est simplement sauté.
+_vision_model = None
+_vision_api_key = None
+_vision_base_url = None
+
+def set_vision_config(model: str, api_key: str, base_url: str):
+    """Configure le modèle vision utilisé pour transcrire les pages scannées."""
+    global _vision_model, _vision_api_key, _vision_base_url
+    _vision_model = model
+    _vision_api_key = api_key
+    _vision_base_url = base_url
+
+def _ocr_page_with_vision(png_b64: str) -> str:
+    """Transcrit une image de page via le modèle vision configuré."""
+    client = openai.OpenAI(api_key=_vision_api_key or 'ollama-local',
+                           base_url=_vision_base_url, timeout=300)
+    r = client.chat.completions.create(
+        model=_vision_model, temperature=0,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text":
+                "Transcris fidèlement et intégralement le texte visible sur cette page "
+                "de document, dans l'ordre de lecture. Réponds UNIQUEMENT avec le texte "
+                "transcrit, sans commentaire ni mise en forme ajoutée."},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{png_b64}"}},
+        ]}])
+    msg = r.choices[0].message
+    return (msg.content or getattr(msg, 'reasoning', '') or '').strip()
+
+
 def get_api_key():
     """Get API key from global config or environment"""
     return _global_api_key or os.getenv("INDEX_API_KEY")  # INDEX_API_KEY can be set if you want to use a different key, or use default
@@ -463,7 +494,23 @@ def get_page_tokens(pdf_path, model="gpt-4o-2024-11-20", pdf_parser="PyMuPDF"):
         else:
             doc = pymupdf.open(pdf_path)
         for page_num in range(len(doc)):
-            page_texts.append(doc[page_num].get_text())
+            page = doc[page_num]
+            text = page.get_text()
+            # Page scannée (pas de couche texte) → OCR de secours par le
+            # modèle vision, s'il est configuré. Sinon : comportement
+            # antérieur (page vide).
+            if len(text.strip()) < 20 and _vision_model:
+                try:
+                    import base64
+                    pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2))
+                    png_b64 = base64.b64encode(pix.tobytes('png')).decode()
+                    ocr = _ocr_page_with_vision(png_b64)
+                    if ocr:
+                        logging.info(f"OCR vision: page {page_num + 1} transcrite ({len(ocr)} caractères)")
+                        text = ocr
+                except Exception as e:
+                    logging.warning(f"OCR vision: échec page {page_num + 1}: {e}")
+            page_texts.append(text)
 
     page_texts = strip_repeated_page_furniture(page_texts)
     return [[text, count_tokens(text, model)] for text in page_texts]

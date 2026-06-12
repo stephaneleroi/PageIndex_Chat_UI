@@ -66,6 +66,9 @@ class Message:
     nodes: List[str] = field(default_factory=list)
     thinking: str = ''
     superseded: bool = False
+    # Résultat de l'auto-évaluation ou d'une vérification à la demande :
+    # {score, issues, missing_info, auto, verified_at} — None = non vérifiée.
+    verification: Optional[dict] = None
 
     def to_dict(self):
         return asdict(self)
@@ -115,6 +118,7 @@ class ChatSession:
                 nodes=m.get('nodes', []) or [],
                 thinking=m.get('thinking', '') or '',
                 superseded=bool(m.get('superseded', False)),
+                verification=m.get('verification'),
             )
             for m in data.get('messages', [])
         ]
@@ -501,6 +505,21 @@ class SessionStore:
                 self._save_index(session.mode)
                 return True
         return False
+
+    def update_message_at(self, session_id: str, index: int, **fields) -> bool:
+        """Met à jour un message par son index (vérification à la demande)."""
+        session = self.get_session(session_id)
+        if not session or not (0 <= index < len(session.messages)):
+            return False
+        msg = session.messages[index]
+        for k, v in fields.items():
+            if hasattr(msg, k):
+                setattr(msg, k, v)
+        session.updated_at = time.time()
+        self._save_body(session)
+        self._write_index_for(session)
+        self._save_index(session.mode)
+        return True
 
     def mark_superseded_before_last(self, session_id: str, role: str) -> bool:
         """Mark the SECOND-to-last message with ``role`` as superseded.

@@ -227,6 +227,7 @@ function initSocket() {
     }
     State.socket.on('connect', () => console.log('Socket connected'));
     State.socket.on('status', d => onStreamStatus(d.status));
+    State.socket.on('answer_done', () => onAnswerDone());
     State.socket.on('thinking_chunk', d => onStreamThinking(d.content));
     State.socket.on('nodes', d => onStreamNodes(d.nodes));
     State.socket.on('chunk', d => onStreamChunk(d.content));
@@ -308,8 +309,8 @@ function setupLibraryPage() {
             e.preventDefault();
             dragDepth = 0;
             document.querySelector('.lib-dropzone')?.classList.remove('dragover');
-            const files = [...(e.dataTransfer.files || [])].filter(f => f.name.toLowerCase().endsWith('.pdf'));
-            if (!files.length) { showNotification('Seuls les fichiers PDF sont pris en charge', 'error'); return; }
+            const files = [...(e.dataTransfer.files || [])].filter(f => /\.(pdf|docx)$/i.test(f.name));
+            if (!files.length) { showNotification('Formats pris en charge : PDF et DOCX', 'error'); return; }
             files.forEach(f => uploadDocument(f));
         });
     }
@@ -376,7 +377,7 @@ function renderLibrary(allSessions = []) {
         grid.innerHTML = `
             <div class="lib-dropzone" id="libDropzone">
                 <div class="dz-icon"><i class="bi bi-cloud-arrow-up"></i></div>
-                <h3>Glissez un PDF ici / cliquez pour importer</h3>
+                <h3>Glissez un PDF ou un DOCX ici / cliquez pour importer</h3>
                 <p>L'Agent analyse la structure et génère un résumé ; la conversation est possible après quelques dizaines de secondes</p>
                 <div class="dz-hint">Import par lots pris en charge · 50 Mo max recommandé par fichier</div>
             </div>`;
@@ -602,8 +603,8 @@ function startProgressTick() {
 }
 
 async function uploadDocument(file) {
-    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
-        showNotification('Veuillez choisir un fichier PDF', 'error'); return;
+    if (!file || !/\.(pdf|docx)$/i.test(file.name)) {
+        showNotification('Veuillez choisir un fichier PDF ou DOCX', 'error'); return;
     }
     const fd = new FormData();
     fd.append('file', file);
@@ -1442,6 +1443,7 @@ function onStreamStatus(status) {
         searching: 'Recherche du contenu pertinent...',
         answering: 'Génération de la réponse...',
         retrying: 'L\'Agent complète sa recherche...',
+        reflecting: 'Auto-vérification de la réponse...',
         retry_answering: 'Régénération de la réponse...',
     }[status] || '';
 }
@@ -1782,6 +1784,15 @@ function onAgentDecompose(d) {
     scrollChatToBottom();
 }
 
+// La rédaction est terminée (la suite — auto-vérification éventuelle — peut
+// prendre du temps) : poser les pastilles de citation sans attendre la fin
+// du tour, pour que la réponse soit immédiatement exploitable.
+function onAnswerDone() {
+    const msgs = activeChatUI()?.messages; if (!msgs) return;
+    const rc = msgs.querySelector('#responseContent');
+    if (rc) linkifyCitations(rc, buildNodeDocMap(State.streamingNodes, State.docChat.docId), State.docChat.docId);
+}
+
 function onAgentReflect(d) {
     const msgs = activeChatUI()?.messages; if (!msgs) return;
     // The draft answer is complete at reflection time — make its citations
@@ -1920,7 +1931,28 @@ function appendHistoryMessage(msgs, m, ctx) {
             </button>
         </div>`;
     }
-    div.innerHTML = `${supersededBadge}<div class="message-content">${rendered}</div>${actionsHtml}`;
+    // Indicateur de confiance : verdict de l'auto-évaluation s'il existe,
+    // sinon « Non vérifiée » + bouton de vérification à la demande.
+    let verifyHtml = '';
+    if (m.role === 'assistant' && !m.superseded) {
+        const v = m.verification;
+        if (v && typeof v.score === 'number') {
+            const cls = v.score >= 8 ? 'good' : v.score >= 6 ? 'medium' : 'poor';
+            const issues = (v.issues || []).join(' • ');
+            verifyHtml = `<div class="verify-line">
+                <span class="verify-badge ${cls}"><i class="bi bi-shield-check"></i>
+                    Vérifiée ${v.score}/10${v.auto ? ' (auto)' : ''}</span>
+                ${issues ? `<span class="verify-issues">${esc(issues)}</span>` : ''}
+            </div>`;
+        } else {
+            verifyHtml = `<div class="verify-line">
+                <span class="verify-badge none"><i class="bi bi-shield"></i> Non vérifiée</span>
+                <button class="verify-btn" onclick="verifyMessage(${ctx.index}, this)">
+                    <i class="bi bi-shield-check"></i> Vérifier la réponse</button>
+            </div>`;
+        }
+    }
+    div.innerHTML = `${supersededBadge}<div class="message-content">${rendered}</div>${verifyHtml}${actionsHtml}`;
     msgs.appendChild(div);
     if (m.role === 'assistant') {
         const contentEl = div.querySelector('.message-content');
@@ -1928,6 +1960,28 @@ function appendHistoryMessage(msgs, m, ctx) {
         linkifyCitations(contentEl, buildNodeDocMap(m.nodes, State.docChat.docId), State.docChat.docId);
     }
 }
+
+// Vérification à la demande : juge LLM rejoué sur la réponse avec ses pièces
+// sources. Longue (≈ 1-2 min) — bouton désactivé avec retour visuel, puis
+// rafraîchissement de l'historique (le badge remplace le bouton).
+async function verifyMessage(index, btn) {
+    const sessionId = State.currentPage === 'doc-chat'
+        ? State.docChat.activeSessionId : State.kbChat.activeSessionId;
+    if (!sessionId || State.isStreaming) return;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Vérification en cours…';
+    try {
+        const r = await fetch(`/api/sessions/${sessionId}/messages/${index}/verify`, { method: 'POST' });
+        const d = await r.json();
+        if (!d.success) throw new Error(d.error || 'échec');
+        State.socket.emit('get_history', { session_id: sessionId });
+    } catch (e) {
+        showNotification('Vérification échouée : ' + e.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-shield-check"></i> Vérifier la réponse';
+    }
+}
+window.verifyMessage = verifyMessage;
 
 function parseAgentSteps(thinking) {
     const regex = /^Step\s+(\d+)\s+\[([^\]]+)\](?:\s*\(doc:\s*([^)]+)\))?:\s*(.+)$/gm;
@@ -2279,6 +2333,12 @@ async function showDocTree(docId) {
             showNodePreview(row.dataset.nodeId, docId);
         });
     });
+    modal.querySelectorAll('.tree-node-edit').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            startEditTreeNode(modal, docId, btn.dataset.nodeId);
+        });
+    });
     modal.classList.add('active');
 }
 
@@ -2290,13 +2350,63 @@ function renderTreeNodes(node, depth = 0) {
     const pages = node.start_index
         ? `<span class="tree-node-pages">p. ${node.start_index}${node.end_index && node.end_index !== node.start_index ? '–' + node.end_index : ''}</span>`
         : '';
+    const editBtn = node.node_id
+        ? `<button class="tree-node-edit" data-node-id="${esc(node.node_id)}" title="Corriger le titre / résumé (améliore la recherche)"><i class="bi bi-pencil"></i></button>`
+        : '';
     return `
-        <div class="tree-node" style="--tree-depth:${depth}">
+        <div class="tree-node" style="--tree-depth:${depth}" data-node-id="${esc(node.node_id || '')}">
             <div class="tree-node-row" ${node.node_id ? `data-node-id="${esc(node.node_id)}"` : ''} title="Voir dans le document">
-                <span class="tree-node-title">${esc(node.title)}</span>${pages}
+                <span class="tree-node-title">${esc(node.title)}</span>${pages}${editBtn}
             </div>
-            ${node.summary ? `<div class="tree-node-summary">${esc(node.summary)}</div>` : ''}
+            <div class="tree-node-summary">${esc(node.summary || '')}</div>
         </div>` + renderTreeNodes(children, depth + 1);
+}
+
+// Édition humaine de l'arbre : l'arbre est l'index de recherche — corriger un
+// titre ou un résumé améliore directement le retrieval par raisonnement.
+function startEditTreeNode(modal, docId, nodeId) {
+    const wrap = modal.querySelector(`.tree-node[data-node-id="${nodeId}"]`);
+    if (!wrap || modal.querySelector('.tree-node-edit-form')) return;
+    const title = wrap.querySelector('.tree-node-title')?.textContent || '';
+    const summary = wrap.querySelector('.tree-node-summary')?.textContent || '';
+    const form = document.createElement('div');
+    form.className = 'tree-node-edit-form';
+    form.innerHTML = `
+        <input type="text" class="tnef-title" placeholder="Titre du nœud">
+        <textarea class="tnef-summary" rows="4" placeholder="Résumé (sert à la recherche : nature de la pièce, auteur, destinataire, date, points clés)"></textarea>
+        <div class="tnef-actions">
+            <button class="tnef-cancel" type="button">Annuler</button>
+            <button class="tnef-save" type="button">Enregistrer</button>
+        </div>`;
+    form.querySelector('.tnef-title').value = title;
+    form.querySelector('.tnef-summary').value = summary;
+    wrap.style.display = 'none';
+    wrap.after(form);
+    form.querySelector('.tnef-cancel').addEventListener('click', () => {
+        form.remove(); wrap.style.display = '';
+    });
+    form.querySelector('.tnef-save').addEventListener('click', async () => {
+        const btn = form.querySelector('.tnef-save');
+        btn.disabled = true;
+        try {
+            const r = await fetch(`/api/documents/${docId}/nodes/${nodeId}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: form.querySelector('.tnef-title').value,
+                    summary: form.querySelector('.tnef-summary').value,
+                }),
+            });
+            const d = await r.json();
+            if (!d.success) throw new Error(d.error || 'échec');
+            // Le panneau source dépend des titres/résumés mis en cache.
+            delete State.nodeMapCache[docId];
+            showNotification('Nœud mis à jour — la recherche utilisera la correction');
+            showDocTree(docId);   // re-rendu depuis le serveur
+        } catch (e) {
+            showNotification('Échec de la mise à jour : ' + e.message, 'error');
+            btn.disabled = false;
+        }
+    });
 }
 window.showNodePreview = showNodePreview;
 

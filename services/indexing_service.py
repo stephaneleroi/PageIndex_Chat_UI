@@ -15,7 +15,7 @@ from config import (
     config_manager, is_custom_base_url, PLACEHOLDER_API_KEY,
     DEFAULT_OPENAI_BASE_URL,
 )
-from pageindex import page_index_main, set_api_config, ConfigLoader
+from pageindex import page_index_main, set_api_config, set_vision_config, ConfigLoader
 from types import SimpleNamespace as pageindex_config
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,15 @@ class IndexingService:
             # Ollama), which needs no key but a non-empty placeholder for the SDK.
             if api_key or is_custom_base_url(base_url):
                 set_api_config(api_key or PLACEHOLDER_API_KEY, base_url)
+
+            # OCR de secours pour les pages scannées : activé seulement si le
+            # profil vision est utilisable (clé fournie ou serveur local).
+            vision_cfg = config_manager.get_model_config('vision')
+            v_key = vision_cfg.get('api_key', '')
+            v_url = vision_cfg.get('base_url', '')
+            if v_key or is_custom_base_url(v_url):
+                set_vision_config(vision_cfg.get('name'), v_key or PLACEHOLDER_API_KEY, v_url)
+                logger.info(f"OCR de secours actif (modèle vision: {vision_cfg.get('name')})")
             
             logger.info(f"Using model: {model_name}, base_url: {base_url}")
             

@@ -48,8 +48,12 @@ def _process_chunk(chunk):
             emit('nodes', {'nodes': nodes})
         except Exception:
             pass
+    elif c.startswith('[ANSWER_DONE]'):
+        emit('answer_done', {})
     elif c.startswith('[ANSWERING]'):
         emit('status', {'status': 'answering'})
+    elif c.startswith('[REFLECTING]'):
+        emit('status', {'status': 'reflecting'})
     elif c.startswith('[AGENT_STEP]'):
         payload = c.replace('[AGENT_STEP]', '').strip()
         try:

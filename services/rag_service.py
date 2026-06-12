@@ -67,6 +67,33 @@ class PageIndexService:
             logger.error(f"LLM call error: {e}")
             yield f"[Error: {str(e)}]"
     
+    async def call_llm_tools(self, prompt: str, tools: list, model_type: str = 'light') -> dict:
+        """Appel non-streamé avec function calling NATIF (paramètre `tools`),
+        comme l'exemple officiel PageIndex (agentic_vectorless_rag_demo.py).
+        Retourne {'content', 'reasoning', 'tool_calls': [{'name', 'arguments'}]}.
+        Les exceptions remontent : l'appelant décide du repli (JSON texte)."""
+        client = self._get_client(model_type)
+        model = self._get_model_name(model_type)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            tools=tools,
+            temperature=0,
+        )
+        msg = response.choices[0].message
+        out = {
+            "content": (msg.content or ""),
+            "reasoning": (getattr(msg, 'reasoning', '') or ''),
+            "tool_calls": [],
+        }
+        for tc in (msg.tool_calls or []):
+            try:
+                args = json.loads(tc.function.arguments or '{}')
+            except Exception:
+                args = {}
+            out["tool_calls"].append({"name": tc.function.name or "", "arguments": args})
+        return out
+
     async def call_llm(self, prompt: str, model_type: str = 'text') -> str:
         """Non-streaming LLM call"""
         client = self._get_client(model_type)
@@ -415,7 +442,11 @@ Les nœuds les plus pertinents sont X et Y, car...
             node_text = node_obj.get("text", "") if isinstance(node_obj, dict) else ""
             for p in range(s, e + 1):
                 page_to_nodes.setdefault(p, []).append({
-                    "id": nid, "text": node_text, "start": s, "end": e
+                    "id": nid, "text": node_text, "start": s, "end": e,
+                    # Comparaison insensible aux espaces : l'extraction par
+                    # blocs (spans concaténés) et le texte des nœuds diffèrent
+                    # par leurs blancs, ce qui faisait échouer l'attribution.
+                    "norm": re.sub(r"\s+", "", node_text),
                 })
 
         doc = fitz.open(pdf_path)
@@ -453,16 +484,21 @@ Les nœuds les plus pertinents sont X et Y, car...
                 if not block_text_stripped:
                     continue
 
+                # Attribution stricte : un bloc n'est surligné que si son texte
+                # (espaces ignorés) figure dans le texte d'un nœud candidat.
+                # Un bloc inconnu (en-tête/pied retiré des nœuds, partie d'une
+                # AUTRE pièce sur une page partagée) n'est PAS surligné — le
+                # rabattre sur le premier candidat faisait surligner le début
+                # de l'ordonnance comme s'il appartenait à la note.
+                block_norm = re.sub(r"\s+", "", block_text_stripped)
                 owner = None
-                if len(candidates) == 1:
-                    owner = candidates[0]["id"]
-                else:
+                if block_norm:
                     for c in reversed(candidates):
-                        if c["text"] and block_text_stripped in c["text"]:
+                        if c["norm"] and block_norm in c["norm"]:
                             owner = c["id"]
                             break
-                    if not owner:
-                        owner = candidates[0]["id"]
+                if not owner:
+                    continue
 
                 page_data["blocks"].append({
                     "bbox": [round(bbox[0], 1), round(bbox[1], 1),
