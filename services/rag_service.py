@@ -47,17 +47,23 @@ class PageIndexService:
         config = config_manager.get_model_config(model_type)
         return config.get('name', 'gpt-4o-mini')
     
-    async def call_llm_stream(self, prompt: str, model_type: str = 'text') -> AsyncGenerator[str, None]:
-        """Stream LLM response"""
+    async def call_llm_stream(self, prompt: str, model_type: str = 'text',
+                              messages: list = None) -> AsyncGenerator[str, None]:
+        """Stream LLM response. ``messages`` (tours de dialogue bruts) prime
+        sur ``prompt`` — utilisé par la conversation libre pour interroger le
+        modèle NU, sans enrobage qui altérerait ses réponses."""
         client = self._get_client(model_type)
         model = self._get_model_name(model_type)
-        
+
         try:
+            # Mode brut (messages) : aucune température imposée — les réglages
+            # du Modelfile s'appliquent (parité avec un chat Ollama direct).
+            kwargs = {} if messages else {"temperature": 0}
             stream = await client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                stream=True
+                messages=messages or [{"role": "user", "content": prompt}],
+                stream=True,
+                **kwargs
             )
             async for chunk in stream:
                 if chunk.choices and len(chunk.choices) > 0:

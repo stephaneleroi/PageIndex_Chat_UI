@@ -222,8 +222,7 @@ def create_session():
     title = data.get('title', '')
     if mode == 'single' and len(doc_ids) != 1:
         return jsonify({'error': 'single-mode session requires exactly one doc_id'}), 400
-    if mode == 'kb' and not doc_ids:
-        return jsonify({'error': 'kb-mode session requires at least one doc_id'}), 400
+    # kb sans document = conversation LIBRE (dialogue direct, sans sources).
 
     # Validate all docs exist.
     for did in doc_ids:

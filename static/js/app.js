@@ -1083,15 +1083,16 @@ function updateKbTopbar() {
             const d = State.documents.find(x => x.doc_id === did);
             return d ? { name: d.filename, ok: d.status === 'ready' } : { name: did, ok: false };
         });
-        const chips = docNames.map(x =>
+        const chips = docNames.length ? docNames.map(x =>
             `<span class="active-chip ${x.ok ? '' : 'disabled'}" title="${x.ok ? '' : 'Document supprimé'}">
                 <i class="bi bi-file-earmark-pdf"></i>${esc(x.name)}
-            </span>`).join('');
+            </span>`).join('')
+            : '<span class="active-chip"><i class="bi bi-chat-text"></i> conversation libre (sans sources)</span>';
         bar.innerHTML = `<i class="bi bi-chat-square-dots"></i> Conversation en cours : ${chips}`;
     } else {
         const count = State.kbChat.selectedDocIds.size;
         if (count === 0) {
-            bar.innerHTML = `<i class="bi bi-info-circle"></i> Sélectionnez au moins un document à gauche, ou cliquez sur « Nouvelle conversation »`;
+            bar.innerHTML = `<i class="bi bi-chat-text"></i> Conversation libre (sans sources) — cochez des documents à gauche pour des réponses sourcées et vérifiables`;
         } else {
             bar.innerHTML = `<i class="bi bi-check-circle"></i> <strong style="margin:0 4px;color:var(--primary)">${count}</strong> document(s) sélectionné(s) ; envoyez un message pour démarrer une nouvelle conversation`;
         }
@@ -1100,6 +1101,9 @@ function updateKbTopbar() {
 
 function startNewKbSession() {
     State.kbChat.activeSessionId = null;
+    // Par défaut : AUCUN document sélectionné — l'utilisateur choisit, ou
+    // converse librement sans sources.
+    State.kbChat.selectedDocIds.clear();
     renderKbSessionsList();
     renderKbDocList();
     renderKbMessagesEmpty();
@@ -1231,9 +1235,6 @@ async function sendChatMessage(page) {
     } else {
         if (!State.kbChat.activeSessionId) {
             const docIds = [...State.kbChat.selectedDocIds];
-            if (!docIds.length) {
-                showNotification('Veuillez sélectionner au moins un document', 'error'); return;
-            }
             try {
                 const s = await createSession('kb', docIds, truncateTitle(text));
                 State.kbChat.activeSessionId = s.session_id;

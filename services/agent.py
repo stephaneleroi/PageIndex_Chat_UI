@@ -799,6 +799,29 @@ Provide a clear, comprehensive answer in French."""
         ))
         self.sessions.mark_superseded_before_last(session_id, role="assistant")
 
+    async def _run_free_chat(self, session_id, query, model_type, use_memory):
+        """Conversation libre (Q-R sans document sélectionné) : le modèle NU.
+
+        Principe de recette (utilisateur) : l'application ne doit pas dégrader
+        le modèle. Aucune instruction système, aucun style imposé — la
+        question part telle quelle, l'historique comme vrais tours de
+        dialogue, exactement comme dans un chat direct avec le modèle."""
+        yield "[ANSWERING]\n"
+        messages = []
+        if use_memory:
+            for m in self.sessions.get_messages(session_id)[-10:]:
+                if m.superseded or not (m.content or "").strip():
+                    continue
+                messages.append({"role": m.role, "content": m.content})
+        messages.append({"role": "user", "content": query})
+        full_answer = ""
+        async for chunk in self.pageindex.call_llm_stream(None, model_type, messages=messages):
+            full_answer += chunk
+            yield chunk
+        yield "[ANSWER_DONE]\n"
+        self.sessions.add_message(session_id, Message(role="user", content=query))
+        self.sessions.add_message(session_id, Message(role="assistant", content=full_answer))
+
     async def run_session(self, session_id: str, query: str,
                           model_type: str = "text",
                           use_memory: bool = True) -> AsyncGenerator[str, None]:
@@ -810,9 +833,15 @@ Provide a clear, comprehensive answer in French."""
         mode = session.mode
         doc_ids = list(session.doc_ids or [])
 
-        # In single mode we expect exactly 1 doc; in kb mode we expect ≥1.
+        # Mode kb SANS document : conversation libre — dialogue direct avec le
+        # modèle de rédaction, sans outils ni citations (donc sans badge de
+        # qualité, réservé aux réponses fondées sur des documents).
+        if mode == "kb" and not doc_ids:
+            async for chunk in self._run_free_chat(session_id, query, model_type, use_memory):
+                yield chunk
+            return
         if not doc_ids:
-            yield "[Error: Aucun document sélectionné]" if mode == "kb" else "[Error: Document not set]"
+            yield "[Error: Document not set]"
             return
 
         # Verify all docs exist & are ready.
