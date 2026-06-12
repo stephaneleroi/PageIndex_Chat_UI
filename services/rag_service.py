@@ -497,23 +497,43 @@ Les nœuds les plus pertinents sont X et Y, car...
                 # un bloc est attribué au nœud englobant le PLUS SPÉCIFIQUE
                 # (texte le plus court), sinon le dernier nœud raflait tous
                 # les blocs de la page.
-                owner = None
-                if block_norm:
+                def find_owner(norm):
                     best = None
                     for c in candidates:
-                        if c["norm"] and block_norm in c["norm"]:
+                        if c["norm"] and norm in c["norm"]:
                             if best is None or len(c["norm"]) < len(best["norm"]):
                                 best = c
-                    if best:
-                        owner = best["id"]
-                if not owner:
+                    return best["id"] if best else None
+
+                owner = find_owner(block_norm) if block_norm else None
+                if owner:
+                    page_data["blocks"].append({
+                        "bbox": [round(bbox[0], 1), round(bbox[1], 1),
+                                 round(bbox[2], 1), round(bbox[3], 1)],
+                        "node_id": owner,
+                    })
                     continue
 
-                page_data["blocks"].append({
-                    "bbox": [round(bbox[0], 1), round(bbox[1], 1),
-                             round(bbox[2], 1), round(bbox[3], 1)],
-                    "node_id": owner,
-                })
+                # Bloc à cheval sur deux sections (les blocs PyMuPDF ne
+                # s'alignent pas sur les frontières décidées par le LLM) :
+                # attribution ligne par ligne, chaque ligne tombe dans sa
+                # section. Une ligne inconnue n'est toujours pas surlignée.
+                for line in block.get("lines", []):
+                    line_text = "".join(s.get("text", "") for s in line.get("spans", []))
+                    line_norm = re.sub(r"\s+", "", line_text.strip())
+                    if not line_norm:
+                        continue
+                    l_owner = find_owner(line_norm)
+                    if not l_owner:
+                        continue
+                    lb = line.get("bbox")
+                    if not lb:
+                        continue
+                    page_data["blocks"].append({
+                        "bbox": [round(lb[0], 1), round(lb[1], 1),
+                                 round(lb[2], 1), round(lb[3], 1)],
+                        "node_id": l_owner,
+                    })
 
             result["pages"][str(pnum)] = page_data
 
