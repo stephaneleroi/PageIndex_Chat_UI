@@ -2054,9 +2054,11 @@ window.startEditAssistantMessage = startEditAssistantMessage;
 async function verifyMessage(index, btn) {
     const sessionId = State.currentPage === 'doc-chat'
         ? State.docChat.activeSessionId : State.kbChat.activeSessionId;
-    if (!sessionId || State.isStreaming) return;
+    if (State.isStreaming) { showNotification('Patientez : une réponse est en cours de génération', 'error'); return; }
+    if (!sessionId) { showNotification('Aucune conversation active', 'error'); return; }
     btn.disabled = true;
     btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Vérification en cours…';
+    showNotification('Vérification lancée — le juge relit la réponse avec ses sources (≈ 1 min)');
     try {
         const r = await fetch(`/api/sessions/${sessionId}/messages/${index}/verify`, { method: 'POST' });
         const d = await r.json();

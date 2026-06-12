@@ -725,7 +725,7 @@ body {
 .message-actions {
     display: flex; gap: 6px;
     margin-top: 6px;
-    opacity: 0;
+    opacity: 0.55;            /* visibles par défaut, discrètes */
     transition: opacity 0.15s ease;
 }
 .message-user .message-actions { justify-content: flex-end; }
