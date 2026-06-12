@@ -1923,12 +1923,17 @@ function appendHistoryMessage(msgs, m, ctx) {
                 <i class="bi bi-pencil"></i>
             </button>
         </div>`;
-    } else if (m.role === 'assistant' && !m.superseded && ctx.isLastAssistant) {
+    } else if (m.role === 'assistant' && !m.superseded) {
+        const regenBtn = ctx.isLastAssistant
+            ? `<button class="msg-action-btn" title="Régénérer"
+                onclick="regenerateLastAnswer()"><i class="bi bi-arrow-clockwise"></i></button>`
+            : '';
         actionsHtml = `<div class="message-actions">
-            <button class="msg-action-btn" title="Régénérer"
-                onclick="regenerateLastAnswer()">
-                <i class="bi bi-arrow-clockwise"></i>
-            </button>
+            <button class="msg-action-btn" title="Copier la réponse"
+                onclick="copyAssistantMessage(this)"><i class="bi bi-clipboard"></i></button>
+            <button class="msg-action-btn" title="Modifier la réponse"
+                onclick="startEditAssistantMessage(${ctx.index})"><i class="bi bi-pencil"></i></button>
+            ${regenBtn}
         </div>`;
     }
     // Indicateur de confiance : verdict de l'auto-évaluation s'il existe,
@@ -1960,6 +1965,88 @@ function appendHistoryMessage(msgs, m, ctx) {
         linkifyCitations(contentEl, buildNodeDocMap(m.nodes, State.docChat.docId), State.docChat.docId);
     }
 }
+
+// Copier le texte lisible de la réponse (tel qu'affiché : prose + pastilles
+// « p. N » converties en texte) dans le presse-papiers.
+async function copyAssistantMessage(btn) {
+    const content = btn.closest('.message')?.querySelector('.message-content');
+    if (!content) return;
+    const text = content.innerText.trim();
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch {
+        // Repli (contextes sans API presse-papiers) : sélection temporaire.
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } finally { ta.remove(); }
+    }
+    const icon = btn.querySelector('i');
+    icon.className = 'bi bi-clipboard-check';
+    setTimeout(() => { icon.className = 'bi bi-clipboard'; }, 1500);
+}
+window.copyAssistantMessage = copyAssistantMessage;
+
+// Éditer le texte d'une réponse : le Markdown source est modifié dans un
+// éditeur en place, puis PERSISTÉ dans la session (l'édition invalide le
+// verdict de vérification — le badge repasse à « Non vérifiée »).
+async function startEditAssistantMessage(index) {
+    if (State.isStreaming) return;
+    const page = State.currentPage;
+    const sessionId = page === 'doc-chat'
+        ? State.docChat.activeSessionId : State.kbChat.activeSessionId;
+    if (!sessionId) return;
+    const msgsEl = page === 'doc-chat'
+        ? document.getElementById('docChatMessages')
+        : document.getElementById('kbChatMessages');
+    const bubble = msgsEl?.querySelector(`.message-assistant[data-index="${index}"]`);
+    if (!bubble || bubble.querySelector('.message-edit-box')) return;
+
+    let content = '';
+    try {
+        const r = await fetch(`/api/sessions/${sessionId}`);
+        const d = await r.json();
+        content = d.session?.messages?.[index]?.content || '';
+    } catch { showNotification('Impossible de charger le message', 'error'); return; }
+    if (!content) return;
+
+    const contentEl = bubble.querySelector('.message-content');
+    const originalHtml = contentEl.innerHTML;
+    contentEl.innerHTML = `<div class="message-edit-box">
+        <textarea class="message-edit-textarea" rows="16"></textarea>
+        <div class="message-edit-actions">
+            <button class="btn-edit-cancel" type="button">Annuler</button>
+            <button class="btn-edit-send" type="button"><i class="bi bi-check-lg"></i> Enregistrer</button>
+        </div></div>`;
+    const ta = contentEl.querySelector('textarea');
+    ta.value = content;
+    ta.focus();
+    contentEl.querySelector('.btn-edit-cancel').addEventListener('click', () => {
+        contentEl.innerHTML = originalHtml;
+    });
+    contentEl.querySelector('.btn-edit-send').addEventListener('click', async () => {
+        const newText = (ta.value || '').trim();
+        if (!newText) return;
+        const btn = contentEl.querySelector('.btn-edit-send');
+        btn.disabled = true;
+        try {
+            const r = await fetch(`/api/sessions/${sessionId}/messages/${index}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: newText }),
+            });
+            const d = await r.json();
+            if (!d.success) throw new Error(d.error || 'échec');
+            showNotification('Réponse modifiée');
+            State.socket.emit('get_history', { session_id: sessionId });
+        } catch (e) {
+            showNotification('Échec de la modification : ' + e.message, 'error');
+            btn.disabled = false;
+        }
+    });
+}
+window.startEditAssistantMessage = startEditAssistantMessage;
 
 // Vérification à la demande : juge LLM rejoué sur la réponse avec ses pièces
 // sources. Longue (≈ 1-2 min) — bouton désactivé avec retour visuel, puis

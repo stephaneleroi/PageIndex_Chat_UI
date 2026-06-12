@@ -267,6 +267,23 @@ def clear_session_messages(session_id):
     return jsonify({'success': True})
 
 
+@api_bp.route('/sessions/<session_id>/messages/<int:index>', methods=['PUT'])
+def update_message(session_id, index):
+    """Édition du texte d'une réponse (persistée dans la session). Réservée
+    aux messages assistant ; l'édition invalide le verdict de vérification."""
+    session = session_store.get_session(session_id)
+    if not session or not (0 <= index < len(session.messages)):
+        return jsonify({'error': 'Message introuvable'}), 404
+    if session.messages[index].role != 'assistant':
+        return jsonify({'error': 'Seules les réponses sont éditables ici'}), 400
+    data = request.json or {}
+    content = (data.get('content') or '').strip()
+    if not content:
+        return jsonify({'error': 'content requis'}), 400
+    session_store.update_message_at(session_id, index, content=content, verification=None)
+    return jsonify({'success': True})
+
+
 @api_bp.route('/sessions/<session_id>/messages/<int:index>/verify', methods=['POST'])
 def verify_message(session_id, index):
     """Vérification À LA DEMANDE d'une réponse : rejoue l'auto-évaluation
