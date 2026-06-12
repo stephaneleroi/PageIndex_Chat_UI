@@ -302,10 +302,10 @@ interne (planificateur, réflexion) garde ses formats structurés.
   peuvent produire des arbres légèrement différents.
 - La précision des citations dépend de la discipline du modèle rédacteur ;
   l'IHM tolère les écarts de format mais ne peut pas inventer une page absente.
-- Le déclencheur de l'OCR vision exige une couche texte quasi vide
-  (< 20 caractères) : un scan portant quelques champs de formulaire passe
-  au travers et échoue (« Processing failed ») — correctif identifié
-  (déclencher aussi sur image + texte < ~200 caractères).
+- Les textes des nœuds d'une même page s'emboîtent (le découpage des
+  frontières ne coupe que la fin, pas le début) : l'attribution des
+  surlignages choisit le nœud englobant le plus spécifique, mais un bloc
+  PyMuPDF chevauchant deux sections n'est surligné nulle part.
 - Les réponses ne sont pas reproductibles à l'identique (températures des
   Modelfiles) : les évaluations factuelles se font sur plusieurs tirages,
   jamais sur une exécution isolée (cf. `DIAGNOSTIC-UEMO.md`).

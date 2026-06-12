@@ -494,10 +494,14 @@ def get_page_tokens(pdf_path, model="gpt-4o-2024-11-20", pdf_parser="PyMuPDF"):
         for page_num in range(len(doc)):
             page = doc[page_num]
             text = page.get_text()
-            # Page scannée (pas de couche texte) → OCR de secours par le
-            # modèle vision, s'il est configuré. Sinon : comportement
-            # antérieur (page vide).
-            if len(text.strip()) < 20 and _vision_model:
+            # Page scannée → OCR de secours par le modèle vision, s'il est
+            # configuré. Déclenché aussi quand la page est une image avec une
+            # couche texte squelettique (< 200 caractères : champs de
+            # formulaire, signature électronique — cas réel d'un certificat
+            # médical scanné qui échouait systématiquement). Sinon :
+            # comportement antérieur (page vide).
+            sparse_scan = len(page.get_images()) > 0 and len(text.strip()) < 200
+            if (len(text.strip()) < 20 or sparse_scan) and _vision_model:
                 try:
                     import base64
                     pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2))

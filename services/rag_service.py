@@ -492,12 +492,20 @@ Les nœuds les plus pertinents sont X et Y, car...
                 # rabattre sur le premier candidat faisait surligner le début
                 # de l'ordonnance comme s'il appartenait à la note.
                 block_norm = re.sub(r"\s+", "", block_text_stripped)
+                # Les textes de nœuds d'une même page peuvent s'emboîter (le
+                # découpage des frontières ne coupe que la fin, pas le début) :
+                # un bloc est attribué au nœud englobant le PLUS SPÉCIFIQUE
+                # (texte le plus court), sinon le dernier nœud raflait tous
+                # les blocs de la page.
                 owner = None
                 if block_norm:
-                    for c in reversed(candidates):
+                    best = None
+                    for c in candidates:
                         if c["norm"] and block_norm in c["norm"]:
-                            owner = c["id"]
-                            break
+                            if best is None or len(c["norm"]) < len(best["norm"]):
+                                best = c
+                    if best:
+                        owner = best["id"]
                 if not owner:
                     continue
 

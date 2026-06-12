@@ -606,6 +606,18 @@ def get_text_highlights(doc_id):
 
     node_map = document_store.get_node_map(doc_id)
     if not node_map:
+        # Cache mémoire perdu au redémarrage du serveur : l'arbre se recharge
+        # depuis le disque, la cartographie se recalcule.
+        tree = document_store.get_tree(doc_id)
+        if tree:
+            try:
+                page_count = rag_service.pageindex.get_pdf_page_count(doc.file_path)
+                node_map = rag_service.pageindex.create_node_mapping(
+                    tree, include_page_ranges=True, max_page=page_count)
+                document_store.cache_node_map(doc_id, node_map)
+            except Exception as e:
+                logger.error(f"Node map rebuild error: {e}")
+    if not node_map:
         return jsonify({'error': 'Node mapping not available'}), 404
 
     from services.rag_service import PageIndexService
