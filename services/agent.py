@@ -411,6 +411,65 @@ Output JSON only:
             }
 
     @staticmethod
+    def _estimate_quality(answer: str, refs: List[str], tool_context: dict) -> Optional[dict]:
+        """Note de qualité ESTIMÉE — déterministe, sans appel LLM, calculée
+        pour chaque réponse fondée sur des documents. Mesure la forme
+        vérifiable (sourçage, cohérence mécanique des renvois nœud/page,
+        substance, absence de fuite technique) ; le fond reste du ressort de
+        la vérification par juge LLM, déclenchée à la demande. Retourne None
+        quand la réponse ne s'appuie sur aucune source (pas de badge)."""
+        if not refs:
+            return None
+        text = answer or ""
+        score, checks = 10, []
+
+        cites = re.findall(
+            r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*(\w+)\s*,\s*pages?[\s  ]*(\d+)', text)
+        if len(text) < 200:
+            score -= 3
+            checks.append("réponse très courte")
+        if '"thought"' in text or re.search(r'\b\w+\(\{"', text):
+            score -= 5
+            checks.append("syntaxe technique dans la réponse")
+
+        if not cites:
+            score -= 4
+            checks.append("aucune citation")
+        else:
+            checks.append(f"{len(cites)} citation(s)")
+            # Cohérence mécanique des renvois, sans LLM : le nœud cité
+            # fait-il partie des sources lues, et la page citée tombe-t-elle
+            # dans la plage de pages de ce nœud (node_map) ?
+            docs = tool_context.get("docs") or {}
+            ref_nodes = {r.split('::')[-1] for r in refs}
+            bad_node = bad_page = 0
+            for nid, page_s in cites:
+                pad = nid.zfill(4) if nid.isdigit() else nid
+                if pad not in ref_nodes:
+                    bad_node += 1
+                    continue
+                info = None
+                for d in docs.values():
+                    nm = d.get("node_map") or {}
+                    if pad in nm:
+                        info = nm[pad]
+                        break
+                if info:
+                    s_ = info.get("start_index") or 1
+                    e_ = info.get("end_index") or s_
+                    if not (s_ <= int(page_s) <= e_):
+                        bad_page += 1
+            if bad_node:
+                score -= 2
+                checks.append(f"{bad_node} citation(s) hors des sources lues")
+            if bad_page:
+                score -= 2
+                checks.append(f"{bad_page} renvoi(s) de page hors plage du nœud")
+            if not bad_node and not bad_page:
+                checks.append("renvois nœud/page cohérents")
+        return {"score": max(0, min(10, score)), "checks": checks}
+
+    @staticmethod
     def _to_openai_tools(tool_specs: List[dict]) -> List[dict]:
         """Convertit les specs du registre au format `tools` de l'API
         (function calling natif), en ajoutant l'outil final_answer."""
@@ -677,6 +736,7 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking=(f"Step 1 [tree_search]: {thinking}" if thinking else ""),
+            quality=self._estimate_quality(full_answer, refs, tool_context),
         ))
 
         # ---- 4. Auto-évaluation CONDITIONNELLE ----
@@ -735,6 +795,7 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking=(f"Step 1 [tree_search]: {thinking2}" if thinking2 else ""),
+            quality=self._estimate_quality(full_answer, refs, tool_context),
         ))
         self.sessions.mark_superseded_before_last(session_id, role="assistant")
 
@@ -960,6 +1021,7 @@ Provide a clear, comprehensive answer in French."""
             content=full_answer,
             nodes=list(dict.fromkeys(all_nodes)),
             thinking=_thinking_summary(gathered),
+            quality=self._estimate_quality(full_answer, list(dict.fromkeys(all_nodes)), tool_context),
         ))
 
         # ---- Phase 4: Self-reflection ----
@@ -1108,6 +1170,7 @@ Provide a clear, comprehensive answer in French."""
                 content=full_answer,
                 nodes=retry_nodes,
                 thinking=_thinking_summary_renumbered(retry_gathered),
+                quality=self._estimate_quality(full_answer, retry_nodes, tool_context),
             ))
 
             # Flag the low-score draft (the previous assistant message) as

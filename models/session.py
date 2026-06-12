@@ -69,6 +69,10 @@ class Message:
     # Résultat de l'auto-évaluation ou d'une vérification à la demande :
     # {score, issues, missing_info, auto, verified_at} — None = non vérifiée.
     verification: Optional[dict] = None
+    # Note de qualité ESTIMÉE (déterministe, sans LLM) calculée à la fin de
+    # chaque réponse fondée sur des documents : {score, checks}. None pour
+    # les réponses sans sources (pas de badge).
+    quality: Optional[dict] = None
 
     def to_dict(self):
         return asdict(self)
@@ -119,6 +123,7 @@ class ChatSession:
                 thinking=m.get('thinking', '') or '',
                 superseded=bool(m.get('superseded', False)),
                 verification=m.get('verification'),
+                quality=m.get('quality'),
             )
             for m in data.get('messages', [])
         ]

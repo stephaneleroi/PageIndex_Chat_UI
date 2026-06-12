@@ -2010,8 +2010,10 @@ function appendHistoryMessage(msgs, m, ctx) {
     // Indicateur de confiance : verdict de l'auto-évaluation s'il existe,
     // sinon « Non vérifiée » + bouton de vérification à la demande.
     let verifyHtml = '';
-    if (m.role === 'assistant' && !m.superseded) {
+    // Le badge n'existe que pour les réponses fondées sur des documents.
+    if (m.role === 'assistant' && !m.superseded && (m.nodes || []).length) {
         const v = m.verification;
+        const q = m.quality;
         if (v && typeof v.score === 'number') {
             const cls = v.score >= 8 ? 'good' : v.score >= 6 ? 'medium' : 'poor';
             const issues = (v.issues || []).join(' • ');
@@ -2021,10 +2023,19 @@ function appendHistoryMessage(msgs, m, ctx) {
                 ${issues ? `<span class="verify-issues">${esc(issues)}</span>` : ''}
             </div>`;
         } else {
+            // Note estimée (déterministe) : guide la décision de lancer la
+            // vérification approfondie par le juge LLM.
+            const qBadge = (q && typeof q.score === 'number')
+                ? `<span class="verify-badge ${q.score >= 8 ? 'good' : q.score >= 6 ? 'medium' : 'poor'}"
+                       title="${esc((q.checks || []).join(' • '))}">
+                       <i class="bi bi-speedometer2"></i> Qualité estimée ${q.score}/10</span>`
+                : `<span class="verify-badge none"><i class="bi bi-shield"></i> Non évaluée</span>`;
+            const qChecks = (q && q.checks) ? `<span class="verify-issues">${esc(q.checks.join(' • '))}</span>` : '';
             verifyHtml = `<div class="verify-line">
-                <span class="verify-badge none"><i class="bi bi-shield"></i> Non vérifiée</span>
+                ${qBadge}
                 <button class="verify-btn" onclick="verifyMessage(${ctx.index}, this)">
                     <i class="bi bi-shield-check"></i> Vérifier la réponse</button>
+                ${qChecks}
             </div>`;
         }
     }
