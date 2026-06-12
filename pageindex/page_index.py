@@ -1106,12 +1106,20 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
     logger.info({'total_token': sum([page[1] for page in page_list])})
 
     async def page_index_builder():
-        structure = await tree_parser(page_list, opt, doc=doc, logger=logger)
+        if len(page_list) <= SMALL_DOC_MAX_PAGES:
+            # Pièce courte = un nœud A PRIORI : aucune détection de structure
+            # LLM (sommaire, découpage, vérification) — une pièce de quelques
+            # pages se cherche et se cite comme UNE pièce, sa fiche
+            # identitaire (résumé) suffit à l'indexer.
+            title = os.path.splitext(get_pdf_name(doc))[0]
+            structure = [{'title': title, 'start_index': 1,
+                          'end_index': len(page_list)}]
+            logger.info({'small_doc_single_node': title,
+                         'pages': len(page_list)})
+        else:
+            structure = await tree_parser(page_list, opt, doc=doc, logger=logger)
         if opt.if_add_node_id == 'yes':
             write_node_id(structure)
-        # Pièce courte = un nœud unique (avant textes et résumés : un seul
-        # résumé identitaire au lieu d'un par rubrique interne).
-        structure = collapse_small_doc(structure, page_list)
         if opt.if_add_node_text == 'yes':
             # Page-labeled variant (<page_N>…</page_N>) so the answering LLM
             # can cite the precise page of each claim inside a multi-page node.

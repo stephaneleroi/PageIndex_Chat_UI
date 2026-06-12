@@ -706,27 +706,6 @@ def add_node_text_with_labels(node, pdf_pages):
 SMALL_DOC_MAX_PAGES = 4
 
 
-def collapse_small_doc(structure, page_list, max_pages=SMALL_DOC_MAX_PAGES):
-    """Replie l'arbre d'un document court (≤ max_pages pages) en un nœud
-    unique couvrant tout le document. Appelé AVANT l'ajout des textes et la
-    génération des résumés (un seul résumé identitaire au lieu de N). Les
-    documents plus longs gardent leur structure — c'est là qu'elle sert."""
-    if len(page_list) > max_pages:
-        return structure
-    roots = structure if isinstance(structure, list) else [structure]
-    if not roots:
-        return structure
-    if len(roots) == 1 and not roots[0].get('nodes'):
-        return structure
-    node = {'title': (roots[0].get('title') or '').strip() or 'Document',
-            'start_index': 1, 'end_index': len(page_list)}
-    if roots[0].get('node_id') is not None:
-        node['node_id'] = roots[0]['node_id']
-    logging.info(f"Pièce courte ({len(page_list)} p.) repliée en un nœud unique : "
-                 f"« {node['title'][:60]} »")
-    return [node] if isinstance(structure, list) else node
-
-
 def merge_redundant_children(structure):
     """Fusionne les enfants dont le texte est identique à celui du parent.
 
