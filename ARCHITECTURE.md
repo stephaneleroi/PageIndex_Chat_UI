@@ -18,6 +18,13 @@ conformément au cookbook officiel. Quand une information est introuvable, le
 correctif est d'**améliorer l'arbre** (qualité des résumés), jamais de
 contourner le paradigme.
 
+> **Note (voie corpus)** : depuis le passage à la **voie corpus** en mode
+> multi-documents (cf. « Mode multi-documents : la voie corpus »), le retrieval
+> ne passe plus par les outils du registre (`cross_search`, `read_node`,
+> `list_documents`…) mais par un `tree_search` sur les fiches de pièces. Le
+> tableau ci-dessous décrit les briques canoniques ; plusieurs sont désormais
+> **dormantes** (conservées, réactivables via `USE_CORPUS_SIMPLE = False`).
+
 ### ✔ Paradigme PageIndex (actif)
 
 | Composant | Conformité |
@@ -150,56 +157,55 @@ l'IHM (« conversation libre (sans sources) »).
 Ni décomposition, ni boucle ReAct, ni planificateur : 2 à 4 appels LLM par
 question, déroulé prévisible.
 
-### Mode multi-documents (Q-R) : l'agent ReAct
+### Mode multi-documents (Q-R) : la voie corpus
 
-Justifié par les corpus type dossier de procédure (des dizaines de pièces) où
-la divulgation progressive est nécessaire :
+Le dossier est traité comme **un seul arbre PageIndex** (« le dossier est
+l'arbre, les pièces sont les nœuds, les fiches les résumés »).
+`_run_corpus_simple` (mode kb, ≥ 2 pièces), profil texte :
 
-1. **Décomposition** (profil texte) : sous-questions si nécessaire.
-2. **Boucle ReAct** (≤ 5 étapes/sous-question, profil texte) — pilotée par
-   **function calling natif** (outils déclarés via le paramètre `tools` de
-   l'API, comme l'exemple officiel `agentic_vectorless_rag_demo.py` ; repli
-   automatique sur le JSON texte pour les serveurs sans support) : le
-   planificateur choisit parmi les outils actifs (`tree_search`,
-   `cross_search`, `read_node`, `list_documents`, `read_toc`, `view_pages`).
-   Le flux nominal est celui du cookbook : *raisonner sur l'arbre → lire les
-   nœuds retenus*. Consigne de persistance : ne jamais conclure à l'absence
-   après une seule recherche vide — reformuler la requête, lire les sections
-   plausibles. Les appels d'outils **natifs** (`tool_calls`) émis par certains
-   modèles sont reconvertis au format du planificateur (`rag_service.call_llm`).
-3. **Rédaction** (profil **texte**, le « gros » modèle) : prompt avec la trace
-   de raisonnement + le texte source balisé (plafond 60 000 caractères) +
-   règles de citation `(node_<id>, page N)` ; enquête déclarée close (le
-   rédacteur ne doit jamais « continuer » la boucle d'outils).
-4. **Auto-évaluation** (« réflexion », profil texte) — c'est l'encart
-   « Auto-vérification n/10 » de l'IHM :
-   - *Déclenchement* : **conditionnel** — sautée quand la réponse est saine
-     (substantielle, citée, sans fuite de syntaxe d'outil), la main revient
-     immédiatement ; elle ne tourne que sur signe de faiblesse, avec le
-     statut « Auto-vérification de la réponse… ». Chaque réponse documentée
-     porte une **note de qualité calculée** (badge « Qualité estimée n/10 » —
-     `_estimate_quality`, déterministe et sans LLM : longueur, présence de
-     citations, nœuds cités ∈ sources, pages citées ∈ plages des nœuds,
-     absence de fuite d'outil) qui guide l'utilisateur vers le bouton
-     **« Vérifier la réponse »** (juge LLM à la demande,
-     POST `/sessions/<id>/messages/<i>/verify`, verdict persisté dans le
-     message, invalidé si la réponse est éditée). Les réponses libres (sans
-     sources) n'ont ni note ni vérification.
-   - *Mécanique* (`DocumentAgent.reflect`) : un appel LLM juge la réponse
-     **contre le même dossier de pièces que le rédacteur** (le contexte
-     complet, pas un extrait) sur 4 critères : répond-elle à la question,
-     est-elle étayée par le contexte, contradictions, manques. Sortie JSON
-     `{score, issues, missing_info, action}`.
-   - *Décision* : si `action = retry` **et** `score < 6`
-     (`REFLECT_ACCEPT_THRESHOLD`) → **nouvelle tentative** : une boucle
-     d'outils complémentaire ciblée sur `missing_info`, puis réécriture
-     complète. Le brouillon reste affiché, grisé « Révisée après réflexion » ;
-     la version finale le remplace comme réponse de référence (au plus
-     `MAX_RETRY = 1` cycle).
-   - *Pendant le retry* : l'IHM affiche « Recherche complémentaire en
-     cours… » ; la durée dépend du modèle de rédaction (la réponse est
-     écrite deux fois).
-5. Persistance dans la session (`models/session.py`, `results/_sessions/`).
+1. **Une** recherche par raisonnement sur les **fiches de toutes les pièces**
+   (un `tree_search` sur l'inventaire ; alias courts `p0/p1…` pour éviter les
+   collisions d'identifiants entre arbres) → les pièces pertinentes (≤ 12 lues,
+   `CORPUS_MAX_PIECES_READ`). Remplace l'ancien `cross_search` (un appel LLM
+   par pièce) par **un seul** appel sur l'inventaire.
+2. **Lecture** des pièces retenues. Une pièce **composite volumineuse**
+   (> `CORPUS_PIECE_DRILL_THRESHOLD = 20 000` car.) est sélectionnée section par
+   section (`tree_search` interne — *hiérarchie niveau 2*) au lieu d'être lue en
+   entier ; une pièce courte est lue telle quelle.
+3. **Rédaction** (profil texte) avec l'**inventaire complet** des fiches en appui
+   (toute pièce reste citable même non lue) + citations
+   `(doc: <fichier>, node_<id>, page N)`.
+4. **Auto-évaluation** conditionnelle (commune aux voies, voir ci-dessous).
+
+**Synthèse globale par défaut** — quand la question est une demande de synthèse
+d'ensemble (`_is_global_summary` : « synthèse / résumé **du dossier** », « vue
+d'ensemble »… ; les questions ciblées comme « résumé des faits reprochés »
+restent sur la voie normale), `_run_global_summary` court-circuite la recherche
+et rédige une **vue transversale** directement sur les fiches de toutes les
+pièces (le « map » par pièce est amorti à l'indexation). Citations au niveau
+pièce (nœud racine + page de début).
+
+Voies mono-document et corpus partagent l'**auto-évaluation** (« réflexion »,
+profil texte) — encart « Auto-vérification n/10 » de l'IHM :
+- *Déclenchement* **conditionnel** : sautée quand la réponse est saine
+  (substantielle, citée, sans fuite d'outil). Chaque réponse documentée porte
+  une **note de qualité calculée** (`_estimate_quality`, déterministe, sans LLM :
+  citations présentes, nœuds cités ∈ sources, pages ∈ plages des nœuds, pénalité
+  des citations dégénérées « source » / 【】) qui guide vers le bouton
+  **« Vérifier la réponse »** (juge LLM à la demande,
+  POST `/sessions/<id>/messages/<i>/verify`, verdict persisté, invalidé à
+  l'édition). Les réponses libres (sans sources) n'ont ni note ni vérification.
+- *Mécanique* (`DocumentAgent.reflect`) : un appel LLM juge la réponse contre le
+  contexte fourni (répond-elle, étayée, contradictions, manques) → JSON
+  `{score, issues, missing_info, action}`.
+
+L'ancienne **boucle ReAct + `cross_search`** (décomposition, outils du registre,
+retry par boucle d'outils) est **conservée mais dormante** (réactivable via
+`USE_CORPUS_SIMPLE = False`) : sur Ollama, `cross_search` émettait un appel LLM
+par pièce, sérialisé → une étape > 3 min sur Nemotron, budget de temps épuisé
+avant la rédaction.
+
+Persistance dans la session (`models/session.py`, `results/_sessions/`).
 
 ## Citations & visionneuse (IHM)
 
@@ -283,8 +289,9 @@ Ajustements locaux (« quality in, quality out », cf. ETUDE-RAGFLOW.md) :
 Validé sur un corpus simulé de 52 pièces (`tests/make_corpus_50_pieces.py`) :
 - l'inventaire des pièces transmis au planificateur est plafonné à 24 000
   caractères (≈ 70-80 pièces avec résumés identitaires) ;
-- `cross_search` est plafonné à 12 documents par appel (un appel LLM par
-  document) avec message invitant l'agent à cibler via `list_documents` ;
+- la voie corpus lit ≤ 12 pièces en intégral par réponse
+  (`CORPUS_MAX_PIECES_READ`), le reste du dossier restant citable via
+  l'inventaire complet des fiches ;
 - les indexations d'un import par lot s'exécutent en **file séquentielle**
   (un document à la fois, les autres « en file d'attente ») ;
 - les **`.docx` sont acceptés à l'import** (conversion interne en PDF par
@@ -303,6 +310,20 @@ interne (planificateur, réflexion) garde ses formats structurés.
 
 ## Limites connues
 
+- **Synthèse globale = niveau « fiches »** : elle dégage la structure et les
+  thèmes du dossier mais ne restitue pas le détail factuel fin de chaque pièce
+  (le texte intégral de toutes les pièces ne tient pas dans le contexte — 145 k
+  car. pour 26 pièces vs budget 60 k). Le levier de qualité est la richesse des
+  fiches (prompt `generate_node_summary`). De plus, sous la pression du
+  grounding (« cite chaque affirmation »), le modèle tend encore à **énumérer**
+  les pièces par catégorie plutôt qu'à les fondre en une vraie synthèse
+  transversale — l'instruction de prompt seule n'y suffit pas toujours.
+- **Sélection hiérarchique tributaire de la fiche racine** : au niveau 1, une
+  pièce composite est jugée sur le résumé de son **nœud racine**. Si ce résumé
+  ne reflète pas le contenu profond (cas réel : un en-tête ministériel pour un
+  sujet de concours), la pièce est **ratée** et donc jamais sélectionnée ni
+  « drillée » (niveau 2). Correctif identifié, non implémenté : enrichir la
+  fiche de niveau 1 avec les titres/résumés des sous-sections.
 - ~~Pas d'OCR~~ : les pages sans couche texte sont **transcrites par le
   modèle vision** configuré (profil « vision », ex. qwen3.6 local) au moment
   de l'extraction ; si aucun modèle vision n'est utilisable, comportement
