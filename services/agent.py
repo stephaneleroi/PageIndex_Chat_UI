@@ -65,6 +65,19 @@ STYLE_INSTRUCTION = (
     "quotation marks around exact quotes.\n"
 )
 
+# Mode synthèse globale : une vue d'ensemble transversale, PAS une énumération
+# pièce par pièce. Ajouté au prompt de rédaction quand la question est une
+# demande de synthèse (cf. _is_global_summary).
+GLOBAL_SUMMARY_INSTRUCTION = (
+    "GLOBAL SUMMARY MODE (MUST follow):\n"
+    "- The user wants ONE transversal synthesis of the WHOLE set, NOT a piece-by-piece list. "
+    "Organise the answer BY THEME/topic, aggregating what recurs across pieces; give the overall "
+    "picture (what it is about, the people involved, the timeline, the key facts).\n"
+    "- Do NOT walk through the pieces one after another, and do NOT turn the answer into a "
+    "catalogue. Still cite sources to support thematic statements `(doc: <filename>, node_<id>, "
+    "page N)`, grouping several pieces in one citation when they share a point.\n"
+)
+
 # System-wide grounding rules. The multi-doc clause is appended dynamically when mode=='kb'.
 GROUNDING_INSTRUCTION_SINGLE = (
     "Grounding rules (MUST follow):\n"
@@ -703,6 +716,13 @@ Provide a clear, comprehensive answer in French."""
         retenus → rédaction. Pas de décomposition, pas de boucle ReAct.
         L'auto-évaluation reste comme garde-fou, avec au plus UNE expansion
         bornée (tree_search complémentaire sur les manques signalés)."""
+        # Demande de synthèse globale → vue d'ensemble transversale sur les
+        # résumés de toutes les sections (pas de sélection top-k).
+        if self._is_global_summary(query):
+            async for chunk in self._run_global_summary(
+                    session_id, query, model_type, use_memory, tool_context, context_overview):
+                yield chunk
+            return
         doc_id = tool_context["primary_doc_id"]
         dctx = tool_context["docs"][doc_id]
         tree = dctx["tree"]
@@ -893,6 +913,14 @@ Provide a clear, comprehensive answer in French."""
         docs = tool_context["docs"]
         is_vision = model_type != "text"
 
+        # Demande de synthèse globale → vue d'ensemble transversale sur les
+        # fiches de toutes les pièces (pas de tree_search ni de lecture).
+        if self._is_global_summary(query):
+            async for chunk in self._run_global_summary(
+                    session_id, query, model_type, use_memory, tool_context, context_overview):
+                yield chunk
+            return
+
         # ---- 1. Arbre de sélection : racine + une pièce par nœud (alias court) ----
         per_fiche = max(300, self.CORPUS_SELECT_BUDGET // max(1, len(docs)))
         alias_map = {}        # "p0" -> doc_id (alias court : pas de recopie d'id long)
@@ -1016,6 +1044,125 @@ Provide a clear, comprehensive answer in French."""
             "score": reflection.get("score"), "issues": reflection.get("issues") or [],
             "missing_info": reflection.get("missing_info") or [], "auto": True,
         })
+
+    @staticmethod
+    def _is_global_summary(query: str) -> bool:
+        """Détecte une demande de SYNTHÈSE GLOBALE (vue d'ensemble) — par
+        mots-clés, sans appel LLM (la latence compte). Exclut les demandes
+        explicites de détail par pièce (mode 'résumé par pièce', à part)."""
+        q = (query or "").lower()
+        # Demande explicite de détail par pièce → ce n'est PAS une synthèse globale.
+        if re.search(r"(chaque (pi[eè]ce|document|rapport)|pi[eè]ce par pi[eè]ce|"
+                     r"document par document|une fiche par|d[ée]taill[ée])", q):
+            return False
+        # Marqueurs intrinsèquement globaux.
+        if re.search(r"(vue d.ensemble|fais le point|de quoi (s.agit|parle|traite))", q):
+            return True
+        # Verbe de synthèse ET référence à l'ENSEMBLE (sinon « résumé des faits
+        # reprochés » serait pris à tort pour une synthèse de tout le dossier).
+        verbe = re.search(r"(synth[èe]se|synth[ée]tis|r[ée]sum\w*|pr[ée]sent\w*)", q)
+        ensemble = re.search(r"(dossier|document|affaire|proc[ée]dure|"
+                             r"tout(es)? les pi[èe]ces|l.ensemble|globale?)", q)
+        return bool(verbe and ensemble)
+
+    def _build_summary_entries(self, tool_context: dict):
+        """Entrées pour une synthèse globale : (label, ref 'doc::nid', summary,
+        start_page). Mono-document → une entrée par NŒUD (section) ;
+        multi-documents → une entrée par PIÈCE (nœud racine)."""
+        docs = tool_context.get("docs") or {}
+        primary = tool_context.get("primary_doc_id")
+        entries = []
+        if primary and primary in docs:
+            nm = docs[primary].get("node_map") or {}
+            for nid in sorted(nm.keys()):
+                info = nm[nid]
+                node = info.get("node", info)
+                if not isinstance(node, dict):
+                    continue
+                summary = (node.get("summary") or node.get("title") or "").strip()
+                entries.append((node.get("title") or f"node_{nid}",
+                                f"{primary}::{nid}", summary, info.get("start_index") or 1))
+        else:
+            for did, dctx in docs.items():
+                nm = dctx.get("node_map") or {}
+                if not nm:
+                    continue
+                root = min(nm.keys())
+                info = nm[root]
+                node = info.get("node", info)
+                summary = (node.get("summary") or "").strip() if isinstance(node, dict) else ""
+                entries.append((dctx.get("filename", did),
+                                f"{did}::{root}", summary, info.get("start_index") or 1))
+        return entries
+
+    async def _run_global_summary(self, session_id, query, model_type, use_memory,
+                                  tool_context, context_overview):
+        """Synthèse GLOBALE transversale : rédaction sur les fiches/résumés de
+        TOUTES les pièces (ou sections), sans tree_search ni lecture détaillée.
+        Citations au niveau pièce (nœud racine + page de début). Un seul appel
+        LLM → plus rapide, et c'est le rôle même des fiches identitaires."""
+        is_vision = model_type != "text"
+        entries = self._build_summary_entries(tool_context)
+        if not entries:
+            # Repli : pas de fiches → on retombe sur le flux normal.
+            async for chunk in self._run_corpus_simple(
+                    session_id, query, model_type, use_memory, tool_context, context_overview):
+                yield chunk
+            return
+
+        is_kb = not (tool_context.get("primary_doc_id"))
+        per = max(300, self.CORPUS_INVENTORY_BUDGET // max(1, len(entries)))
+        lines, refs = [], []
+        for label, ref, summary, page in entries:
+            _, _, nid = ref.partition("::")
+            s = (summary[:per] + "…") if len(summary) > per else summary
+            lines.append(f"📄 {label} (node_{nid}, page {page})\n{s or '(pas de fiche)'}")
+            refs.append(ref)
+        inventory = ("【Fiches de toutes les pièces — base de la synthèse. "
+                     "Cite la pièce concernée via le node_ et la page de sa ligne 📄.】\n"
+                     + "\n\n".join(lines))
+
+        yield "[SEARCHING]\n"
+        yield self._step_marker(
+            0, 0, "Synthèse globale : agrégation des fiches de toutes les pièces.",
+            "global_summary", {}, f"{len(entries)} pièce(s)/section(s) agrégée(s)")
+        if refs:
+            yield f"\n[NODES]{json.dumps(refs)}\n"
+
+        grounding = GROUNDING_INSTRUCTION_KB if is_kb else GROUNDING_INSTRUCTION_SINGLE
+        yield "[ANSWERING]\n"
+        history_context = self._build_history_context(session_id, use_memory)
+        answer_prompt = self._build_answer_prompt(
+            query, [query], inventory, history_context, "aggregate",
+            grounding=grounding, mode=("kb" if is_kb else "single"),
+            docs_overview=context_overview, summary_mode=True)
+        full_answer = ""
+        async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
+            full_answer += chunk
+            yield chunk
+        yield "[ANSWER_DONE]\n"
+
+        self.sessions.add_message(session_id, Message(role="user", content=query))
+        self.sessions.add_message(session_id, Message(
+            role="assistant", content=full_answer, nodes=refs,
+            thinking="Synthèse globale (agrégation des fiches de toutes les pièces)",
+            quality=self._estimate_quality(full_answer, refs, tool_context)))
+
+        healthy = (
+            len(full_answer) > 400
+            and len(re.findall(r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*\w+\s*,\s*pages?', full_answer)) >= 2
+            and '"thought"' not in full_answer
+        )
+        if not refs or healthy:
+            logger.info(f"synthèse globale: auto-évaluation sautée (réponse saine={healthy})")
+            return
+        yield "[REFLECTING]\n"
+        reflection = await self.reflect(
+            query, full_answer, inventory, model_type, is_vision, docs_overview=context_overview)
+        yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
+        self.sessions.update_last_message(session_id, "assistant", verification={
+            "score": reflection.get("score"), "issues": reflection.get("issues") or [],
+            "missing_info": reflection.get("missing_info") or [], "auto": True})
 
     async def _run_free_chat(self, session_id, query, model_type, use_memory):
         """Conversation libre (Q-R sans document sélectionné) : le modèle NU.
@@ -1806,7 +1953,8 @@ Provide a clear, comprehensive answer in French."""
                              history_context, strategy,
                              grounding: str = GROUNDING_INSTRUCTION_SINGLE,
                              mode: str = "single",
-                             docs_overview: str = ""):
+                             docs_overview: str = "",
+                             summary_mode: bool = False):
         sub_q_note = ""
         if len(sub_questions) > 1:
             sub_q_note = (
@@ -1854,6 +2002,8 @@ Context:
 {grounding}
 
 {STYLE_INSTRUCTION}
+
+{GLOBAL_SUMMARY_INSTRUCTION if summary_mode else ""}
 
 Provide a clear, comprehensive answer in French.
 If sub-questions were used, synthesize a unified answer."""
