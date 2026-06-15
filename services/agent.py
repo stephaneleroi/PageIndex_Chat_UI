@@ -691,6 +691,8 @@ Output JSON only:
     CORPUS_SELECT_BUDGET = 48000    # budget total des fiches dans l'arbre de sélection
     CORPUS_INVENTORY_BUDGET = 45000  # budget total de l'inventaire joint au rédacteur
     CORPUS_MAX_PIECES_READ = 12     # pièces lues en intégral (le reste : citable via l'inventaire)
+    CORPUS_PIECE_DRILL_THRESHOLD = 20000  # au-delà, une pièce composite est sélectionnée
+    #   section par section (tree_search interne) au lieu d'être lue en entier (hiérarchie niv. 2)
 
     def _build_simple_answer_prompt(self, query, context, history_context, grounding):
         return f"""Answer the question based on the context below — the selected sections of the
@@ -955,14 +957,32 @@ Provide a clear, comprehensive answer in French."""
             + (", ".join(docs[d].get('filename', d) for d in picked) or "—"),
         )
 
-        # ---- 3. Lecture intégrale des pièces retenues (sans LLM) ----
+        # ---- 3. Lecture des pièces retenues. Hiérarchie niveau 2 : une pièce
+        # COMPOSITE volumineuse est sélectionnée section par section (tree_search
+        # interne) au lieu d'être lue en entier — sinon elle sature le budget et
+        # noie la citation. Les pièces courtes (1 nœud) sont lues telles quelles
+        # (pas de surcoût). ----
         parts, refs, used = [], [], 0
         for doc_id in picked:
             dctx = docs[doc_id]
             nm = dctx.get("node_map") or {}
             filename = dctx.get("filename", doc_id)
-            for nid in sorted(nm.keys()):
-                info = nm[nid]
+            piece_len = sum(
+                len((info.get("node", info).get("text") or ""))
+                for info in nm.values() if isinstance(info.get("node", info), dict))
+            if len(nm) > 1 and piece_len > self.CORPUS_PIECE_DRILL_THRESHOLD and dctx.get("tree"):
+                sub = await self.pageindex.tree_search(query, dctx["tree"])
+                nids = [n for n in (sub.get("node_list") or []) if n in nm] or sorted(nm.keys())
+                yield self._step_marker(
+                    0, 0, (sub.get("thinking") or "").strip(), "tree_search",
+                    {"doc_id": doc_id},
+                    f"[{filename}] pièce volumineuse : {len(nids)} section(s) retenue(s)")
+            else:
+                nids = sorted(nm.keys())
+            for nid in nids:
+                info = nm.get(nid)
+                if not info:
+                    continue
                 node = info.get("node", info)
                 text = (node.get("text") or "") if isinstance(node, dict) else ""
                 if not text:
