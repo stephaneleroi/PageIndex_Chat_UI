@@ -670,6 +670,15 @@ Output JSON only:
     SIMPLE_CONTEXT_BUDGET = 60000   # caractères de texte source pour le rédacteur
     SIMPLE_MAX_NODES = 10
 
+    # ---- Voie corpus (le dossier EST un arbre PageIndex) ----
+    # Bascule : un seul tree_search sur les fiches de toutes les pièces, plutôt
+    # qu'un cross_search par document (un appel LLM/pièce qu'Ollama sérialise →
+    # une étape > 3 min sur Nemotron). False = ancienne voie ReAct (conservée).
+    USE_CORPUS_SIMPLE = True
+    CORPUS_SELECT_BUDGET = 48000    # budget total des fiches dans l'arbre de sélection
+    CORPUS_INVENTORY_BUDGET = 45000  # budget total de l'inventaire joint au rédacteur
+    CORPUS_MAX_PIECES_READ = 12     # pièces lues en intégral (le reste : citable via l'inventaire)
+
     def _build_simple_answer_prompt(self, query, context, history_context, grounding):
         return f"""Answer the question based on the context below — the selected sections of the
 document. Their text is wrapped in <page_N>…</page_N> markers.
@@ -841,6 +850,173 @@ Provide a clear, comprehensive answer in French."""
         ))
         self.sessions.mark_superseded_before_last(session_id, role="assistant")
 
+    def _build_corpus_inventory(self, tool_context: dict) -> str:
+        """Inventaire des fiches identitaires de TOUTES les pièces — source
+        citable en appui (synthèse de corpus). Budget PAR FICHE adaptatif
+        (budget_total // N) pour tenir à grande échelle (70+ pièces) sans
+        tronquer la liste des pièces."""
+        docs = tool_context.get("docs") or {}
+        if not docs:
+            return ""
+        per_fiche = max(300, self.CORPUS_INVENTORY_BUDGET // max(1, len(docs)))
+        lines = []
+        for did, dctx in docs.items():
+            nm = dctx.get("node_map") or {}
+            if not nm:
+                continue
+            root_id = min(nm.keys())
+            info = nm.get(root_id) or {}
+            node = info.get("node", info)
+            summary = (node.get("summary") or "").strip() if isinstance(node, dict) else ""
+            if len(summary) > per_fiche:
+                summary = summary[:per_fiche] + "…"
+            s, e = info.get("start_index"), info.get("end_index")
+            pages = f"pages {s}-{e}" if s and e and s != e else f"page {s or 1}"
+            lines.append(f"📄 {dctx.get('filename', did)} (node_{root_id}, {pages})\n{summary}")
+        if not lines:
+            return ""
+        return ("【Inventaire des pièces — fiche identitaire de CHAQUE document de la session. "
+                "Source citable au même titre que les extraits : cite "
+                "`(doc: <fichier>, node_<id>, page N)` avec le fichier et le node de la ligne 📄 "
+                "de la pièce concernée.】\n" + "\n\n".join(lines))
+
+    async def _run_corpus_simple(self, session_id, query, model_type, use_memory,
+                                 tool_context, context_overview):
+        """Le dossier EST un arbre PageIndex : UN seul tree_search sur les
+        fiches de toutes les pièces (au lieu d'un cross_search par document),
+        lecture intégrale des pièces retenues, rédaction citée avec l'inventaire
+        complet en appui. Généralise la voie simple mono-document au corpus.
+
+        Échelle (70+ pièces) : fiches de sélection et inventaire à budget par
+        fiche adaptatif ; nombre de pièces lues en intégral borné (les autres
+        restent citables via l'inventaire)."""
+        docs = tool_context["docs"]
+        is_vision = model_type != "text"
+
+        # ---- 1. Arbre de sélection : racine + une pièce par nœud (alias court) ----
+        per_fiche = max(300, self.CORPUS_SELECT_BUDGET // max(1, len(docs)))
+        alias_map = {}        # "p0" -> doc_id (alias court : pas de recopie d'id long)
+        children = []
+        for i, (doc_id, dctx) in enumerate(docs.items()):
+            alias = f"p{i}"
+            alias_map[alias] = doc_id
+            nm = dctx.get("node_map") or {}
+            fiche = ""
+            if nm:
+                root = nm.get(min(nm.keys())) or {}
+                node = root.get("node", root)
+                fiche = (node.get("summary") or "").strip() if isinstance(node, dict) else ""
+            if len(fiche) > per_fiche:
+                fiche = fiche[:per_fiche] + "…"
+            children.append({"node_id": alias,
+                             "title": dctx.get("filename", doc_id),
+                             "summary": fiche or "(pas de fiche)"})
+        corpus_tree = {"node_id": "root", "title": "Dossier",
+                       "summary": "Racine du dossier ; chaque enfant est une pièce.",
+                       "nodes": children}
+
+        # ---- 2. UNE recherche par raisonnement sur les fiches du corpus ----
+        yield "[SEARCHING]\n"
+        res = await self.pageindex.tree_search(query, corpus_tree)
+        picked = [alias_map[a] for a in (res.get("node_list") or []) if a in alias_map]
+        picked = list(dict.fromkeys(picked))[:self.CORPUS_MAX_PIECES_READ]
+        thinking = (res.get("thinking") or "").strip()
+        yield self._step_marker(
+            0, 0, thinking, "tree_search", {"query": query},
+            f"{len(picked)} pièce(s) retenue(s) : "
+            + (", ".join(docs[d].get('filename', d) for d in picked) or "—"),
+        )
+
+        # ---- 3. Lecture intégrale des pièces retenues (sans LLM) ----
+        parts, refs, used = [], [], 0
+        for doc_id in picked:
+            dctx = docs[doc_id]
+            nm = dctx.get("node_map") or {}
+            filename = dctx.get("filename", doc_id)
+            for nid in sorted(nm.keys()):
+                info = nm[nid]
+                node = info.get("node", info)
+                text = (node.get("text") or "") if isinstance(node, dict) else ""
+                if not text:
+                    continue
+                if used + len(text) > self.SIMPLE_CONTEXT_BUDGET and parts:
+                    break
+                block = (f"=== Document {filename} — Section node_{nid} ===\n"
+                         + text[: self.SIMPLE_CONTEXT_BUDGET - used])
+                parts.append(block)
+                used += len(block)
+                refs.append(f"{doc_id}::{nid}")
+            if used >= self.SIMPLE_CONTEXT_BUDGET:
+                break
+        source_text = "\n\n".join(parts)
+        logger.info(
+            f"voie corpus: {len(picked)} pièce(s) retenue(s), "
+            f"{len(refs)} nœud(s) lu(s), contexte={used} caractères"
+        )
+
+        if refs:
+            yield f"\n[NODES]{json.dumps(refs)}\n"
+
+        # ---- 4. Contexte de rédaction : texte lu + inventaire complet en appui ----
+        inventory = self._build_corpus_inventory(tool_context)
+        context = ""
+        if source_text:
+            context += "【Texte intégral des pièces retenues】\n" + source_text + "\n\n"
+        if inventory:
+            context += inventory
+
+        # ---- 5. Rédaction ----
+        yield "[ANSWERING]\n"
+        history_context = self._build_history_context(session_id, use_memory)
+        full_answer = ""
+        image_paths = self._collect_images_for_refs(refs, tool_context) if is_vision else []
+        if is_vision and image_paths:
+            vision_prompt = self._build_vision_answer_prompt(
+                query, [query], history_context, "aggregate",
+                gathered_context=context, grounding=GROUNDING_INSTRUCTION_KB,
+                mode="kb", docs_overview=context_overview,
+            )
+            async for chunk in self.pageindex.call_vlm_stream(vision_prompt, image_paths, model_type):
+                full_answer += chunk
+                yield chunk
+        else:
+            answer_prompt = self._build_answer_prompt(
+                query, [query], context, history_context, "aggregate",
+                grounding=GROUNDING_INSTRUCTION_KB, mode="kb",
+                docs_overview=context_overview,
+            )
+            async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
+                full_answer += chunk
+                yield chunk
+        yield "[ANSWER_DONE]\n"
+
+        self.sessions.add_message(session_id, Message(role="user", content=query))
+        self.sessions.add_message(session_id, Message(
+            role="assistant", content=full_answer, nodes=refs,
+            thinking=(f"Sélection corpus [tree_search]: {thinking}" if thinking else ""),
+            quality=self._estimate_quality(full_answer, refs, tool_context),
+        ))
+
+        # ---- 6. Auto-évaluation conditionnelle (garde-fou) ----
+        healthy = (
+            len(full_answer) > 400
+            and len(re.findall(r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*\w+\s*,\s*pages?', full_answer)) >= 2
+            and '"thought"' not in full_answer
+        )
+        if not refs or healthy:
+            logger.info(f"voie corpus: auto-évaluation sautée (réponse saine={healthy})")
+            return
+        yield "[REFLECTING]\n"
+        reflection = await self.reflect(
+            query, full_answer, context, model_type, is_vision,
+            docs_overview=context_overview,
+        )
+        yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
+        self.sessions.update_last_message(session_id, "assistant", verification={
+            "score": reflection.get("score"), "issues": reflection.get("issues") or [],
+            "missing_info": reflection.get("missing_info") or [], "auto": True,
+        })
+
     async def _run_free_chat(self, session_id, query, model_type, use_memory):
         """Conversation libre (Q-R sans document sélectionné) : le modèle NU.
 
@@ -927,6 +1103,23 @@ Provide a clear, comprehensive answer in French."""
                 yield chunk
             return
 
+        # ---- Voie corpus (kb multi-pièces) : le dossier est un arbre PageIndex.
+        # UN tree_search sur les fiches de toutes les pièces, lecture intégrale
+        # des pièces retenues, rédaction avec l'inventaire complet en appui —
+        # à la place de la décomposition + boucle ReAct + cross_search.
+        if self.USE_CORPUS_SIMPLE:
+            async for chunk in self._run_corpus_simple(
+                session_id, query, model_type, use_memory,
+                tool_context, context_overview,
+            ):
+                yield chunk
+            return
+
+        # ---- Voie historique kb (décomposition + ReAct + cross_search) ----
+        # Conservée et réactivable (USE_CORPUS_SIMPLE=False) mais plus utilisée
+        # par défaut : sur un dossier de pièces, cross_search émettait un appel
+        # LLM par document qu'Ollama sérialise (une étape > 3 min sur Nemotron),
+        # épuisant le budget de temps avant la rédaction.
         # ---- Phase 1: Query decomposition ----
         yield "[SEARCHING]\n"
         decomposition = await self.decompose_query(query, context_overview, mode, model_type)
