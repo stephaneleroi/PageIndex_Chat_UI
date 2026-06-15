@@ -4,8 +4,11 @@
 
 - Toujours lancer dans le venv : `.venv/bin/python main.py` (port 5001).
 - Modèles locaux via Ollama (`config.json`, hors git) : `text` =
-  nemotron-3-super (rédaction), `light` = gpt-oss-20b-128k (indexation +
-  agent), `vision` = qwen3.6 (OCR, pages).
+  nemotron-3-super (rédaction **ET toutes les étapes internes de l'agent**),
+  `light` = gpt-oss-20b-128k (**indexation initiale uniquement**), `vision` =
+  qwen3.6 (OCR, pages). L'agent ne tourne PAS sur `light` : sur Ollama, le swap
+  de modèle à chaque étape est trop coûteux → tout sur `text` sauf l'indexation
+  (décision délibérée, ne pas « rebrancher light » sur l'agent).
 
 ## ⚠️ Piège n°1 : ne JAMAIS modifier un fichier .py pendant une indexation
 

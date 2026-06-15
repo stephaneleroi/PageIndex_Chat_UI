@@ -76,7 +76,11 @@ GROUNDING_INSTRUCTION_SINGLE = (
     "page for EACH claim or paragraph (not just once per section), and never echo the "
     "`<page_N>` markers themselves in your answer.\n"
     "3. If the Context does not cover the question, say so explicitly "
-    "(e.g. `Non mentionné dans le document...`). Never fabricate facts, citations, or fill gaps from prior knowledge."
+    "(e.g. `Non mentionné dans le document...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
+    "4. Never attribute a role (author, signatory, recipient, doctor, police officer, magistrate...) "
+    "to a person unless the Context states it explicitly. Do NOT infer or invert a relationship "
+    "(author vs recipient, doctor vs investigator, parent vs child), even when two people share a name. "
+    "If a role is not stated, write `non précisé` rather than guessing."
 )
 
 GROUNDING_INSTRUCTION_KB = (
@@ -94,7 +98,11 @@ GROUNDING_INSTRUCTION_KB = (
     "3. If the Context does not cover the question, say so explicitly "
     "(e.g. `Non mentionné dans les documents sélectionnés...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
     "4. When comparing across documents, make the document identity unambiguous in every bullet "
-    "(e.g. `Le document A utilise X, le document B utilise Y`)."
+    "(e.g. `Le document A utilise X, le document B utilise Y`).\n"
+    "5. Never attribute a role (author, signatory, recipient, doctor, police officer, magistrate...) "
+    "to a person unless the Context states it explicitly. Do NOT infer or invert a relationship "
+    "(author vs recipient, doctor vs investigator, parent vs child), even when two people share a name. "
+    "If a role is not stated, write `non précisé` rather than guessing."
 )
 
 
@@ -486,6 +494,19 @@ Output JSON only:
                 checks.append(f"{bad_page} renvoi(s) de page hors plage du nœud")
             if not bad_node and not bad_page:
                 checks.append("renvois nœud/page cohérents")
+
+        # Citations dégénérées : placeholder « source » ou crochets 【】 à la
+        # place du vrai node_id. La regex `cites` ne les capture pas (elle
+        # exige « node »), donc sans ce contrôle une réponse truffée de
+        # citations cassées — pastilles pointant vers un mauvais nœud, ou
+        # nulle part — pouvait afficher 10/10. On ne pénalise PAS les formes
+        # « (page N) » / « (pages N-M) » seules, qui restent valides (le nœud
+        # est déduit au clic).
+        broken = len(re.findall(r'\bsource\s*,\s*pages?\s*\d', text, re.IGNORECASE))
+        broken += text.count('【')
+        if broken:
+            score -= 2
+            checks.append(f"{broken} citation(s) mal formée(s) (placeholder « source » ou 【】)")
         return {"score": max(0, min(10, score)), "checks": checks}
 
     @staticmethod

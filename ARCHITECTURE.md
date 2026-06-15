@@ -107,9 +107,13 @@ rapport…), auteur/signataire, destinataire, date — avant les points couverts
 en citant les noms propres. C'est ce qui permet au raisonnement de retrouver
 une pièce désignée comme un humain le ferait (« la note de M. X au juge Y »).
 
-Tous ces appels LLM utilisent le profil **« rapide »** (configurable, onglet
-« Modèle rapide » des réglages). Si une indexation est interrompue par un
-redémarrage du serveur, le document est récupéré en statut « erreur »
+La construction de la structure (sommaire, arbre) utilise le profil
+**« rapide »** (`light`, configurable via l'onglet « Modèle rapide ») ; les
+résumés de nœuds — l'index de recherche — sont au contraire confiés au profil
+**« texte »** (plus fiable sur les relations auteur/destinataire). C'est le
+**seul** moment où le profil `light` est employé : tout le reste tourne sur
+`text` (voir « Configuration des modèles »). Si une indexation est interrompue
+par un redémarrage du serveur, le document est récupéré en statut « erreur »
 explicite (boutons Réessayer / Supprimer).
 
 ## Cycle de vie d'une question
@@ -135,7 +139,7 @@ l'IHM (« conversation libre (sans sources) »).
 ### Mode mono-document : la voie simple (canonique cookbook)
 
 `_run_single_simple` reproduit `cookbook/pageindex_RAG_simple.ipynb` :
-1. **Une** recherche par raisonnement sur l'arbre (`tree_search`, profil rapide) ;
+1. **Une** recherche par raisonnement sur l'arbre (`tree_search`, profil texte) ;
 2. lecture des nœuds retenus (≤ 10 nœuds, budget 60 000 caractères, chaque
    section préfixée de son identifiant réel `node_<id>`) ;
 3. rédaction (profil texte) avec les règles de citation ; mode Vision : images
@@ -151,8 +155,8 @@ question, déroulé prévisible.
 Justifié par les corpus type dossier de procédure (des dizaines de pièces) où
 la divulgation progressive est nécessaire :
 
-1. **Décomposition** (profil rapide) : sous-questions si nécessaire.
-2. **Boucle ReAct** (≤ 5 étapes/sous-question, profil rapide) — pilotée par
+1. **Décomposition** (profil texte) : sous-questions si nécessaire.
+2. **Boucle ReAct** (≤ 5 étapes/sous-question, profil texte) — pilotée par
    **function calling natif** (outils déclarés via le paramètre `tools` de
    l'API, comme l'exemple officiel `agentic_vectorless_rag_demo.py` ; repli
    automatique sur le JSON texte pour les serveurs sans support) : le
@@ -167,7 +171,7 @@ la divulgation progressive est nécessaire :
    de raisonnement + le texte source balisé (plafond 60 000 caractères) +
    règles de citation `(node_<id>, page N)` ; enquête déclarée close (le
    rédacteur ne doit jamais « continuer » la boucle d'outils).
-4. **Auto-évaluation** (« réflexion », profil rapide) — c'est l'encart
+4. **Auto-évaluation** (« réflexion », profil texte) — c'est l'encart
    « Auto-vérification n/10 » de l'IHM :
    - *Déclenchement* : **conditionnel** — sautée quand la réponse est saine
      (substantielle, citée, sans fuite de syntaxe d'outil), la main revient
@@ -212,9 +216,17 @@ la divulgation progressive est nécessaire :
 
 | Profil | Usage | Exemple local |
 |---|---|---|
-| `text` | rédaction des réponses, conversation libre | nemotron-3-super |
-| `light` | indexation + toutes les étapes internes de l'agent (hérite de `text` si absent) | gpt-oss-20b-128k |
+| `text` | rédaction, conversation libre **ET toutes les étapes internes de l'agent** (décomposition, ReAct, `tree_search` au runtime, réflexion, analyse) + résumés de nœuds à l'indexation | nemotron-3-super |
+| `light` | **indexation initiale uniquement** : construction de la structure de l'arbre (hérite de `text` si absent) | gpt-oss-20b-128k |
 | `vision` | réponses sur images de pages, OCR des pages scannées | qwen3.6 |
+
+**Pourquoi l'agent tourne entièrement sur `text` et non sur `light`** :
+décision délibérée liée à Ollama, où alterner entre deux modèles force un
+rechargement VRAM (décharge/charge) à *chaque* étape — coût prohibitif sur la
+boucle de l'agent. L'indexation, elle, est un long lot homogène : le seul swap
+vers `light` y est amorti. Le paramètre `model_type` propagé dans les méthodes
+de l'agent ne route donc plus le profil interne (vestigial) ; il ne sert qu'à
+basculer texte/vision sur la rédaction finale.
 
 Tout serveur OpenAI-compatible fonctionne (Ollama, vLLM, LM Studio…) : URL de
 base personnalisée, clé factice injectée si absente.
