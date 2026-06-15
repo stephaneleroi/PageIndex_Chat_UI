@@ -78,6 +78,22 @@ GLOBAL_SUMMARY_INSTRUCTION = (
     "page N)`, grouping several pieces in one citation when they share a point.\n"
 )
 
+# Grounding ASSOUPLI pour la synthèse globale : traçabilité SANS forcer une
+# citation par phrase (ce qui poussait le modèle à énumérer les pièces) —
+# citations groupées par thème.
+GROUNDING_INSTRUCTION_SUMMARY = (
+    "Grounding rules for a GLOBAL SUMMARY (MUST follow):\n"
+    "1. Base the synthesis ONLY on the provided fiches; never invent facts; if a "
+    "point isn't covered, say so.\n"
+    "2. Support the synthesis with citations, but do NOT cite one per sentence: cite "
+    "per THEME and GROUP several pieces in a single citation when they share a point "
+    "(e.g. `(doc: a.pdf, node_0000, page 1 ; doc: b.pdf, node_0000, page 1)`). For a "
+    "single document use `(node_<id>, page N)`. Do NOT produce one citation per piece, "
+    "nor a catalogue of pieces.\n"
+    "3. Use plain ASCII parentheses and the REAL node ids; never 【】 nor a "
+    "placeholder like `source`.\n"
+)
+
 # System-wide grounding rules. The multi-doc clause is appended dynamically when mode=='kb'.
 GROUNDING_INSTRUCTION_SINGLE = (
     "Grounding rules (MUST follow):\n"
@@ -872,6 +888,29 @@ Provide a clear, comprehensive answer in French."""
         ))
         self.sessions.mark_superseded_before_last(session_id, role="assistant")
 
+    def _selection_fiche(self, dctx: dict, budget: int) -> str:
+        """Fiche de sélection (niveau 1) d'une pièce : résumé du nœud racine, +
+        pour une pièce COMPOSITE, les titres de ses sous-sections — sinon le
+        tree_search de niveau 1 ne « voit » pas le contenu profond (cas réel :
+        un en-tête ministériel masquant un sujet de concours et ses documents)."""
+        nm = dctx.get("node_map") or {}
+        if not nm:
+            return "(pas de fiche)"
+        keys = sorted(nm.keys())
+        root = nm[keys[0]]
+        rnode = root.get("node", root)
+        fiche = (rnode.get("summary") or "").strip() if isinstance(rnode, dict) else ""
+        if len(keys) > 1:
+            titres = []
+            for k in keys[1:]:
+                node = nm[k].get("node", nm[k])
+                t = (node.get("title") or "").strip() if isinstance(node, dict) else ""
+                if t:
+                    titres.append(f"- {t}")
+            if titres:
+                fiche = (fiche + "\nSections :\n" + "\n".join(titres)).strip()
+        return (fiche[:budget] + "…") if len(fiche) > budget else (fiche or "(pas de fiche)")
+
     def _build_corpus_inventory(self, tool_context: dict) -> str:
         """Inventaire des fiches identitaires de TOUTES les pièces — source
         citable en appui (synthèse de corpus). Budget PAR FICHE adaptatif
@@ -930,17 +969,9 @@ Provide a clear, comprehensive answer in French."""
         for i, (doc_id, dctx) in enumerate(docs.items()):
             alias = f"p{i}"
             alias_map[alias] = doc_id
-            nm = dctx.get("node_map") or {}
-            fiche = ""
-            if nm:
-                root = nm.get(min(nm.keys())) or {}
-                node = root.get("node", root)
-                fiche = (node.get("summary") or "").strip() if isinstance(node, dict) else ""
-            if len(fiche) > per_fiche:
-                fiche = fiche[:per_fiche] + "…"
             children.append({"node_id": alias,
                              "title": dctx.get("filename", doc_id),
-                             "summary": fiche or "(pas de fiche)"})
+                             "summary": self._selection_fiche(dctx, per_fiche)})
         corpus_tree = {"node_id": "root", "title": "Dossier",
                        "summary": "Racine du dossier ; chaque enfant est une pièce.",
                        "nodes": children}
@@ -1149,7 +1180,7 @@ Provide a clear, comprehensive answer in French."""
         if refs:
             yield f"\n[NODES]{json.dumps(refs)}\n"
 
-        grounding = GROUNDING_INSTRUCTION_KB if is_kb else GROUNDING_INSTRUCTION_SINGLE
+        grounding = GROUNDING_INSTRUCTION_SUMMARY  # assoupli : pas de citation par phrase
         yield "[ANSWERING]\n"
         history_context = self._build_history_context(session_id, use_memory)
         answer_prompt = self._build_answer_prompt(
