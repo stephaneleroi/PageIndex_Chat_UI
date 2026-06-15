@@ -59,6 +59,8 @@ STYLE_INSTRUCTION = (
     "When the user asks to DISTINGUISH or SEPARATE categories (e.g. « distingue bien "
     "X, Y et Z »), that IS an explicit structure request: organise the answer in one "
     "clearly headed section per requested category.\n"
+    "- When the user asks for a chronology, a timeline or « le déroulé chronologique », "
+    "order the events by ascending date and time (earliest first), never by document order.\n"
     "- These remain mandatory in all cases: inline citations `(node_<id>, page N)` and "
     "quotation marks around exact quotes.\n"
 )
