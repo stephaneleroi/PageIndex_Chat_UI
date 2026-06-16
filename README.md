@@ -227,13 +227,12 @@ En mode KB, le retrieval ne charge jamais le texte intégral du dossier : un seu
 
 Ce projet appelle les LLM via le **SDK Python OpenAI** (`openai` >= 1.0) et est compatible avec tout point de terminaison de l'API Chat Completions.
 
-| Profil | Exemple local (Ollama) | Description |
+| Profil | Modèle local (Ollama) | Description |
 |------|----------|------|
-| `light` (rapide) | `gpt-oss-20b-128k` | **Indexation initiale uniquement** (construction de la structure de l'arbre) ; hérite de `text` si absent |
-| `text` | `nemotron-3-super` | Rédaction des réponses, conversation libre **ET toutes les étapes internes de l'agent** (`tree_search`, réflexion, analyse) + résumés de pièces à l'indexation |
+| `text` **et** `light` | `gpt-oss-120b-64k` | **Modèle unique** : structure de l'arbre + résumés de pièces (indexation), rédaction, conversation libre et toutes les étapes internes de l'agent |
 | `vision` | `qwen3.6` | Analyse visuelle de pages, OCR des scans |
 
-L'agent ne tourne **pas** sur `light` : sur Ollama, alterner de modèle à chaque étape force un rechargement VRAM coûteux → tout passe sur `text` sauf l'indexation initiale (décision délibérée). Ce projet **n'utilise pas de modèle d'Embedding ni de base de données vectorielle**. Aucune température n'est imposée : chaque modèle tourne avec les réglages de son Modelfile (recommandations de l'éditeur).
+**Un seul modèle pour tout → zéro swap** Ollama (`text` et `light` pointent sur le même modèle). **Gestion du contexte** : l'app ne passe pas de `num_ctx`, donc la fenêtre est figée dans le modèle — `gpt-oss-120b-64k` = `FROM gpt-oss:120b` + `PARAMETER num_ctx 65536` (dimensionné sur le pic des budgets, ~31k tokens, ~76 Go VRAM). Ce projet **n'utilise pas de modèle d'Embedding ni de base de données vectorielle**. Aucune température n'est imposée : chaque modèle tourne avec les réglages de son Modelfile.
 
 ### 🔧 Configurer le LLM (URL personnalisée, fournisseurs compatibles)
 

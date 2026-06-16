@@ -133,12 +133,13 @@ fiches des sections précédentes (continuité du fil). Confondre une compilatio
 avec un document unique contaminerait les fiches : le défaut penche donc
 toujours vers la compilation.
 
-La construction de la structure (sommaire, arbre) utilise le profil
-**« rapide »** (`light`, configurable via l'onglet « Modèle rapide ») ; les
-résumés de nœuds — l'index de recherche — sont au contraire confiés au profil
-**« texte »** (plus fiable sur les relations auteur/destinataire). C'est le
-**seul** moment où le profil `light` est employé : tout le reste tourne sur
-`text` (voir « Configuration des modèles »). Si une indexation est interrompue
+Construction de la structure (sommaire, arbre) **et** résumés de pièces tournent
+sur le **même modèle unique** (profils `text` et `light` pointent sur
+`gpt-oss-120b-64k`, voir « Configuration des modèles ») : plus aucun changement
+de modèle Ollama en cours d'indexation. Les résumés de pièces sont générés avec
+une **concurrence bornée** (`SUMMARY_CONCURRENCY = 3`, `pageindex/utils.py`) :
+au-delà, N appels simultanés de gros contexte sur un modèle local volumineux
+saturent/gèlent Ollama (incident constaté). Si une indexation est interrompue
 par un redémarrage du serveur, le document est récupéré en statut « erreur »
 explicite (boutons Réessayer / Supprimer).
 
@@ -232,8 +233,8 @@ profil texte) — encart « Auto-vérification n/10 » de l'IHM :
 L'ancienne **boucle ReAct + `cross_search`** (décomposition, outils du registre,
 retry par boucle d'outils) est **conservée mais dormante** (réactivable via
 `USE_CORPUS_SIMPLE = False`) : sur Ollama, `cross_search` émettait un appel LLM
-par pièce, sérialisé → une étape > 3 min sur Nemotron, budget de temps épuisé
-avant la rédaction.
+par pièce, sérialisé → une étape > 3 min sur un gros modèle local, budget de
+temps épuisé avant la rédaction.
 
 Persistance dans la session (`models/session.py`, `results/_sessions/`).
 
@@ -250,26 +251,36 @@ Persistance dans la session (`models/session.py`, `results/_sessions/`).
 
 ## Configuration des modèles (`config.py` → `config.json`, hors git)
 
-| Profil | Usage | Exemple local |
+| Profil | Usage | Modèle local |
 |---|---|---|
-| `text` | rédaction, conversation libre **ET toutes les étapes internes de l'agent** (décomposition, ReAct, `tree_search` au runtime, réflexion, analyse) + résumés de nœuds à l'indexation | nemotron-3-super |
-| `light` | **indexation initiale uniquement** : construction de la structure de l'arbre (hérite de `text` si absent) | gpt-oss-20b-128k |
+| `text` | rédaction, conversation libre, **toutes les étapes internes de l'agent** (`tree_search`, réflexion, analyse) **et** résumés de pièces à l'indexation | **gpt-oss-120b-64k** |
+| `light` | construction de la structure de l'arbre (indexation) | **gpt-oss-120b-64k** (même modèle) |
 | `vision` | réponses sur images de pages, OCR des pages scannées | qwen3.6 |
 
-**Pourquoi l'agent tourne entièrement sur `text` et non sur `light`** :
-décision délibérée liée à Ollama, où alterner entre deux modèles force un
-rechargement VRAM (décharge/charge) à *chaque* étape — coût prohibitif sur la
-boucle de l'agent. L'indexation, elle, est un long lot homogène : le seul swap
-vers `light` y est amorti. Le paramètre `model_type` propagé dans les méthodes
-de l'agent ne route donc plus le profil interne (vestigial) ; il ne sert qu'à
+**Un seul modèle pour tout (`gpt-oss-120b-64k`) → zéro swap.** `text` et `light`
+pointent sur le même modèle : Ollama ne décharge/recharge plus jamais en cours
+d'indexation ni entre indexation et requêtes (seul `vision`, rarement appelé,
+reste distinct). Le paramètre `model_type` propagé dans l'agent ne sert qu'à
 basculer texte/vision sur la rédaction finale.
+
+**Gestion du contexte.** L'application **ne passe aucun `num_ctx`** dans ses
+appels (`services/rag_service.py`) : la fenêtre effective est celle du **Modelfile
+Ollama**. Pour ne pas dépendre d'un réglage global fragile, le contexte est
+**figé dans le modèle** — `gpt-oss-120b-64k` est une variante
+(`FROM gpt-oss:120b` + `PARAMETER num_ctx 65536`). 65536 est dimensionné sur le
+pic réel des budgets de l'agent (inventaire `CORPUS_INVENTORY_BUDGET`=45 000 car.
++ pièces lues `SIMPLE_CONTEXT_BUDGET`=60 000 car. + instructions ≈ 31 000 tokens),
+avec une marge ~1,6× ; il économise ~11 Go de VRAM par rapport à 131072 (76 Go vs
+87 Go) tout en restant 100 % GPU. Toute évolution des budgets doit rester sous
+ce `num_ctx` — sinon Ollama tronque silencieusement le contexte (citations
+faussées, critère 1).
 
 Tout serveur OpenAI-compatible fonctionne (Ollama, vLLM, LM Studio…) : URL de
 base personnalisée, clé factice injectée si absente.
 
 **Aucune température n'est imposée** : chaque modèle tourne avec les réglages
-de son Modelfile (recommandations de l'éditeur — ex. NVIDIA prescrit
-temp 1 / top_p 0.95 pour Nemotron). Forcer temp 0 dégradait les modèles à
+de son Modelfile (recommandations de l'éditeur — ex. le Modelfile de
+`gpt-oss:120b` fixe `temperature 1`). Forcer temp 0 dégradait les modèles à
 raisonnement (cf. `DIAGNOSTIC-UEMO.md`) ; en contrepartie, les réponses ne
 sont pas reproductibles à l'identique d'une exécution à l'autre — les
 garde-fous structurels (note de qualité, vérification des pages citées)
@@ -324,7 +335,11 @@ Ajustements locaux (« quality in, quality out », cf. ETUDE-RAGFLOW.md) :
     précédentes) ;
 13. **citations de page dans les fiches** : les « Points saillants » portent
     `(p. N)` (depuis les `<page_N>`) → une synthèse globale bâtie sur les seules
-    fiches reste citable à la page.
+    fiches reste citable à la page ;
+14. **concurrence bornée des résumés** (`SUMMARY_CONCURRENCY = 3`,
+    `generate_summaries_for_structure`) : les fiches de pièces sont générées par
+    lots concurrents plafonnés — sans borne, N appels simultanés de gros contexte
+    **gèlent Ollama** (incident constaté sur un modèle local volumineux).
 
 ## Dimensionnement multi-documents (dossiers de procédure)
 

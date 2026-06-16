@@ -3,12 +3,19 @@
 ## Lancement et environnement
 
 - Toujours lancer dans le venv : `.venv/bin/python main.py` (port 5001).
-- Modèles locaux via Ollama (`config.json`, hors git) : `text` =
-  nemotron-3-super (rédaction **ET toutes les étapes internes de l'agent**),
-  `light` = gpt-oss-20b-128k (**indexation initiale uniquement**), `vision` =
-  qwen3.6 (OCR, pages). L'agent ne tourne PAS sur `light` : sur Ollama, le swap
-  de modèle à chaque étape est trop coûteux → tout sur `text` sauf l'indexation
-  (décision délibérée, ne pas « rebrancher light » sur l'agent).
+- Modèles locaux via Ollama (`config.json`, hors git) : **un seul modèle pour
+  tout** — `text` ET `light` = **gpt-oss-120b-64k** (structure + fiches +
+  rédaction + agent), `vision` = qwen3.6 (OCR, pages). Décision : un modèle
+  unique → **zéro swap** Ollama (le swap à chaque étape était trop coûteux). Ne
+  pas re-séparer text/light sans raison.
+- **Gestion du contexte** : l'app ne passe pas de `num_ctx` → la fenêtre = celle
+  du Modelfile. `gpt-oss-120b-64k` est une variante à `num_ctx` **figé**
+  (`FROM gpt-oss:120b` + `PARAMETER num_ctx 65536`) — dimensionnée sur le pic des
+  budgets (~31k tokens), marge ~1,6×, ~76 Go VRAM. Toute hausse des budgets
+  (`SIMPLE_CONTEXT_BUDGET`, `CORPUS_INVENTORY_BUDGET`) doit rester sous 65536,
+  sinon Ollama tronque silencieusement (citations faussées).
+- Indexation : résumés de pièces à **concurrence bornée** (`SUMMARY_CONCURRENCY=3`)
+  — sans borne, N gros appels concurrents gèlent Ollama.
 
 ## ⚠️ Piège n°1 : ne JAMAIS modifier un fichier .py pendant une indexation
 

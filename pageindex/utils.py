@@ -826,6 +826,8 @@ Directly return the sheet, do not include any other text."""
 # résumé du préambule de tête, souvent un en-tête pauvre).
 _PIECE_TITLE_RE = re.compile(r"^\s*(?:document|pi[eè]ce|annexe|rapport)\s", re.IGNORECASE)
 PIECE_SUMMARY_MAX_CHARS = 60000  # garde-fou : pièce énorme tronquée pour le résumé
+SUMMARY_CONCURRENCY = 3  # résumés de pièces concurrents max : au-delà, N connexions
+                         # simultanées saturent/gèlent Ollama (un seul gros modèle local)
 
 
 def _piece_subtree(node):
@@ -938,10 +940,13 @@ async def generate_summaries_for_structure(structure, model=None, progress_callb
                 await coro
         return structure
 
+    sem = asyncio.Semaphore(SUMMARY_CONCURRENCY)
+
     async def _run(i, head):
-        text = _piece_text(head)[:PIECE_SUMMARY_MAX_CHARS]
-        summary = await generate_node_summary({'text': text}, model=model)
-        return i, summary
+        async with sem:  # borne la concurrence — sinon N gros appels gèlent Ollama
+            text = _piece_text(head)[:PIECE_SUMMARY_MAX_CHARS]
+            summary = await generate_node_summary({'text': text}, model=model)
+            return i, summary
 
     tasks = [asyncio.create_task(_run(i, h)) for i, h in enumerate(heads)]
     summaries = [None] * total
