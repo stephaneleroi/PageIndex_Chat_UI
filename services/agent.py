@@ -1191,18 +1191,19 @@ Provide a clear, comprehensive answer in French."""
             "pièces. Si la question ne contient qu'une seule demande, garde UNE "
             "seule entrée.\n"
             "2) Classe CHAQUE (sous-)question par son intention :\n"
-            '   - "overview" : porte sur L\'ENSEMBLE du dossier (synthèse / vue '
-            "d'ensemble de TOUT le dossier, de TOUS les documents) — une réponse "
-            "à partir des résumés suffit ;\n"
-            '   - "detail" : porte sur UNE pièce précise — identifiée par son type, '
-            "son auteur, son destinataire ou sa date (ex. « résume LA NOTE de M. X "
-            "au juge Y », « que dit L'AUDITION de Z ») — OU demande un fait précis, "
-            "un contenu, une comparaison de déclarations / versions. Dans tous ces "
-            "cas il faut LIRE le texte des pièces.\n"
-            "RÈGLE D'OR : « résumer / décrire UNE pièce désignée » = \"detail\" (il "
-            "faut la retrouver et LIRE son texte) ; « résumer LE DOSSIER / "
-            "l'ensemble » = \"overview\". Le simple mot « résume » ne suffit PAS à "
-            "classer overview : regarde si la cible est UNE pièce ou TOUT le dossier.\n"
+            '   - "overview" : on veut une VUE D\'ENSEMBLE / un SURVOL du dossier '
+            "(sa structure, ses thèmes — « fais une synthèse du dossier ») ; les "
+            "résumés suffisent, pas besoin de lire le texte ;\n"
+            '   - "detail" : on veut un CONTENU FACTUEL PRÉCIS — le contenu d\'une '
+            "pièce, un fait, des déclarations, une comparaison de versions — que la "
+            "demande vise UNE pièce (« résume la note de M. X ») OU tout le dossier "
+            "(« résume les faits reprochés », « quelles sont les différentes "
+            "versions des personnes ? »). Il faut alors LIRE le texte des pièces.\n"
+            "RÈGLE D'OR : VUE D'ENSEMBLE / synthèse du dossier = \"overview\" ; "
+            "CONTENU FACTUEL (faits, versions, déclarations, contenu d'une pièce) = "
+            "\"detail\" (lire le texte) — MÊME si la demande porte sur tout le "
+            "dossier. « résume LE DOSSIER » = overview ; « résume LES FAITS » ou "
+            "« une PIÈCE » = detail. Le mot « résume » seul ne décide pas.\n"
             "Réponds en JSON STRICT, sans commentaire :\n"
             '{"needs_decomposition": true|false, '
             '"items": [{"question": "...", "intent": "overview|detail"}]}\n\n'
