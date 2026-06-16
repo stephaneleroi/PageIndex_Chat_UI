@@ -123,10 +123,49 @@ la lecture des nœuds.
    `node_map` (nœud → plage de pages), surlignages (bbox PyMuPDF), analyse auto
    (résumé global + questions suggérées).
 
+### Concept central : la PIÈCE = un nœud de premier niveau = un document
+
+PageIndex transforme chaque PDF en un **arbre de nœuds** (sa table des matières).
+**Les nœuds de PREMIER NIVEAU sont les « pièces »** — l'unité de travail de toute
+l'application : on sélectionne, résume, lit et cite *à la granularité de la
+pièce*. Une pièce = un **document logique** (une audition, une note, un rapport,
+un chapitre…), c'est-à-dire **un sous-arbre de premier niveau** (le nœud de tête
++ tous ses descendants), et **non** un nœud isolé.
+
+Deux situations produisent des pièces (détection déterministe `piece_head_nodes`,
+`pageindex/utils.py`) :
+
+```
+Cas A — un DOSSIER DE FICHIERS séparés (ex. Procedure-PN-1 : 25 PDF)
+        → chaque fichier = 1 arbre = 1 pièce
+   Audition_LEGRAND.pdf                  ← PIÈCE (nœud de niveau 1)
+     ├─ node_0000  (p.1)   en-tête
+     └─ node_0001  (p.1-2) déclarations
+   Plainte_LEBRUN.pdf                    ← PIÈCE
+     └─ node_0000  (p.1)
+
+Cas B — un FICHIER COMPOSITE (ex. Dossier Théo : 1 PDF = 5 documents)
+        → 1 fichier → 1 arbre → PLUSIEURS pièces (les nœuds de niveau 1)
+   Dossier_Theo_Blanchet.pdf
+     ├─ « Document 1 — rapport éducatif »   ← PIÈCE (nœud de niveau 1)
+     │    ├─ node_0001 (p.1) Situation familiale
+     │    └─ node_0002 (p.2) Scolarité
+     ├─ « Document 2 — Note d'information »  ← PIÈCE
+     │    └─ node_0006 (p.6-8)
+     └─ … (Documents 3 à 5)                  ← autant de PIÈCES
+```
+
+Règle de détection (`piece_head_nodes`) : si l'arbre a **≥ 2 racines** → autant
+de pièces ; si **une racine** englobe des pièces numérotées (« Document/Pièce/
+Annexe N ») → ses enfants sont les pièces ; sinon → le document entier est une
+pièce. **Pourquoi cette granularité ?** Pour traiter chaque document logique
+séparément — citer la bonne pièce, et **éviter toute contamination** entre pièces
+voisines (la note de M. X ne doit pas se mélanger au PV qui la suit dans le même
+fichier).
+
 ### Les fiches de pièces sont l'index de recherche
 
-L'unité de résumé est la **pièce** = un sous-arbre de premier niveau
-(`piece_head_nodes`), pas le nœud. `generate_summaries_for_structure`
+L'unité de résumé est donc la **pièce**, pas le nœud. `generate_summaries_for_structure`
 (`pageindex/utils.py`) produit **un résumé par pièce**, construit sur le texte
 concaténé de tout son sous-arbre, stocké sur son nœud de tête. Le prompt
 (`generate_node_summary`) impose une **fiche d'identité** — nature
@@ -234,6 +273,11 @@ qualité (signalé « sans sources » dans l'IHM).
 
 ### 6.2 Voie mono-pièce (`_run_single_simple`) — pipeline canonique du cookbook
 
+**Quand / pourquoi** : la sélection ne porte que sur **une seule pièce** (un seul
+document logique). Pas besoin de comparer des pièces entre elles : on cherche
+directement *dans* l'arbre de cette pièce les sections utiles, on les lit, on
+rédige. C'est le pipeline canonique du cookbook PageIndex.
+
 1. **Un** `tree_search` sur l'arbre de la pièce ;
 2. lecture des nœuds retenus (≤ `SIMPLE_MAX_NODES`=10, budget
    `SIMPLE_CONTEXT_BUDGET`=60 000 car., chaque section préfixée de `node_<id>`) ;
@@ -241,6 +285,13 @@ qualité (signalé « sans sources » dans l'IHM).
 4. auto-évaluation conditionnelle (cf. §6.5).
 
 ### 6.3 Voie corpus (`_run_corpus_simple`) — le dossier est un arbre
+
+**Quand / pourquoi** : ≥ 2 pièces et intention `detail` (un fait précis, une
+comparaison). Le dossier entier est vu comme **un seul arbre** dont les enfants
+sont les pièces : on sélectionne les pièces utiles sur leurs **fiches à froid**,
+puis on accède à leur **texte**. Pourquoi ne pas tout lire ? Le texte intégral
+d'un dossier ne tient pas dans le contexte — d'où la sélection, puis l'aiguillage
+lecture directe / map-reduce selon le volume.
 
 Mode kb, ≥ 2 pièces, intention `detail` :
 1. **Un** `tree_search` sur les **fiches de toutes les pièces** (`CORPUS_SELECT_BUDGET`)
@@ -267,13 +318,47 @@ Mode kb, ≥ 2 pièces, intention `detail` :
 > globale) **et** (b) si le texte retenu déborde le budget de lecture directe.
 > Sinon, lecture directe.
 
+**Schéma — voie corpus** (exemple : « Quelles sont les différentes versions des
+mis en cause ? » sur un dossier de procédure) :
+
+```
+   fiches à froid (toutes les pièces)
+         │  tree_search  ── sélection des pièces utiles
+         ▼
+   pièces retenues : [Audition LEGRAND, Audition LEPETIT, Plainte LEBRUN, …]
+         │  volume du texte de ces pièces ?
+         ├─ ≤ 60 000 car ─► LECTURE DIRECTE : le texte intégral des pièces va
+         │                   dans le contexte → rédaction citée
+         └─ > 60 000 car ─► MAP-REDUCE ciblé :
+               MAP  (1 appel LLM par PIÈCE, ≤ 3 en parallèle) :
+                  Audition LEGRAND → « nie les faits (p.2), reconnaît la dispute (p.3) »
+                  Audition LEPETIT → « accuse LEGRAND (p.1)… »          ← fiches à CHAUD
+                  Plainte LEBRUN   → « décrit l'agression (p.1) »          (pages conservées)
+               REDUCE (1 appel LLM) :
+                  confronte les fiches à chaud → réponse citée (doc, node, page)
+```
+
+Le map-reduce ne lit jamais tout d'un bloc : chaque pièce est condensée *sous
+l'angle de la question* dans **son propre** appel, donc le nombre/la longueur des
+pièces n'est plus borné par un contexte unique — tout en gardant les pages pour
+citer.
+
 ### 6.4 Synthèse globale (`_run_global_summary`)
 
-Déclenchée par `_is_global_summary` (« synthèse du dossier », « vue
-d'ensemble »…). Court-circuite la recherche et rédige une **vue transversale**
-directement sur les fiches de toutes les pièces (le « map » par pièce est amorti
-à l'indexation), avec citations au niveau pièce (le `(p. N)` des fiches voyage
-dans la synthèse).
+**Quand / pourquoi** : intention `overview` — l'utilisateur veut une **vue
+d'ensemble** (« résume / synthétise le dossier »), pas un fait précis. Inutile de
+lire le texte : les **fiches à froid** (résumés identitaires par pièce, déjà
+calculés à l'indexation) contiennent l'essentiel. C'est rapide et passe à
+l'échelle — **aucun `tree_search`, aucune lecture**.
+
+**Comment** : `_run_global_summary` agrège les fiches de **toutes** les pièces
+(`_build_summary_entries`) et rédige une **vue transversale** en un seul appel.
+Les fiches portant déjà les `(p. N)`, la synthèse **reste citable à la page**
+sans relire le texte ; citations au niveau pièce (nœud de tête + page).
+
+*Exemple* : « Fais-moi une synthèse du dossier » → agrège les ~25 fiches → une
+synthèse structurée et citée. *Limite* : reste au niveau « fiches » (pas le
+détail circonstancié de chaque pièce — cf. §14).
 
 ### 6.5 Auto-évaluation partagée
 
