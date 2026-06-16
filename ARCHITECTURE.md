@@ -30,10 +30,18 @@ paradigme (pas de recherche plein-texte, pas d'embeddings).
 | Lecture des nœuds | Le texte des nœuds retenus est chargé puis donné au rédacteur. |
 | Rédaction ancrée | « Answer based only on the context » + règles de citation `(node_<id>, page N)`. |
 
-Leçon fondatrice (cas réel) : une question désignant « la note de M. X au juge
-Y » restait introuvable car les **résumés ne mentionnaient ni auteur, ni
-destinataire, ni type de pièce**. Le correctif conforme a été d'enrichir le
-prompt de résumé (fiche d'identité), pas d'ajouter une recherche littérale.
+**Leçon fondatrice (cas réel).** Point clé du tableau ci-dessus : `tree_search`
+ne reçoit que les **titres et résumés** des nœuds, **jamais leur texte**. La
+qualité des résumés *est* donc la qualité du retrieval. Conséquence observée :
+une question comme « résume la note écrite par M. X à l'attention du juge Y »
+restait **introuvable**, parce que le résumé de cette note ne mentionnait ni son
+**auteur**, ni son **destinataire**, ni sa **nature** — le modèle, qui raisonne
+sur l'arbre sans en lire le texte, n'avait aucun moyen de relier cette pièce à la
+question. Le correctif **conforme au paradigme** n'a pas été d'ajouter une
+recherche plein-texte (qui contournerait le raisonnement), mais d'**enrichir le
+prompt de résumé** pour que chaque fiche s'ouvre sur l'**identité** de la pièce
+(nature, auteur, destinataire, date — la « fiche d'identité » détaillée en §5).
+Depuis, le raisonnement seul retrouve la pièce, comme le ferait un greffier.
 
 ## 3. Les quatre couches
 
