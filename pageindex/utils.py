@@ -782,7 +782,7 @@ def split_shared_boundary_pages(structure, page_list):
     return structure
 
 
-async def generate_node_summary(node, model=None):
+async def generate_node_summary(node, model=None, context=None):
     # These summaries are the retrieval index: a reasoning LLM picks nodes by
     # reading them. They must therefore capture how a human would DESIGNATE
     # this part (its identity), not only what it talks about — e.g. a request
@@ -793,6 +793,11 @@ async def generate_node_summary(node, model=None):
     # comparent mal. Les champs se projettent directement sur les questions
     # types d'un dossier (chronologie = Date, intervenants = Auteur/
     # Destinataire, personnes = Personnes).
+    context_block = (
+        "\nFor continuity, here are the identity sheets of the PRECEDING sections of the "
+        "SAME document — do NOT re-summarize them; summarize only the current part, but "
+        "use them to resolve any back-reference:\n" + context + "\n"
+    ) if context else ""
     prompt = f"""You are given a part of a document. Write its identity sheet, which a reasoning agent will use to decide whether this part answers a user request. Follow EXACTLY this template (one line per field; use the em dash — when the text gives no answer):
 
 Nature : <kind of piece: letter, report, witness interview record, court order, form, chapter...>
@@ -804,7 +809,7 @@ Objet : <one sentence: what this piece is for>
 Points saillants : <2 to 4 sentences in continuous prose covering the main points, with the key names, places, dates and numbers exactly as written>
 
 Copy names, dates and relationships EXACTLY as stated in the text — never infer or invert a relationship (author vs recipient, parent vs child).
-
+{context_block}
 Partial Document Text: {node['text']}
 
 Write the sheet in the same language as the document text (e.g. French for a French document), keeping the field labels above as they are.
@@ -848,6 +853,41 @@ def piece_head_nodes(structure):
     return [root]
 
 
+def _fiche_field(summary, label):
+    m = re.search(rf"{label}\s*:\s*(.+)", summary or "")
+    return m.group(1).strip() if m else ""
+
+
+def is_compilation(structure, heads=None):
+    """True = dossier de pièces INDÉPENDANTES → résumé ISOLÉ par pièce (anti-
+    contamination) ; False = document UNIQUE → résumé CUMULATIF des sections.
+    Détection ASYMÉTRIQUE : « document unique » seulement sur signal FORT de plan
+    cohérent ; compilation PAR DÉFAUT (le côté sûr — jamais de contamination)."""
+    heads = heads if heads is not None else piece_head_nodes(structure)
+    if len(heads) <= 1:
+        return False  # une seule pièce → document simple (pas une compilation)
+    if any(re.match(r"^\s*(?:document|pi[eè]ce|annexe)\s+\d",
+                    h.get("title") or "", re.IGNORECASE) for h in heads):
+        return True  # pièces numérotées (Document/Pièce/Annexe N) → compilation
+    dates, authors, natures = set(), set(), []
+    for h in heads:
+        s = h.get("summary") or ""
+        d = _fiche_field(s, "Date et heure")
+        a = _fiche_field(s, "Auteur")
+        if d and d not in ("—", "-"):
+            dates.add(d.lower()[:30])
+        if a and a not in ("—", "-"):
+            authors.add(a.lower()[:30])
+        natures.append((_fiche_field(s, "Nature") or "").lower())
+    if len(dates) >= 2 or len(authors) >= 2:
+        return True  # dates / auteurs divergents entre pièces → compilation
+    _PLAN = ("chapitre", "chapter", "partie", "part", "section", "titre",
+             "livre", "préface", "preface", "introduction", "conclusion")
+    if any(any(p in n for p in _PLAN) for n in natures):
+        return False  # plan cohérent et aucune divergence → document unique
+    return True  # défaut sûr : compilation
+
+
 async def generate_summaries_for_structure(structure, model=None, progress_callback=None):
     """Generate ONE summary PER PIECE (first-level sub-tree), concurrently.
 
@@ -866,6 +906,36 @@ async def generate_summaries_for_structure(structure, model=None, progress_callb
         return "\n\n".join(
             (n.get('text') or '') for n in _piece_subtree(head) if n.get('text')
         )
+
+    def _report(done):
+        if progress_callback:
+            try:
+                r = progress_callback(done, total)
+                if asyncio.iscoroutine(r):
+                    return r
+            except Exception:
+                pass
+        return None
+
+    # DOCUMENT UNIQUE → résumés CUMULATIFS et SÉQUENTIELS : chaque section est
+    # résumée avec, en contexte, les fiches des sections précédentes (continuité).
+    # Plus lent (pas de concurrence) mais fidèle au fil d'un même document.
+    # COMPILATION (défaut) → résumés ISOLÉS et concurrents (anti-contamination).
+    if not is_compilation(structure, heads):
+        coro = _report(0)
+        if coro:
+            await coro
+        prev = []
+        for i, head in enumerate(heads):
+            text = _piece_text(head)[:PIECE_SUMMARY_MAX_CHARS]
+            ctx = ("\n\n".join(prev))[-8000:] or None
+            summary = await generate_node_summary({'text': text}, model=model, context=ctx)
+            head['summary'] = summary
+            prev.append(summary)
+            coro = _report(i + 1)
+            if coro:
+                await coro
+        return structure
 
     async def _run(i, head):
         text = _piece_text(head)[:PIECE_SUMMARY_MAX_CHARS]
