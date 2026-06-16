@@ -144,6 +144,11 @@ cohérent : pas de pièces numérotées, dates/auteurs non divergents) est résu
 façon **cumulative et séquentielle**, chaque section recevant en contexte les
 fiches des précédentes.
 
+Ces fiches sont dites **« à froid »** : produites une fois, figées, **neutres**
+(indépendantes de toute question). Au moment d'une question, le système peut
+aussi produire des fiches **« à chaud »**, *orientées par la requête* (map-reduce,
+cf. §6.0 et §6.3) — c'est la distinction structurante du traitement des questions.
+
 ## 6. Cycle de vie d'une question
 
 `services/agent.py`, événement Socket.IO `agent_chat` → `RAGService.agent_chat_stream`
@@ -164,6 +169,60 @@ ne sert plus que de repli). Si la question est composite, `_run_decomposed`
 traite chaque sous-question par la voie de son intention et **assemble les
 réponses en sections** sous un seul cycle. Ce n'est **pas** une boucle ReAct
 (supprimée) : juste une décomposition + N voies normales + assemblage.
+
+### 6.0 Vue d'ensemble : routing, et résumés « à froid » vs « à chaud »
+
+**Deux moments produisent des résumés** — c'est la clé pour comprendre le système :
+
+- **À FROID — à l'indexation** (une fois par document, cf. §5) :
+  `generate_summaries_for_structure` crée **une fiche générique par pièce**,
+  **neutre** (indépendante de toute question) et **persistée**. Elle a un *double
+  rôle* : (a) **informer** (vue de survol) et (b) servir de support de
+  **sélection** (`tree_search` raisonne sur ces fiches).
+- **À CHAUD — au moment de la question** (`_focused_summary`, map-reduce) :
+  **une fiche spécifique par pièce**, **orientée par la question** et
+  **jetable** (gardée en cache pour la session). Elle n'est produite **que si
+  c'est nécessaire** (voir l'aiguillage ci-dessous), et **conserve les pages
+  `(p. N)`** pour rester citable.
+
+**Décomposition.** Une question peut regrouper plusieurs demandes ; `run_session`
+appelle d'abord `decompose_query` (1 appel LLM) qui la **scinde** en
+sous-questions autonomes *si* nécessaire, et **classe l'intention** de chacune.
+Chaque sous-question suit ensuite son propre chemin ; les réponses sont
+assemblées en sections (une réponse, plusieurs `##`).
+
+**Le routing décide du chemin de chaque (sous-)question :**
+
+```
+question
+ ├─ aucun document sélectionné ............... → Conversation libre (modèle nu, §6.1)
+ └─ documents sélectionnés
+     └─ decompose_query : composite ? ......... → scinde en sous-questions + intention
+         pour chaque (sous-)question, selon l'INTENTION classée :
+          ├─ "overview" (vue d'ensemble) ...... → Synthèse globale  → fiches À FROID (§6.4)
+          └─ "detail" (fait précis / versions)
+              ├─ 1 pièce ..................... → Voie mono-pièce : lecture du TEXTE (§6.2)
+              └─ ≥ 2 pièces .................. → Voie corpus (§6.3) :
+                   tree_search (sélection sur fiches à froid) → pièces retenues
+                    ├─ texte ≤ budget ........ → LECTURE DIRECTE du texte
+                    └─ texte > budget ........ → MAP-REDUCE → fiches À CHAUD
+```
+
+L'intention classée **prime** sur l'ancienne heuristique de mots-clés
+`_is_global_summary` (conservée comme repli si l'appel LLM échoue).
+
+**Exemples** (dossier pénal de 25 pièces coché, sauf le 1ᵉʳ) :
+
+| Question | Décision | Source de la réponse |
+|---|---|---|
+| « Qu'est-ce qu'un OPJ ? » *(aucun doc)* | conversation libre | modèle nu, sans sources |
+| « Fais une **synthèse** du dossier » | `overview` → synthèse globale | **fiches à froid** (pas de lecture) |
+| « Que dit l'**audition de LEGRAND** ? » | `detail`, peu de pièces → corpus, lecture directe | **texte** de l'audition |
+| « **Compare les versions** de tous les mis en cause » | `detail`, auditions volumineuses > budget → corpus, map-reduce | **fiches à chaud** (une par audition, orientée « versions », pages conservées) puis compilées |
+| « Synthèse du dossier **+** résumé des faits **+** versions des personnes » | **décomposée** en 3 sous-questions | facette synthèse → fiches à froid ; faits → texte ; versions → texte ou map-reduce. Réponse en 3 sections |
+
+Ainsi le travail coûteux (lecture, fiches à chaud) n'est fait **que** là où la
+question l'exige ; une demande de survol reste rapide sur les fiches à froid.
 
 ### 6.1 Conversation libre (`_run_free_chat`) — le modèle NU
 
