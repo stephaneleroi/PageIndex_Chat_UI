@@ -368,6 +368,14 @@ lecture**. Les fiches portant les `(p. N)`, la synthèse **reste citée à la pa
 Rapide et scalable. *Limite* : reste au niveau « fiches » (pas le détail
 circonstancié — §9).
 
+> **À ne pas confondre avec le résumé *incrémental* de l'indexation (§4.2).** Le
+> travail « résumés précédents + pièce courante » a lieu **à froid, une fois**,
+> pour *construire* les fiches d'un **document unique** (régime cumulatif). La
+> synthèse globale, ici, **n'est pas incrémentale** : elle se contente d'**agréger
+> les fiches déjà construites**. Autrement dit, « aucune lecture » = on ne relit
+> pas le *texte* ; pour un document unique, la continuité du fil est déjà
+> « capitalisée » dans les fiches (fruit de l'incrémental d'indexation).
+
 ### 5.4 Voie « corpus » (`_run_corpus_simple`) — intention `detail`, ≥ 2 pièces
 
 Le dossier est vu comme **un seul arbre** dont les enfants sont les pièces.
