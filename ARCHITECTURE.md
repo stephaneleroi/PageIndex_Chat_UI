@@ -150,9 +150,18 @@ documents** sans tout charger.
   retient les **sections** pertinentes, et on ne lit que celles-là.
 
 ```
-  niveau 1 (entre pièces) :  tree_search sur les FICHES → quelle PIÈCE ?
-  niveau 2 (dans une pièce volumineuse) :  tree_search INTERNE → quelles SECTIONS ?
+  niveau 1 (entre pièces) :  tree_search sur les FICHES (résumés)  → quelle PIÈCE ?
+  niveau 2 (dans une pièce) : tree_search sur les TITRES des sections → quelles SECTIONS ?
 ```
+
+**Sur quoi raisonne `tree_search` ?** Toujours sur l'arbre **privé du texte**
+(titres + résumés). Mais comme on résume **par pièce** (§4.2), **seul le nœud de
+tête d'une pièce porte un résumé** ; ses **sous-nœuds n'ont que leur titre**. Donc
+le niveau 1 raisonne sur les **résumés** des pièces, tandis que le niveau 2
+raisonne sur les **titres** des sections (+ la fiche de la pièce restée sur le
+nœud de tête comme contexte). *Compromis assumé* : la sélection de niveau 2 dépend
+de la qualité des **titres** de sections — excellente pour un plan bien titré,
+plus faible sinon (le levier futur serait un mini-résumé par section).
 
 À noter : la profondeur ne sert **ni aux fiches** (résumé calculé sur la pièce
 entière, §4.2) **ni aux petites pièces**. Elle n'intervient qu'à la **lecture**,
