@@ -1,0 +1,29 @@
+# Test 3 — détaille chaque rapport (re-test)
+
+- session `sess_kb_1781644163_2da571` | 170s
+- voie: corpus — tree_search + LECTURE
+- sous-questions (##): 0
+- COUVERTURE 4 détenus: 4/4 → {'GIRARD': 4, 'HASSAN': 3, 'GONZALEZ': 3, 'OUALI': 3}
+
+## Réponse
+Le document **Rapports _LSC.pdf** contient plusieurs dossiers ; chacun est présenté sous la forme d’un rapport d’évaluation (LSC) suivi d’un avis de la Direction de l’administration pénitentiaire ou du Service pénitentiaire d’insertion et de probation (SPIP).  
+
+**1. Rapport LSC du 18 septembre 2025 – Hugo GIRARD**  
+Le rapport reprend l’identité du détenu (nom Hugo Girard, né le 14 /09 2002 à Metz, français, écrou 75832) et indique que le CPIP est M. Mathieu (node_0000, page 1). La situation pénale précise que M. Girard a été condamné le 14 /08 2025 par le président du tribunal correctionnel de Lyon à une peine de 12 mois d’emprisonnement, dont 6 mois avec sursis probatoire pendant deux ans, la fin de peine étant fixée au 21 novembre 2025, et qu’il a bénéficié de 2 mois 24 jours de remise de peine (node_0002, page 1). Le rapport aux faits indique que le détenu n’est pas loquace, répond “NON” lorsqu’on lui demande s’il reconnaît les faits et confesse avoir parfois vendu des stupéfiants « pour sa consommation propre », se déclarant consommateur de cannabis (node_0003, page 1).  
+
+Sur le plan socio‑professionnel, il vit en couple stable avec Mme Chloé García, possède les CACES nécessaires, prévoit de réintégrer un emploi en logistique à sa sortie et a été orienté vers France Travail (node_0005, page 2). Au niveau sanitaire, il ne connaît aucune pathologie physique ou psychiatrique et consomme quotidiennement trois joints de cannabis sans se déclarer dépendant (node_0005, page 2). Le parcours pénitentiaire décrit une détention sans difficulté particulière, avec des émotions de regret et de détresse, mais aucune mesure disciplinaire ni incident CRI (node_0005, page 2). La modalité d’exécution envisagée est une libération conditionnelle, et le SPIP propose une LSC sous forme de détention différée à la sortie (DDSE) avec réservation pour le 21/09/25 (node_0013, page 2). L’avis final du rapport est **FAVORABLE** (node_0000, page 1).  
+
+**2. Rapport LSC du 5 juillet 2025 – Karim HASSAN**  
+Le rapport du 5 juillet 2025 porte sur M. Karim Hassan (né le 30 /09 1998 au Maroc, nationalité marocaine, écrou non indiqué) (node_0014, page 3). Il indique que le détenu a été écroué le 15 mai 2025 au centre pénitentiaire de Lyon‑Corbas et qu’il purge deux quantum de peine : 4 mois suite à la révocation d’un sursis simple prononcé le 22 novembre 2024 par le tribunal de Paris, et 2 mois suite à la révocation d’un sursis le 22 novembre 2025 par le tribunal de Lyon, tous deux pour vol en récidive dans un local d’habitation ou d’entrepôt (node_0015, page 3).  
+
+Sa situation sociale est décrite comme très précaire : il est en situation irrégulière, sans domicile fixe (précisé comme une collocation précaire à Villeurbanne qu’il ne pourra pas réintégrer), travaille « au noir » comme peintre en bâtiment, et consomme du cannabis de façon accoutumée (node_0018, page 4). Aucun incident disciplinaire n’est répertorié, mais un CRI « en attente » a été relevé le 02 juillet 2025 pour détention, trafic et introduction d’objets interdits (node_0020, page 4). Le rapport mentionne également l’absence d’amendes ou de versements aux parties civiles (node_0020, page 5).  
+
+L’avis final du rapport est **DEFAVORABLE** à l’octroi d’une libération sous contrainte de plein droit (node_0014, page 3 et node_0021, page 5).  
+
+**3. Avis du Service pénitentiaire d’insertion et de probation – Diego GONZALEZ (commission du 22 juin 2025)**  
+Ce texte ne constitue pas un « rapport » au sens du LSC, mais un avis motivé. Il précise l’identité de M. Diego Gonzalez (né le 07 /04 1983 à Muret, français, titre de séjour, adresse 7 rue Victor Hugo, 31557 Tournefeuille) (node_0022, page 6). Il a été condamné le 18 juillet 2023 à 10 mois d’emprisonnement dont 4 mois avec sursis probatoire pour conduite sous l’influence de stupéfiants et usage illicite de stupéfiants (node_0023, page 6). Le service constate que la mise en œuvre d’une libération sous contrainte est **possible** et propose une libération conditionnelle sous forme de semi‑liberté ou de détention à domicile sous surveillance électronique, avec hébergement prévu chez sa sœur à Muret (node_0026, page 6) et les obligations suivantes : travail, soins et justification du paiement des sommes dues au tribunal pénal (node_0027, page 6). L’avis est donc **favorable** à la libération sous contrainte (node_0025, page 6).  
+
+**4. Avis du Service pénitentiaire d’insertion et de probation – Rayan OUALI (commission du 27 juillet 2025)**  
+Cet avis porte sur M. Rayan Ouali (né le 21 février 1988 à Libourne, français, hébergé au CCAS 33500 au moment de l’incarcération) (node_0029, page 8). Il a été condamné le 03 /06 2025 à 6 mois d’emprisonnement pour violences dans un moyen de transport collectif et outrages à des agents publics (node_0031, page 8). Le détenu est déclaré sans domicile fixe. Le service indique que la mise en œuvre d’une libération sous contrainte est **possible** (node_0032, page 8) et propose un hébergement en demi‑liberté au Secours catholique de Bordeaux (centre ou quartier de semi‑liberté) (node_0033, page 8). Les modalités préconisées sont la semi‑liberté avec des horaires d’entrée/sortie détaillés (node_0034, page 8). L’avis exprime donc un **avis favorable** à la libération sous contrainte (node_0032, page 8).  
+
+En résumé, les deux rapports LSC (Girard et Hassan) donnent respectivement un avis **favorable** et **défavorable**, tandis que les deux avis du SPIP (Gonzalez et Ouali) sont **favorables** à la mise en œuvre d’une libération sous contrainte, chacun présentant les éléments pénaux, sociaux et sanitaires qui justifient la décision.
