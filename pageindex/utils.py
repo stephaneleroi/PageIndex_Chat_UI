@@ -813,21 +813,66 @@ Directly return the sheet, do not include any other text."""
     return response
 
 
+# Détection des PIÈCES (sous-arbres de premier niveau) — même logique que
+# DocumentAgent._piece_heads côté requête : un fichier contient une ou plusieurs
+# pièces. On résume PAR PIÈCE (sur le texte de tout son sous-arbre), et non par
+# nœud : indexation ~N fois plus rapide ET fiche de pièce COMPLÈTE (vs le seul
+# résumé du préambule de tête, souvent un en-tête pauvre).
+_PIECE_TITLE_RE = re.compile(r"^\s*(?:document|pi[eè]ce|annexe|rapport)\s", re.IGNORECASE)
+PIECE_SUMMARY_MAX_CHARS = 60000  # garde-fou : pièce énorme tronquée pour le résumé
+
+
+def _piece_subtree(node):
+    """Nœud de tête + tous ses descendants, en ordre de lecture."""
+    out = [node]
+    for c in node.get('nodes') or []:
+        out.extend(_piece_subtree(c))
+    return out
+
+
+def piece_head_nodes(structure):
+    """Têtes des pièces : liste de ≥2 racines → autant de pièces ; racine unique
+    englobante → enfants du conteneur de pièces numérotées (Document/Pièce/
+    Annexe/Rapport N) ; sinon une seule pièce (le document entier)."""
+    roots = structure if isinstance(structure, list) else ([structure] if structure else [])
+    if len(roots) >= 2:
+        return roots
+    if not roots:
+        return []
+    root = roots[0]
+    for container in [root] + (root.get('nodes') or []):
+        kids = container.get('nodes') or []
+        numbered = [k for k in kids if _PIECE_TITLE_RE.match(k.get('title') or '')]
+        if len(numbered) >= 2:
+            return kids
+    return [root]
+
+
 async def generate_summaries_for_structure(structure, model=None, progress_callback=None):
-    """Generate per-node summaries concurrently.
+    """Generate ONE summary PER PIECE (first-level sub-tree), concurrently.
 
-    If `progress_callback` is provided, it will be invoked as
-    `progress_callback(done, total)` each time a node summary finishes —
-    enabling real-time progress reporting. The callback may be sync or async.
+    A piece's summary is the identity sheet of its WHOLE sub-tree (built from the
+    concatenated text), stored on the piece's head node. Sub-nodes keep their
+    title but get no individual summary: this is the retrieval index at the PIECE
+    granularity — far cheaper than one LLM call per node, and a complete fiche
+    rather than just the head's preamble.
+
+    `progress_callback(done, total)` is invoked per piece (sync or async).
     """
-    nodes = structure_to_list(structure)
-    total = len(nodes)
+    heads = piece_head_nodes(structure)
+    total = len(heads)
 
-    async def _run(i, node):
-        summary = await generate_node_summary(node, model=model)
+    def _piece_text(head):
+        return "\n\n".join(
+            (n.get('text') or '') for n in _piece_subtree(head) if n.get('text')
+        )
+
+    async def _run(i, head):
+        text = _piece_text(head)[:PIECE_SUMMARY_MAX_CHARS]
+        summary = await generate_node_summary({'text': text}, model=model)
         return i, summary
 
-    tasks = [asyncio.create_task(_run(i, n)) for i, n in enumerate(nodes)]
+    tasks = [asyncio.create_task(_run(i, h)) for i, h in enumerate(heads)]
     summaries = [None] * total
     done = 0
 
@@ -851,8 +896,8 @@ async def generate_summaries_for_structure(structure, model=None, progress_callb
             except Exception:
                 pass
 
-    for node, summary in zip(nodes, summaries):
-        node['summary'] = summary
+    for head, summary in zip(heads, summaries):
+        head['summary'] = summary
     return structure
 
 
