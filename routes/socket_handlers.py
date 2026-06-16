@@ -60,12 +60,6 @@ def _process_chunk(chunk):
             emit('agent_step', json.loads(payload))
         except Exception:
             emit('agent_step', {'raw': payload})
-    elif c.startswith('[AGENT_DECOMPOSE]'):
-        payload = c.replace('[AGENT_DECOMPOSE]', '').strip()
-        try:
-            emit('agent_decompose', json.loads(payload))
-        except Exception:
-            emit('agent_decompose', {'raw': payload})
     elif c.startswith('[AGENT_REFLECT]'):
         payload = c.replace('[AGENT_REFLECT]', '').strip()
         try:
@@ -165,34 +159,6 @@ def register_socket_events(socketio):
         _cancel_flags[sid] = True
 
     # ------------------------------------------------------------------ #
-    #  Legacy simple RAG (session-based, single-doc only)
-    # ------------------------------------------------------------------ #
-    @socketio.on('chat')
-    def handle_chat(data):
-        session_id = data.get('session_id')
-        query = data.get('query')
-        model_type = data.get('model_type', 'text')
-        use_memory = data.get('use_memory', True)
-
-        if not session_id or not query:
-            emit('error', {'message': 'Missing session_id or query'})
-            return
-
-        session = session_store.get_session(session_id)
-        if not session:
-            emit('error', {'message': 'Session not found'})
-            return
-
-        sid = request.sid
-        _clear_cancel(sid)
-        logger.info(f"Chat - session: {session_id}, query: {query[:50]}..., model: {model_type}")
-
-        def stream_fn():
-            return rag_service.chat_stream(session_id, query, model_type, use_memory)
-
-        _run_stream(stream_fn, sid)
-
-    # ------------------------------------------------------------------ #
     #  Agent chat (session-based, supports single + kb modes)
     # ------------------------------------------------------------------ #
     @socketio.on('agent_chat')
@@ -224,89 +190,6 @@ def register_socket_events(socketio):
         _run_stream(stream_fn, sid)
 
     # ------------------------------------------------------------------ #
-    #  Vision model non-streaming path (kept for compatibility)
-    # ------------------------------------------------------------------ #
-    @socketio.on('chat_sync')
-    def handle_chat_sync(data):
-        session_id = data.get('session_id')
-        query = data.get('query')
-        model_type = data.get('model_type', 'vision')
-        use_memory = data.get('use_memory', True)
-        use_agent = data.get('use_agent', False)
-
-        if not session_id or not query:
-            emit('error', {'message': 'Missing session_id or query'})
-            return
-
-        session = session_store.get_session(session_id)
-        if not session:
-            emit('error', {'message': 'Session not found'})
-            return
-
-        sid = request.sid
-        _clear_cancel(sid)
-
-        async def get_response():
-            stopped = False
-            full_response = ""
-
-            async def consume():
-                nonlocal full_response
-                stream_fn = (
-                    rag_service.agent_chat_stream if use_agent
-                    else rag_service.chat_stream
-                )
-                async for chunk in stream_fn(session_id, query, model_type, use_memory):
-                    if _is_cancelled(sid):
-                        break
-                    if not _process_chunk(chunk):
-                        full_response += chunk
-
-            async def watch_cancel(task: asyncio.Task):
-                while not task.done():
-                    if _is_cancelled(sid):
-                        task.cancel()
-                        return
-                    await asyncio.sleep(0.1)
-
-            main_task = asyncio.create_task(consume())
-            watcher = asyncio.create_task(watch_cancel(main_task))
-            try:
-                await main_task
-            except asyncio.CancelledError:
-                stopped = True
-            except Exception as e:
-                logger.error(f"Response error: {e}")
-                emit('error', {'message': str(e)})
-                watcher.cancel()
-                return
-            finally:
-                watcher.cancel()
-                try:
-                    await watcher
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-            if _is_cancelled(sid):
-                stopped = True
-
-            if stopped:
-                if full_response:
-                    emit('response', {'content': full_response})
-                emit('stopped', {'status': 'stopped'})
-            else:
-                emit('response', {'content': full_response})
-                emit('done', {'status': 'completed'})
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(get_response())
-        finally:
-            _clear_cancel(sid)
-            loop.close()
-
-    # ------------------------------------------------------------------ #
     #  History (session-based)
     # ------------------------------------------------------------------ #
     @socketio.on('get_history')
@@ -318,11 +201,3 @@ def register_socket_events(socketio):
         history = rag_service.get_session_history(session_id)
         emit('history', {'history': history, 'session_id': session_id})
 
-    @socketio.on('clear_history')
-    def handle_clear_history(data):
-        session_id = data.get('session_id')
-        if not session_id:
-            emit('error', {'message': 'Missing session_id'})
-            return
-        rag_service.clear_session_history(session_id)
-        emit('history_cleared', {'session_id': session_id})

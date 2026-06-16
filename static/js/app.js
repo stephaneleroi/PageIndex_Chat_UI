@@ -231,12 +231,10 @@ function initSocket() {
     State.socket.on('thinking_chunk', d => onStreamThinking(d.content));
     State.socket.on('nodes', d => onStreamNodes(d.nodes));
     State.socket.on('chunk', d => onStreamChunk(d.content));
-    State.socket.on('response', d => onStreamFullResponse(d.content));
     State.socket.on('done', () => onStreamDone(false));
     State.socket.on('stopped', () => onStreamDone(true));
     State.socket.on('error', d => onStreamError(d.message));
     State.socket.on('agent_step', d => onAgentStep(d));
-    State.socket.on('agent_decompose', d => onAgentDecompose(d));
     State.socket.on('agent_reflect', d => onAgentReflect(d));
     State.socket.on('history', d => onHistoryReceived(d));
     State.socket.on('history_cleared', d => onHistoryCleared(d));
@@ -1158,16 +1156,6 @@ async function createSession(mode, docIds, title) {
     return d.session;
 }
 
-async function updateSessionTitle(sessionId, title) {
-    try {
-        await fetch(`/api/sessions/${sessionId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title })
-        });
-    } catch (e) { console.warn('update session title failed', e); }
-}
-
 async function deleteSession(sessionId, scope) {
     if (!confirm('Supprimer cette conversation ?')) return;
     try {
@@ -1815,19 +1803,6 @@ function onStreamChunk(content) {
     scrollChatToBottom();
 }
 
-function onStreamFullResponse(content) {
-    const msgs = activeChatUI()?.messages; if (!msgs) return;
-    msgs.querySelector('.typing-indicator')?.remove();
-    const box = document.createElement('div');
-    box.className = 'message message-assistant';
-    box.innerHTML = `<div class="message-content">${renderMarkdown(content)}</div>`;
-    msgs.appendChild(box);
-    const contentEl = box.querySelector('.message-content');
-    renderMathInContainer(contentEl);
-    linkifyCitations(contentEl, buildNodeDocMap(State.streamingNodes, State.docChat.docId), State.docChat.docId);
-    scrollChatToBottom();
-}
-
 function onStreamDone(wasStopped) {
     State.isStreaming = false;
     updateSendButton();
@@ -1910,18 +1885,6 @@ function docFilenameShort(docId) {
     if (!d) return docId;
     const fn = d.filename;
     return fn.length > 20 ? fn.slice(0, 18) + '…' : fn;
-}
-
-function onAgentDecompose(d) {
-    if (!d.needs_decomposition) return;
-    const msgs = activeChatUI()?.messages; if (!msgs) return;
-    const ti = msgs.querySelector('.typing-indicator');
-    const box = document.createElement('div');
-    box.className = 'decompose-box';
-    const qs = (d.sub_questions || []).map((q, i) => `<div class="sub-question">${i + 1}. ${esc(q)}</div>`).join('');
-    box.innerHTML = `<strong><i class="bi bi-diagram-3"></i> Décomposition de la question (${esc(d.synthesis_strategy || 'direct')})</strong>${qs}`;
-    if (ti) ti.before(box); else msgs.appendChild(box);
-    scrollChatToBottom();
 }
 
 // La rédaction est terminée (la suite — auto-vérification éventuelle — peut

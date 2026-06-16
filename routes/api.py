@@ -186,16 +186,6 @@ def model_config(model_type):
     return jsonify({'success': True, 'message': f'{model_type} model config updated'})
 
 
-@api_bp.route('/config/default-model', methods=['PUT'])
-def set_default_model():
-    data = request.json
-    model_type = data.get('model_type')
-    if model_type not in ['text', 'vision']:
-        return jsonify({'error': 'Invalid model type'}), 400
-    config_manager.set_default_model_type(model_type)
-    return jsonify({'success': True, 'default_type': model_type})
-
-
 # ============= Document Routes =============
 
 @api_bp.route('/documents', methods=['GET'])
@@ -391,14 +381,6 @@ def delete_session(session_id):
     ok = session_store.delete_session(session_id)
     if not ok:
         return jsonify({'error': 'Session not found'}), 404
-    return jsonify({'success': True})
-
-
-@api_bp.route('/sessions/<session_id>/clear', methods=['POST'])
-def clear_session_messages(session_id):
-    if not session_store.get_session(session_id):
-        return jsonify({'error': 'Session not found'}), 404
-    session_store.clear_messages(session_id)
     return jsonify({'success': True})
 
 
