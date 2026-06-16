@@ -1184,10 +1184,18 @@ Provide a clear, comprehensive answer in French."""
             "découpe-la en sous-questions autonomes, dans l'ordre logique. Sinon, "
             "garde UNE seule entrée.\n"
             "2) Classe CHAQUE (sous-)question par son intention :\n"
-            '   - "overview" : synthèse, vue d\'ensemble, structure du dossier '
-            "(une réponse à partir de résumés suffit) ;\n"
-            '   - "detail" : fait précis, contenu, comparaison de déclarations / '
-            "versions (il faut LIRE le texte des pièces).\n"
+            '   - "overview" : porte sur L\'ENSEMBLE du dossier (synthèse / vue '
+            "d'ensemble de TOUT le dossier, de TOUS les documents) — une réponse "
+            "à partir des résumés suffit ;\n"
+            '   - "detail" : porte sur UNE pièce précise — identifiée par son type, '
+            "son auteur, son destinataire ou sa date (ex. « résume LA NOTE de M. X "
+            "au juge Y », « que dit L'AUDITION de Z ») — OU demande un fait précis, "
+            "un contenu, une comparaison de déclarations / versions. Dans tous ces "
+            "cas il faut LIRE le texte des pièces.\n"
+            "RÈGLE D'OR : « résumer / décrire UNE pièce désignée » = \"detail\" (il "
+            "faut la retrouver et LIRE son texte) ; « résumer LE DOSSIER / "
+            "l'ensemble » = \"overview\". Le simple mot « résume » ne suffit PAS à "
+            "classer overview : regarde si la cible est UNE pièce ou TOUT le dossier.\n"
             "Réponds en JSON STRICT, sans commentaire :\n"
             '{"needs_decomposition": true|false, '
             '"items": [{"question": "...", "intent": "overview|detail"}]}\n\n'
