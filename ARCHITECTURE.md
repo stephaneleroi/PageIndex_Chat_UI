@@ -136,6 +136,29 @@ Trois termes structurent toute l'application. Le schéma ci-dessous les relie.
 - **`node_map`** : table calculée à la préparation (nœud → plage de pages, texte,
   bbox de surlignage). Sert aux citations et à la visionneuse.
 
+### 2.1 Pourquoi des nœuds *sous* la pièce ? (la profondeur = échelle)
+
+Une pièce peut être un **sous-arbre profond** (sections, sous-sections) ou un
+**nœud unique**. Cette profondeur sert un seul but : **naviguer dans les longs
+documents** sans tout charger.
+
+- **Petite pièce** (un PV de 2 pages, ou tout document ≤ `SMALL_DOC_MAX_PAGES` = 4
+  pages → indexé comme **un seul nœud**) : pas de profondeur, on lit la pièce
+  entière. La profondeur ne sert à rien ici.
+- **Pièce/document volumineux** (ex. Synthèse_2026, 114 p.) : la profondeur permet
+  un **second niveau de sélection** — un `tree_search` *interne* à la pièce
+  retient les **sections** pertinentes, et on ne lit que celles-là.
+
+```
+  niveau 1 (entre pièces) :  tree_search sur les FICHES → quelle PIÈCE ?
+  niveau 2 (dans une pièce volumineuse) :  tree_search INTERNE → quelles SECTIONS ?
+```
+
+À noter : la profondeur ne sert **ni aux fiches** (résumé calculé sur la pièce
+entière, §4.2) **ni aux petites pièces**. Elle n'intervient qu'à la **lecture**,
+pour les gros documents — voie mono-pièce (§5.2) et drill-down « niveau 2 » de la
+voie corpus (§5.4).
+
 ---
 
 ## 3. Architecture en couches & fichiers
