@@ -146,7 +146,7 @@ Ouvrez le panneau des paramètres et renseignez le nom, la clé API et la Base U
 
 ### 📁 Arborescence du projet
 
-Documentation détaillée : [`ARCHITECTURE.md`](./ARCHITECTURE.md) (fonctionnement interne, où PageIndex est utilisé et où il ne l'est pas, modifications locales de la bibliothèque), [`DIAGNOSTIC-UEMO.md`](./DIAGNOSTIC-UEMO.md) (enquête sur la dégradation du modèle par les enrobages de prompt), [`ETUDE-RAGFLOW.md`](./ETUDE-RAGFLOW.md) (étude comparative), [`ETUDE-SEGMENTATION-PIECES.md`](./ETUDE-SEGMENTATION-PIECES.md) (conception : pré-segmentation déterministe des pièces, à reprendre sur branche dédiée), [`tests/`](./tests/) (tests d'acceptation).
+Documentation détaillée : [`ARCHITECTURE.md`](./ARCHITECTURE.md) (fonctionnement interne, où PageIndex est utilisé et où il ne l'est pas, modifications locales de la bibliothèque), [`DIAGNOSTIC-UEMO.md`](./DIAGNOSTIC-UEMO.md) (enquête sur la dégradation du modèle par les enrobages de prompt), [`ETUDE-RAGFLOW.md`](./ETUDE-RAGFLOW.md) (étude comparative), [`ETUDE-SEGMENTATION-PIECES.md`](./ETUDE-SEGMENTATION-PIECES.md) (conception : pré-segmentation déterministe des pièces), [`ETUDE-MAP-REDUCE-CIBLE.md`](./ETUDE-MAP-REDUCE-CIBLE.md) (conception : fiches spécifiques à chaud / map-reduce orienté requête), [`tests/`](./tests/) (tests d'acceptation).
 
 ```
 PageIndex_Chat_UI/
