@@ -477,14 +477,18 @@ Provide a clear, comprehensive answer in French."""
 
     async def _run_single_simple(self, session_id, query, model_type,
                                  use_memory, tool_context, context_overview,
-                                 persist=True):
+                                 persist=True, intent=None):
         """UNE recherche par raisonnement sur l'arbre → lecture des nœuds
         retenus → rédaction. Pas de décomposition, pas de boucle ReAct.
         L'auto-évaluation reste comme garde-fou, avec au plus UNE expansion
         bornée (tree_search complémentaire sur les manques signalés)."""
         # Demande de synthèse globale → vue d'ensemble transversale sur les
         # résumés de toutes les sections (pas de sélection top-k).
-        if self._is_global_summary(query):
+        # Aiguillage : l'intention classée à la décomposition prime ; à défaut
+        # (intent=None), repli sur l'heuristique par mots-clés.
+        use_global = ((intent == "overview") if intent in ("overview", "detail")
+                      else self._is_global_summary(query))
+        if use_global:
             async for chunk in self._run_global_summary(
                     session_id, query, model_type, use_memory, tool_context,
                     context_overview, persist=persist):
@@ -764,7 +768,8 @@ Provide a clear, comprehensive answer in French."""
                 "de la pièce concernée.】\n" + "\n\n".join(lines))
 
     async def _run_corpus_simple(self, session_id, query, model_type, use_memory,
-                                 tool_context, context_overview, persist=True):
+                                 tool_context, context_overview, persist=True,
+                                 intent=None):
         """Le dossier EST un arbre PageIndex : UN seul tree_search sur les
         fiches de toutes les pièces (au lieu d'un cross_search par document),
         lecture intégrale des pièces retenues, rédaction citée avec l'inventaire
@@ -778,7 +783,11 @@ Provide a clear, comprehensive answer in French."""
 
         # Demande de synthèse globale → vue d'ensemble transversale sur les
         # fiches de toutes les pièces (pas de tree_search ni de lecture).
-        if self._is_global_summary(query):
+        # Aiguillage : l'intention classée à la décomposition prime ; à défaut
+        # (intent=None), repli sur l'heuristique par mots-clés.
+        use_global = ((intent == "overview") if intent in ("overview", "detail")
+                      else self._is_global_summary(query))
+        if use_global:
             async for chunk in self._run_global_summary(
                     session_id, query, model_type, use_memory, tool_context,
                     context_overview, persist=persist):
@@ -1058,30 +1067,51 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(role="assistant", content=full_answer))
 
     async def decompose_query(self, query, context_overview="", model_type="text"):
-        """Décomposition LÉGÈRE (1 appel LLM) : ne scinde que si la question
-        regroupe PLUSIEURS demandes distinctes. Retourne
-        {needs_decomposition: bool, sub_questions: [str]}. Repli sûr : pas de
-        découpage. PAS de boucle ReAct ni d'outils — chaque sous-question est
-        ensuite traitée par une voie normale."""
+        """Décomposition + AIGUILLAGE (1 appel LLM). Découpe la question en
+        sous-questions SEULEMENT si elle regroupe plusieurs demandes distinctes,
+        ET classe l'intention de CHAQUE (sous-)question :
+        - "overview" : synthèse / vue d'ensemble → réponse sur les fiches ;
+        - "detail"   : fait précis ou comparaison de versions → exige le TEXTE
+          des pièces (sélection par tree_search puis LECTURE du contenu).
+        Retourne {needs_decomposition, items:[{question, intent}]}. L'intention
+        prime sur l'heuristique `_is_global_summary` ; repli (échec LLM) :
+        intent=None → l'heuristique reprend la main."""
         prompt = (
             "Tu analyses la question d'un utilisateur sur un dossier documentaire.\n"
-            "Si elle regroupe PLUSIEURS demandes DISTINCTES (par ex. une synthèse "
+            "1) Si elle regroupe PLUSIEURS demandes DISTINCTES (par ex. une synthèse "
             "d'ensemble ET un point factuel précis ET une comparaison de versions), "
-            "découpe-la en sous-questions autonomes et autosuffisantes, dans l'ordre "
-            "logique. Si c'est une seule demande, NE découpe PAS.\n"
-            "Réponds en JSON STRICT, sans commentaire : "
-            '{"needs_decomposition": true|false, "sub_questions": ["...", "..."]}\n\n'
+            "découpe-la en sous-questions autonomes, dans l'ordre logique. Sinon, "
+            "garde UNE seule entrée.\n"
+            "2) Classe CHAQUE (sous-)question par son intention :\n"
+            '   - "overview" : synthèse, vue d\'ensemble, structure du dossier '
+            "(une réponse à partir de résumés suffit) ;\n"
+            '   - "detail" : fait précis, contenu, comparaison de déclarations / '
+            "versions (il faut LIRE le texte des pièces).\n"
+            "Réponds en JSON STRICT, sans commentaire :\n"
+            '{"needs_decomposition": true|false, '
+            '"items": [{"question": "...", "intent": "overview|detail"}]}\n\n'
             f"Question : {query}"
         )
         try:
             raw = await self.pageindex.call_llm(prompt, model_type)
             data = json.loads(self._extract_json_str(raw))
-            subs = [s.strip() for s in (data.get("sub_questions") or []) if s and s.strip()]
-            need = bool(data.get("needs_decomposition")) and len(subs) > 1
-            return {"needs_decomposition": need, "sub_questions": subs if need else [query]}
+            items = []
+            for it in (data.get("items") or []):
+                q = (it.get("question") or "").strip()
+                if not q:
+                    continue
+                intent = it.get("intent")
+                items.append({"question": q,
+                              "intent": intent if intent in ("overview", "detail") else None})
+            if not items:
+                items = [{"question": query, "intent": None}]
+            need = bool(data.get("needs_decomposition")) and len(items) > 1
+            if not need:
+                items = items[:1]
+            return {"needs_decomposition": need, "items": items}
         except Exception as e:
             logger.warning(f"decompose_query: repli sans décomposition ({e})")
-            return {"needs_decomposition": False, "sub_questions": [query]}
+            return {"needs_decomposition": False, "items": [{"question": query, "intent": None}]}
 
     async def _relay_subquery(self, gen, text_sink: list, refs_sink: list):
         """Consomme une voie exécutée en sous-question : relaie au frontend le
@@ -1114,24 +1144,28 @@ Provide a clear, comprehensive answer in French."""
                 text_sink.append(chunk)
             yield chunk
 
-    async def _run_decomposed(self, session_id, query, subs, model_type, use_memory,
+    async def _run_decomposed(self, session_id, query, items, model_type, use_memory,
                               tool_context, context_overview, effective_single):
         """Question composite : chaque sous-question est routée vers la voie
-        adaptée (mono-pièce, ou corpus qui gère la synthèse globale en interne),
-        et les réponses sont assemblées en sections sous UN seul cycle."""
+        adaptée selon son INTENTION (overview → fiches ; detail → lecture du
+        texte), et les réponses sont assemblées en sections sous UN seul cycle."""
         yield "[SEARCHING]\n"
         yield "[ANSWERING]\n"
         sections, all_refs = [], []
-        for i, sq in enumerate(subs):
+        for i, it in enumerate(items):
+            sq = it["question"]
+            intent = it.get("intent")
             header = ("\n\n" if i else "") + f"## {sq}\n\n"
             yield header
             text_sink = []
             if effective_single:
                 gen = self._run_single_simple(session_id, sq, model_type, use_memory,
-                                              tool_context, context_overview, persist=False)
+                                              tool_context, context_overview,
+                                              persist=False, intent=intent)
             else:
                 gen = self._run_corpus_simple(session_id, sq, model_type, use_memory,
-                                              tool_context, context_overview, persist=False)
+                                              tool_context, context_overview,
+                                              persist=False, intent=intent)
             async for chunk in self._relay_subquery(gen, text_sink, all_refs):
                 yield chunk
             sections.append(header + "".join(text_sink))
@@ -1200,17 +1234,23 @@ Provide a clear, comprehensive answer in French."""
             if tree_str:
                 context_overview = context_overview + "\n\nPrimary document TOC (text elided):\n" + tree_str[:6000]
 
-        # ---- Question composite → décomposition légère : un appel LLM décide
-        # si la question regroupe plusieurs demandes distinctes ; si oui, chaque
-        # sous-question est routée vers la voie adaptée (mono-pièce / corpus /
-        # synthèse globale) et les réponses sont assemblées en sections. ----
+        # ---- Décomposition + aiguillage : un appel LLM décide si la question
+        # regroupe plusieurs demandes distinctes ET classe l'intention de chaque
+        # (sous-)question (overview → fiches ; detail → lecture du texte). Si
+        # composite, chaque sous-question part sur la voie de son intention et
+        # les réponses sont assemblées en sections. ----
         decomp = await self.decompose_query(query, context_overview, model_type)
+        items = decomp.get("items") or [{"question": query, "intent": None}]
         if decomp.get("needs_decomposition"):
             async for chunk in self._run_decomposed(
-                    session_id, query, decomp["sub_questions"], model_type,
+                    session_id, query, items, model_type,
                     use_memory, tool_context, context_overview, effective_single):
                 yield chunk
             return
+
+        # Question unique : l'intention classée prime sur l'heuristique
+        # _is_global_summary (transmise à la voie, repli si intent absent).
+        intent = items[0].get("intent")
 
         # ---- Voie simple (mono-document) : pipeline canonique du cookbook
         # PageIndex (tree_search une fois → lecture des nœuds → rédaction).
@@ -1218,7 +1258,7 @@ Provide a clear, comprehensive answer in French."""
         if effective_single:
             async for chunk in self._run_single_simple(
                 session_id, query, model_type, use_memory,
-                tool_context, context_overview,
+                tool_context, context_overview, intent=intent,
             ):
                 yield chunk
             return
@@ -1228,7 +1268,7 @@ Provide a clear, comprehensive answer in French."""
         # des pièces retenues, rédaction avec l'inventaire complet en appui.
         async for chunk in self._run_corpus_simple(
             session_id, query, model_type, use_memory,
-            tool_context, context_overview,
+            tool_context, context_overview, intent=intent,
         ):
             yield chunk
         return
