@@ -1,13 +1,16 @@
 """
-Document Agent - ReAct loop, query decomposition, self-reflection, proactive analysis.
+Document Agent — voies de réponse fondées sur le raisonnement PageIndex.
 
-Session-based execution supporting two modes:
-  * single  : one document, backwards compatible with the old UX.
-  * kb      : multiple documents chosen by the user; progressive disclosure —
-              the system prompt only exposes metadata, the agent must call
-              list_documents / read_document_toc / tree_search to drill in.
+Exécution par session :
+  * single : une pièce → tree_search → lecture des nœuds → rédaction citée ;
+  * kb     : dossier de pièces → sélection sur les fiches → lecture directe
+             (ou map-reduce ciblé si le volume déborde le budget) → rédaction ;
+  * libre  : aucun document → modèle nu (sans prompt système).
+Une décomposition légère (decompose_query) scinde les questions composites et
+aiguille chaque (sous-)question : overview → fiches ; detail → texte.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -456,6 +459,7 @@ Output JSON only:
     CORPUS_MAX_PIECES_READ = 12     # pièces lues en intégral (le reste : citable via l'inventaire)
     CORPUS_PIECE_DRILL_THRESHOLD = 20000  # au-delà, une pièce composite est sélectionnée
     #   section par section (tree_search interne) au lieu d'être lue en entier (hiérarchie niv. 2)
+    MAP_CONCURRENCY = 3             # synthèses ciblées (map) concurrentes max (santé Ollama)
 
     def _build_simple_answer_prompt(self, query, context, history_context, grounding):
         return f"""Answer the question based on the context below — the selected sections of the
@@ -767,6 +771,29 @@ Provide a clear, comprehensive answer in French."""
                 "`(doc: <fichier>, node_<id>, page N)` avec le fichier et le node de la ligne 📄 "
                 "de la pièce concernée.】\n" + "\n\n".join(lines))
 
+    async def _focused_summary(self, title, doc_id, nid, node_text, question, model_type):
+        """MAP (map-reduce ciblé) : résumé d'UN nœud orienté par la question, en
+        CONSERVANT les pages « (p. N) » (depuis les <page_N>) pour que le reduce
+        puisse citer. Renvoie None si la pièce n'apporte rien d'utile à la
+        question (pour ne pas polluer la compilation)."""
+        prompt = (
+            "Tu lis le texte d'une pièce d'un dossier, balisé <page_N>…</page_N>.\n"
+            "En te fondant UNIQUEMENT sur ce texte, extrais avec précision ce qui "
+            "répond à la question. Pour CHAQUE fait, indique sa page « (p. N) » "
+            "d'après la balise <page_N> qui l'entoure — n'invente jamais de page. "
+            "Sois factuel et concis. Si la pièce n'apporte RIEN sur la question, "
+            "réponds EXACTEMENT « (rien) ».\n\n"
+            f"Question : {question}\n\nTexte de la pièce :\n{node_text}"
+        )
+        try:
+            out = (await self.pageindex.call_llm(prompt, model_type) or "").strip()
+        except Exception as e:
+            logger.warning(f"_focused_summary échec ({title}/{nid}) : {e}")
+            return None
+        if not out or out.lower().startswith("(rien"):
+            return None
+        return {"title": title, "doc_id": doc_id, "nid": nid, "text": out}
+
     async def _run_corpus_simple(self, session_id, query, model_type, use_memory,
                                  tool_context, context_overview, persist=True,
                                  intent=None):
@@ -822,11 +849,11 @@ Provide a clear, comprehensive answer in French."""
             + (", ".join(pc["title"] for pc in picked) or "—"),
         )
 
-        # ---- 3. Lecture des pièces retenues. Hiérarchie niveau 2 : une pièce
-        # COMPOSITE volumineuse est sélectionnée section par section (tree_search
-        # interne) au lieu d'être lue en entier. Les refs portent le VRAI doc_id
-        # de la pièce → citations `doc::node` exactes. ----
-        parts, refs, used = [], [], 0
+        # ---- 3. Sélection fine des nœuds retenus. Hiérarchie niveau 2 : une
+        # pièce COMPOSITE volumineuse est sélectionnée section par section
+        # (tree_search interne) au lieu d'être prise en entier. Les refs portent
+        # le VRAI doc_id de la pièce → citations `doc::node` exactes. ----
+        selected = []  # (doc_id, title, nid, text)
         for pc in picked:
             doc_id = pc["doc_id"]
             title = pc["title"]
@@ -850,8 +877,51 @@ Provide a clear, comprehensive answer in French."""
                     continue
                 node = info.get("node", info)
                 text = (node.get("text") or "") if isinstance(node, dict) else ""
-                if not text:
-                    continue
+                if text:
+                    selected.append((doc_id, title, nid, text))
+
+        total_len = sum(len(t) for _, _, _, t in selected)
+
+        # ---- 4. AIGUILLAGE lecture directe vs MAP-REDUCE ciblé. Si le texte des
+        # nœuds retenus tient dans le budget → lecture directe (rapide, défaut).
+        # Sinon → map-reduce orienté requête : chaque nœud est résumé SOUS L'ANGLE
+        # de la question (pages conservées, concurrence bornée), puis la rédaction
+        # porte sur ces synthèses ciblées — la couverture n'est plus plafonnée par
+        # un contexte unique. ----
+        use_map_reduce = total_len > self.SIMPLE_CONTEXT_BUDGET and len(selected) > 1
+        if use_map_reduce:
+            yield self._step_marker(
+                0, 0, "", "map_reduce", {"query": query},
+                f"{len(selected)} nœud(s) ({total_len} car.) > budget "
+                f"{self.SIMPLE_CONTEXT_BUDGET} → synthèse ciblée par pièce")
+            sem = asyncio.Semaphore(self.MAP_CONCURRENCY)
+
+            async def _map(doc_id, title, nid, text):
+                async with sem:
+                    return await self._focused_summary(
+                        title, doc_id, nid, text, query, model_type)
+
+            tasks = [asyncio.create_task(_map(*s)) for s in selected]
+            fiches, done_n = [], 0
+            for coro in asyncio.as_completed(tasks):
+                fiche = await coro
+                done_n += 1
+                if fiche:
+                    fiches.append(fiche)
+                yield self._step_marker(
+                    0, 0, "", "map_reduce", {},
+                    f"synthèses ciblées : {done_n}/{len(selected)} "
+                    f"— {len(fiches)} pièce(s) pertinente(s)")
+            parts, refs = [], []
+            for f in fiches:
+                parts.append(f"=== {f['title']} — node_{f['nid']} ===\n{f['text']}")
+                refs.append(f"{f['doc_id']}::{f['nid']}")
+            source_text = "\n\n".join(parts)
+            context_label = ("【Synthèses ciblées des pièces (orientées par la "
+                             "question, pages d'origine conservées)】\n")
+        else:
+            parts, refs, used = [], [], 0
+            for doc_id, title, nid, text in selected:
                 if used + len(text) > self.SIMPLE_CONTEXT_BUDGET and parts:
                     break
                 block = (f"=== {title} — Section node_{nid} ===\n"
@@ -859,26 +929,25 @@ Provide a clear, comprehensive answer in French."""
                 parts.append(block)
                 used += len(block)
                 refs.append(f"{doc_id}::{nid}")
-            if used >= self.SIMPLE_CONTEXT_BUDGET:
-                break
-        source_text = "\n\n".join(parts)
+            source_text = "\n\n".join(parts)
+            context_label = "【Texte intégral des pièces retenues】\n"
+
         logger.info(
-            f"voie corpus: {len(picked)} pièce(s) retenue(s), "
-            f"{len(refs)} nœud(s) lu(s), contexte={used} caractères"
-        )
+            f"voie corpus ({'map-reduce' if use_map_reduce else 'lecture directe'}): "
+            f"{len(picked)} pièce(s), {len(refs)} nœud(s), {len(source_text)} car.")
 
         if refs:
             yield f"\n[NODES]{json.dumps(refs)}\n"
 
-        # ---- 4. Contexte de rédaction : texte lu + inventaire complet en appui ----
+        # ---- 5. Contexte de rédaction : source + inventaire complet en appui ----
         inventory = self._build_corpus_inventory(tool_context)
         context = ""
         if source_text:
-            context += "【Texte intégral des pièces retenues】\n" + source_text + "\n\n"
+            context += context_label + source_text + "\n\n"
         if inventory:
             context += inventory
 
-        # ---- 5. Rédaction ----
+        # ---- 6. Rédaction ----
         yield "[ANSWERING]\n"
         history_context = self._build_history_context(session_id, use_memory)
         full_answer = ""
@@ -1076,6 +1145,8 @@ Provide a clear, comprehensive answer in French."""
         Retourne {needs_decomposition, items:[{question, intent}]}. L'intention
         prime sur l'heuristique `_is_global_summary` ; repli (échec LLM) :
         intent=None → l'heuristique reprend la main."""
+        apercu = (f"Aperçu du dossier :\n{context_overview[:1200]}\n\n"
+                  if context_overview else "")
         prompt = (
             "Tu analyses la question d'un utilisateur sur un dossier documentaire.\n"
             "1) Si elle regroupe PLUSIEURS demandes DISTINCTES (par ex. une synthèse "
@@ -1090,7 +1161,8 @@ Provide a clear, comprehensive answer in French."""
             "Réponds en JSON STRICT, sans commentaire :\n"
             '{"needs_decomposition": true|false, '
             '"items": [{"question": "...", "intent": "overview|detail"}]}\n\n'
-            f"Question : {query}"
+            + apercu
+            + f"Question : {query}"
         )
         try:
             raw = await self.pageindex.call_llm(prompt, model_type)
