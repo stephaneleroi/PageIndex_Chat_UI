@@ -317,19 +317,31 @@ question
 ```
 
 L'intention classée par le LLM **prime** sur l'ancienne heuristique de mots-clés
-`_is_global_summary` (conservée en repli). **Pourquoi ?** Parce qu'une question
-factuelle (« quelles versions ? ») formulée avec le mot « synthèse » ne doit pas
-être traitée comme un survol : seul le *sens* décide.
+`_is_global_summary` (conservée en repli) — seul le *sens* décide, pas les mots.
+Deux distinctions importantes (réglées d'après les tests) :
+
+- **Une pièce désignée vs le dossier.** « Résumer *la note de M. X au juge Y* »
+  (pièce identifiée par type / auteur / destinataire / date) = `detail` → on **lit
+  le texte** de cette pièce. « Résumer *le dossier* » = `overview` → fiches. Le mot
+  « résume » seul ne tranche pas : c'est la **cible** (une pièce ou l'ensemble).
+- **Mono-nature sur plusieurs pièces ≠ décomposition.** « Détaille **chaque**
+  rapport » est **une seule** demande portant sur N pièces — elle n'est **pas
+  décomposée** ; la voie corpus sélectionne elle-même **toutes** les pièces
+  pertinentes. (Décomposer ici ferait deviner un nombre de sous-questions au LLM
+  et risquerait de n'en couvrir qu'une partie.) La décomposition est réservée aux
+  demandes de **natures différentes** (synthèse ET faits ET versions).
 
 **Exemples** (dossier de 25 pièces coché, sauf le 1ᵉʳ) :
 
 | Question | Décision | Source de la réponse |
 |---|---|---|
 | « Qu'est-ce qu'un OPJ ? » *(aucun doc)* | conversation libre | modèle nu, sans sources |
-| « Fais une **synthèse** du dossier » | `overview` → synthèse globale | **fiches** (aucune lecture) |
+| « Fais une **synthèse du dossier** » | `overview` → synthèse globale | **fiches** (aucune lecture) |
+| « **Résume la note de M. CHAUVIN** au juge » | `detail` (pièce désignée) → corpus, lecture | **texte de la note** (pas sa fiche) |
 | « Que dit l'**audition de LEGRAND** ? » | `detail`, peu de pièces → corpus, lecture directe | **texte** de l'audition |
+| « **Détaille chaque rapport** » | `detail`, **non décomposé** → corpus retient **toutes** les pièces | **texte** de chaque rapport |
 | « **Compare les versions** de tous les mis en cause » | `detail`, volumineux → corpus, map-reduce | **fiches à chaud** par audition, compilées |
-| « Synthèse **+** faits reprochés **+** versions » | **décomposée** en 3 | synthèse → fiches ; faits → texte ; versions → texte/map-reduce. Réponse en 3 sections |
+| « Synthèse **+** faits reprochés **+** versions » | **décomposée** en 3 (natures ≠) | synthèse → fiches ; faits → texte ; versions → texte/map-reduce. Réponse en 3 sections |
 
 ### 5.2 Voie « conversation libre » et voie « mono-pièce »
 
@@ -406,9 +418,14 @@ fiches.
 - **Vérification à la demande** : bouton « Vérifier la réponse » (juge LLM,
   `POST /sessions/<id>/messages/<i>/verify`, verdict persisté).
 - **Décomposition** (`decompose_query` + `_run_decomposed`) : une question
-  composite est scindée ; chaque sous-question suit la voie de **son** intention,
+  réunissant des demandes de **natures différentes** (synthèse ET faits ET
+  versions) est scindée ; chaque sous-question suit la voie de **son** intention,
   les réponses sont assemblées en **sections `##`** sous un seul cycle. **Pas** de
   boucle ReAct (supprimée) : décomposition + N voies normales + assemblage.
+  ⚠️ Une demande **mono-nature portant sur plusieurs pièces** (« détaille chaque
+  rapport ») n'est **pas** décomposée — sinon le LLM devine un nombre de
+  sous-questions et risque de **sous-couvrir** (cas observé : 2 rapports sur 4).
+  La voie corpus, elle, sélectionne toutes les pièces pertinentes.
 
 ---
 
