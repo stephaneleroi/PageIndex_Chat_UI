@@ -1179,9 +1179,13 @@ Provide a clear, comprehensive answer in French."""
                   if context_overview else "")
         prompt = (
             "Tu analyses la question d'un utilisateur sur un dossier documentaire.\n"
-            "1) Si elle regroupe PLUSIEURS demandes DISTINCTES (par ex. une synthèse "
-            "d'ensemble ET un point factuel précis ET une comparaison de versions), "
-            "découpe-la en sous-questions autonomes, dans l'ordre logique. Sinon, "
+            "1) Découpe en sous-questions UNIQUEMENT si la question pose des "
+            "demandes de NATURES DIFFÉRENTES (ex. une synthèse d'ensemble ET un "
+            "point factuel précis ET une comparaison de versions). NE découpe PAS "
+            "une demande UNIQUE même si elle porte sur plusieurs pièces (ex. "
+            "« résume / détaille CHAQUE rapport », « tous les documents ») : c'est "
+            "UNE seule demande, le moteur de recherche sélectionnera lui-même "
+            "toutes les pièces pertinentes. Dans le doute, NE découpe PAS. Sinon, "
             "garde UNE seule entrée.\n"
             "2) Classe CHAQUE (sous-)question par son intention :\n"
             '   - "overview" : porte sur L\'ENSEMBLE du dossier (synthèse / vue '
