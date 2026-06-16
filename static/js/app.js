@@ -1085,16 +1085,31 @@ function updateKbTopbar() {
     if (State.kbChat.activeSessionId) {
         const sess = State.kbChat.sessions.find(s => s.session_id === State.kbChat.activeSessionId);
         if (!sess) { bar.innerHTML = ''; return; }
-        const docNames = (sess.doc_ids || []).map(did => {
+        const docs = (sess.doc_ids || []).map(did => {
             const d = State.documents.find(x => x.doc_id === did);
-            return d ? { name: d.filename, ok: d.status === 'ready' } : { name: did, ok: false };
+            return d ? { id: did, name: d.filename, ok: d.status === 'ready' }
+                     : { id: did, name: did, ok: false };
         });
-        const chips = docNames.length ? docNames.map(x =>
-            `<span class="active-chip ${x.ok ? '' : 'disabled'}" title="${x.ok ? '' : 'Document supprimé'}">
+        if (!docs.length) {
+            bar.innerHTML = `<i class="bi bi-chat-text"></i> Conversation en cours (sans sources)`;
+            return;
+        }
+        const chip = x =>
+            `<span class="active-chip ${x.ok ? 'clickable' : 'disabled'}"
+                ${x.ok ? `role="button" tabindex="0" onclick="showDocPreview('${x.id}')" title="Ouvrir l'aperçu de la pièce"` : 'title="Document supprimé"'}>
                 <i class="bi bi-file-earmark-pdf"></i>${esc(x.name)}
-            </span>`).join('')
-            : '<span class="active-chip"><i class="bi bi-chat-text"></i> conversation libre (sans sources)</span>';
-        bar.innerHTML = `<i class="bi bi-chat-square-dots"></i> Conversation en cours : ${chips}`;
+            </span>`;
+        // Au-delà de 3 pièces, replier pour ne pas envahir l'écran (cas dossier).
+        if (docs.length <= 3) {
+            bar.innerHTML = `<i class="bi bi-chat-square-dots"></i> Conversation en cours :
+                <span class="active-docs-list">${docs.map(chip).join('')}</span>`;
+        } else {
+            bar.innerHTML = `<details class="active-docs">
+                <summary><i class="bi bi-paperclip"></i> <strong>${docs.length}</strong> pièce(s) jointe(s) à cette conversation
+                    <span class="muted">— cliquer pour déplier ; chaque pièce est cliquable</span></summary>
+                <div class="active-docs-list">${docs.map(chip).join('')}</div>
+            </details>`;
+        }
     } else {
         const count = State.kbChat.selectedDocIds.size;
         if (count === 0) {
@@ -2612,6 +2627,7 @@ function startEditTreeNode(modal, docId, nodeId) {
     });
 }
 window.showNodePreview = showNodePreview;
+window.showDocPreview = showDocPreview;   // chips de pièces cliquables (topbar kb)
 
 function buildPageNodeMap(nodeMap) {
     const pageNodes = {};

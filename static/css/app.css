@@ -574,6 +574,16 @@ body {
 .kb-chat-topbar .active-chip.disabled {
     background: #fef2f2; color: #991b1b;
 }
+.kb-chat-topbar .active-chip.clickable { cursor: pointer; transition: background .12s, color .12s; }
+.kb-chat-topbar .active-chip.clickable:hover { background: var(--primary); color: #fff; }
+/* Liste des pièces jointes : repliable et bornée en hauteur (gros dossiers) */
+.kb-chat-topbar .active-docs { width: 100%; }
+.kb-chat-topbar .active-docs > summary { cursor: pointer; user-select: none; }
+.kb-chat-topbar .active-docs > summary .muted { color: var(--text-secondary); font-weight: 400; }
+.kb-chat-topbar .active-docs-list {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    margin-top: 8px; max-height: 180px; overflow-y: auto;
+}
 
 .chat-container {
     flex: 1; overflow-y: auto; padding: 0 24px;
