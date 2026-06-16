@@ -888,6 +888,77 @@ Provide a clear, comprehensive answer in French."""
         ))
         self.sessions.mark_superseded_before_last(session_id, role="assistant")
 
+    # Unité de travail = la PIÈCE (un sous-arbre de premier niveau), pas le
+    # fichier : un répertoire de N fichiers et un fichier de N pièces donnent
+    # alors le même résultat. Repli sûr : 1 pièce = le document entier.
+    USE_PIECE_UNIT = True
+
+    @staticmethod
+    def _subtree_nodes(node: dict) -> list:
+        """Nœud de tête + tous ses descendants, en ordre de lecture."""
+        out = [node]
+        for c in node.get("nodes") or []:
+            out.extend(DocumentAgent._subtree_nodes(c))
+        return out
+
+    @staticmethod
+    def _piece_heads(tree) -> list:
+        """Têtes des pièces d'un arbre : liste de ≥2 racines → autant de pièces ;
+        racine unique englobante → enfants du conteneur de pièces numérotées
+        (Document/Pièce/Annexe/Rapport N) ; sinon une seule pièce (le document)."""
+        roots = tree if isinstance(tree, list) else ([tree] if tree else [])
+        if len(roots) >= 2:
+            return roots
+        if not roots:
+            return []
+        root = roots[0]
+        for container in [root] + (root.get("nodes") or []):
+            kids = container.get("nodes") or []
+            numbered = [k for k in kids
+                        if re.match(r"^\s*(?:document|pi[eè]ce|annexe|rapport)\s",
+                                    (k.get("title") or ""), re.IGNORECASE)]
+            if len(numbered) >= 2:
+                return kids
+        return [root]
+
+    def _extract_pieces(self, tool_context: dict) -> list:
+        """Liste des PIÈCES de tous les documents. Chaque pièce conserve son
+        VRAI doc_id (pour des citations `doc::node` exactes) et la liste ordonnée
+        de ses node_ids. Repli sûr : un document non découpable = une pièce."""
+        pieces = []
+        for doc_id, dctx in (tool_context.get("docs") or {}).items():
+            tree = dctx.get("tree")
+            filename = dctx.get("filename", doc_id)
+            heads = self._piece_heads(tree)
+            single = len(heads) <= 1
+            for h in heads:
+                node_ids = [n.get("node_id") for n in self._subtree_nodes(h) if n.get("node_id")]
+                if not node_ids:
+                    continue
+                title = filename if single else ((h.get("title") or "").strip() or filename)
+                pieces.append({
+                    "doc_id": doc_id, "filename": filename, "title": title,
+                    "head_id": h.get("node_id"), "head_node": h, "node_ids": node_ids,
+                })
+        return pieces
+
+    def _piece_fiche(self, piece: dict, tool_context: dict, budget: int) -> str:
+        """Fiche de sélection d'une pièce : résumé de son nœud de tête + titres
+        de ses sous-sections (pour que le tree_search « voie » le contenu)."""
+        nm = (tool_context.get("docs") or {}).get(piece["doc_id"], {}).get("node_map") or {}
+        head = nm.get(piece["head_id"]) or {}
+        hnode = head.get("node", head)
+        fiche = (hnode.get("summary") or "").strip() if isinstance(hnode, dict) else ""
+        titres = []
+        for nid in piece["node_ids"][1:]:
+            n = (nm.get(nid) or {}).get("node", {})
+            t = (n.get("title") or "").strip() if isinstance(n, dict) else ""
+            if t:
+                titres.append(f"- {t}")
+        if titres:
+            fiche = (fiche + "\nSections :\n" + "\n".join(titres)).strip()
+        return (fiche[:budget] + "…") if len(fiche) > budget else (fiche or "(pas de fiche)")
+
     def _selection_fiche(self, dctx: dict, budget: int) -> str:
         """Fiche de sélection (niveau 1) d'une pièce : résumé du nœud racine, +
         pour une pièce COMPOSITE, les titres de ses sous-sections — sinon le
@@ -916,24 +987,21 @@ Provide a clear, comprehensive answer in French."""
         citable en appui (synthèse de corpus). Budget PAR FICHE adaptatif
         (budget_total // N) pour tenir à grande échelle (70+ pièces) sans
         tronquer la liste des pièces."""
-        docs = tool_context.get("docs") or {}
-        if not docs:
+        pieces = self._extract_pieces(tool_context)
+        if not pieces:
             return ""
-        per_fiche = max(300, self.CORPUS_INVENTORY_BUDGET // max(1, len(docs)))
+        per_fiche = max(300, self.CORPUS_INVENTORY_BUDGET // max(1, len(pieces)))
         lines = []
-        for did, dctx in docs.items():
-            nm = dctx.get("node_map") or {}
-            if not nm:
-                continue
-            root_id = min(nm.keys())
-            info = nm.get(root_id) or {}
+        for pc in pieces:
+            nm = (tool_context.get("docs") or {}).get(pc["doc_id"], {}).get("node_map") or {}
+            info = nm.get(pc["head_id"]) or {}
             node = info.get("node", info)
             summary = (node.get("summary") or "").strip() if isinstance(node, dict) else ""
             if len(summary) > per_fiche:
                 summary = summary[:per_fiche] + "…"
             s, e = info.get("start_index"), info.get("end_index")
             pages = f"pages {s}-{e}" if s and e and s != e else f"page {s or 1}"
-            lines.append(f"📄 {dctx.get('filename', did)} (node_{root_id}, {pages})\n{summary}")
+            lines.append(f"📄 {pc['filename']} — {pc['title']} (node_{pc['head_id']}, {pages})\n{summary}")
         if not lines:
             return ""
         return ("【Inventaire des pièces — fiche identitaire de CHAQUE document de la session. "
@@ -962,54 +1030,56 @@ Provide a clear, comprehensive answer in French."""
                 yield chunk
             return
 
-        # ---- 1. Arbre de sélection : racine + une pièce par nœud (alias court) ----
-        per_fiche = max(300, self.CORPUS_SELECT_BUDGET // max(1, len(docs)))
-        alias_map = {}        # "p0" -> doc_id (alias court : pas de recopie d'id long)
+        # ---- 1. Arbre de sélection : une entrée par PIÈCE (alias court) ----
+        pieces = self._extract_pieces(tool_context)
+        per_fiche = max(300, self.CORPUS_SELECT_BUDGET // max(1, len(pieces)))
         children = []
-        for i, (doc_id, dctx) in enumerate(docs.items()):
-            alias = f"p{i}"
-            alias_map[alias] = doc_id
-            children.append({"node_id": alias,
-                             "title": dctx.get("filename", doc_id),
-                             "summary": self._selection_fiche(dctx, per_fiche)})
+        for i, pc in enumerate(pieces):
+            children.append({"node_id": f"p{i}", "title": pc["title"],
+                             "summary": self._piece_fiche(pc, tool_context, per_fiche)})
         corpus_tree = {"node_id": "root", "title": "Dossier",
                        "summary": "Racine du dossier ; chaque enfant est une pièce.",
                        "nodes": children}
 
-        # ---- 2. UNE recherche par raisonnement sur les fiches du corpus ----
+        # ---- 2. UNE recherche par raisonnement sur les fiches des pièces ----
         yield "[SEARCHING]\n"
         res = await self.pageindex.tree_search(query, corpus_tree)
-        picked = [alias_map[a] for a in (res.get("node_list") or []) if a in alias_map]
-        picked = list(dict.fromkeys(picked))[:self.CORPUS_MAX_PIECES_READ]
+        picked_idx = []
+        for a in (res.get("node_list") or []):
+            a = str(a)
+            j = a[1:] if a[:1] == "p" else a
+            if j.isdigit() and 0 <= int(j) < len(pieces):
+                picked_idx.append(int(j))
+        picked = [pieces[j] for j in dict.fromkeys(picked_idx)][:self.CORPUS_MAX_PIECES_READ]
         thinking = (res.get("thinking") or "").strip()
         yield self._step_marker(
             0, 0, thinking, "tree_search", {"query": query},
             f"{len(picked)} pièce(s) retenue(s) : "
-            + (", ".join(docs[d].get('filename', d) for d in picked) or "—"),
+            + (", ".join(pc["title"] for pc in picked) or "—"),
         )
 
         # ---- 3. Lecture des pièces retenues. Hiérarchie niveau 2 : une pièce
         # COMPOSITE volumineuse est sélectionnée section par section (tree_search
-        # interne) au lieu d'être lue en entier — sinon elle sature le budget et
-        # noie la citation. Les pièces courtes (1 nœud) sont lues telles quelles
-        # (pas de surcoût). ----
+        # interne) au lieu d'être lue en entier. Les refs portent le VRAI doc_id
+        # de la pièce → citations `doc::node` exactes. ----
         parts, refs, used = [], [], 0
-        for doc_id in picked:
-            dctx = docs[doc_id]
-            nm = dctx.get("node_map") or {}
-            filename = dctx.get("filename", doc_id)
-            piece_len = sum(
-                len((info.get("node", info).get("text") or ""))
-                for info in nm.values() if isinstance(info.get("node", info), dict))
-            if len(nm) > 1 and piece_len > self.CORPUS_PIECE_DRILL_THRESHOLD and dctx.get("tree"):
-                sub = await self.pageindex.tree_search(query, dctx["tree"])
-                nids = [n for n in (sub.get("node_list") or []) if n in nm] or sorted(nm.keys())
+        for pc in picked:
+            doc_id = pc["doc_id"]
+            title = pc["title"]
+            nm = (docs.get(doc_id) or {}).get("node_map") or {}
+            piece_nids = [nid for nid in pc["node_ids"] if nid in nm]
+            piece_len = sum(len((nm[nid].get("node", nm[nid]).get("text") or ""))
+                            for nid in piece_nids)
+            if len(piece_nids) > 1 and piece_len > self.CORPUS_PIECE_DRILL_THRESHOLD:
+                sub = await self.pageindex.tree_search(query, pc["head_node"])
+                hit = [n for n in (sub.get("node_list") or []) if n in piece_nids]
+                nids = hit or piece_nids
                 yield self._step_marker(
                     0, 0, (sub.get("thinking") or "").strip(), "tree_search",
                     {"doc_id": doc_id},
-                    f"[{filename}] pièce volumineuse : {len(nids)} section(s) retenue(s)")
+                    f"[{title}] pièce volumineuse : {len(nids)} section(s) retenue(s)")
             else:
-                nids = sorted(nm.keys())
+                nids = piece_nids
             for nid in nids:
                 info = nm.get(nid)
                 if not info:
@@ -1020,7 +1090,7 @@ Provide a clear, comprehensive answer in French."""
                     continue
                 if used + len(text) > self.SIMPLE_CONTEXT_BUDGET and parts:
                     break
-                block = (f"=== Document {filename} — Section node_{nid} ===\n"
+                block = (f"=== {title} — Section node_{nid} ===\n"
                          + text[: self.SIMPLE_CONTEXT_BUDGET - used])
                 parts.append(block)
                 used += len(block)
@@ -1120,30 +1190,14 @@ Provide a clear, comprehensive answer in French."""
         """Entrées pour une synthèse globale : (label, ref 'doc::nid', summary,
         start_page). Mono-document → une entrée par NŒUD (section) ;
         multi-documents → une entrée par PIÈCE (nœud racine)."""
-        docs = tool_context.get("docs") or {}
-        primary = tool_context.get("primary_doc_id")
         entries = []
-        if primary and primary in docs:
-            nm = docs[primary].get("node_map") or {}
-            for nid in sorted(nm.keys()):
-                info = nm[nid]
-                node = info.get("node", info)
-                if not isinstance(node, dict):
-                    continue
-                summary = (node.get("summary") or node.get("title") or "").strip()
-                entries.append((node.get("title") or f"node_{nid}",
-                                f"{primary}::{nid}", summary, info.get("start_index") or 1))
-        else:
-            for did, dctx in docs.items():
-                nm = dctx.get("node_map") or {}
-                if not nm:
-                    continue
-                root = min(nm.keys())
-                info = nm[root]
-                node = info.get("node", info)
-                summary = (node.get("summary") or "").strip() if isinstance(node, dict) else ""
-                entries.append((dctx.get("filename", did),
-                                f"{did}::{root}", summary, info.get("start_index") or 1))
+        for pc in self._extract_pieces(tool_context):
+            nm = (tool_context.get("docs") or {}).get(pc["doc_id"], {}).get("node_map") or {}
+            info = nm.get(pc["head_id"]) or {}
+            node = info.get("node", info)
+            summary = (node.get("summary") or "").strip() if isinstance(node, dict) else ""
+            entries.append((pc["title"], f"{pc['doc_id']}::{pc['head_id']}",
+                            summary, info.get("start_index") or 1))
         return entries
 
     async def _run_global_summary(self, session_id, query, model_type, use_memory,
@@ -1272,15 +1326,21 @@ Provide a clear, comprehensive answer in French."""
             yield "[Error: Aucun des documents sélectionnés n'est prêt]"
             return
 
-        # Une session Q-R réduite à UNE pièce se comporte comme le mode
-        # mono-document : rien n'y justifie la boucle d'agent.
-        effective_single = (mode == "single") or (len(ready_ids) == 1)
-        primary = ready_ids[0] if effective_single else None
-        tool_context = self._build_tool_context(mode, ready_ids, primary, model_type)
+        # L'unité de routage est la PIÈCE : 1 pièce → voie simple ; ≥2 → voie
+        # corpus. Un fichier composite (plusieurs pièces) bascule donc en voie
+        # corpus, exactement comme un répertoire de fichiers.
+        tool_context = self._build_tool_context(mode, ready_ids, None, model_type)
 
         if not tool_context["docs"]:
             yield "[Error: Échec du chargement des documents]"
             return
+
+        if self.USE_PIECE_UNIT:
+            effective_single = len(self._extract_pieces(tool_context)) <= 1
+        else:
+            effective_single = (mode == "single") or (len(ready_ids) == 1)
+        if effective_single:
+            tool_context["primary_doc_id"] = ready_ids[0]
 
         context_overview = self._build_docs_overview(tool_context)
         # In single mode we can afford to inline the TOC too for richer planning.
