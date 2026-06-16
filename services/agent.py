@@ -137,6 +137,10 @@ class DocumentAgent:
         self.pageindex = pageindex_service
         self.store = store
         self.sessions = sessions
+        # Cache des fiches ciblées (map-reduce) : (doc_id, head_id, question) →
+        # fiche|None. Évite de recalculer un map déjà fait (retry, reformulation,
+        # sous-question répétée). Conservé le temps du process.
+        self._focused_cache = {}
 
     # ============================================================ #
     #  Context / tool-context builders
@@ -853,10 +857,11 @@ Provide a clear, comprehensive answer in French."""
         # pièce COMPOSITE volumineuse est sélectionnée section par section
         # (tree_search interne) au lieu d'être prise en entier. Les refs portent
         # le VRAI doc_id de la pièce → citations `doc::node` exactes. ----
-        selected = []  # (doc_id, title, nid, text)
+        selected = []  # (doc_id, title, head_id, nid, text)
         for pc in picked:
             doc_id = pc["doc_id"]
             title = pc["title"]
+            head_id = pc["head_id"]
             nm = (docs.get(doc_id) or {}).get("node_map") or {}
             piece_nids = [nid for nid in pc["node_ids"] if nid in nm]
             piece_len = sum(len((nm[nid].get("node", nm[nid]).get("text") or ""))
@@ -878,30 +883,50 @@ Provide a clear, comprehensive answer in French."""
                 node = info.get("node", info)
                 text = (node.get("text") or "") if isinstance(node, dict) else ""
                 if text:
-                    selected.append((doc_id, title, nid, text))
+                    selected.append((doc_id, title, head_id, nid, text))
 
-        total_len = sum(len(t) for _, _, _, t in selected)
+        total_len = sum(len(t) for *_, t in selected)
 
         # ---- 4. AIGUILLAGE lecture directe vs MAP-REDUCE ciblé. Si le texte des
         # nœuds retenus tient dans le budget → lecture directe (rapide, défaut).
-        # Sinon → map-reduce orienté requête : chaque nœud est résumé SOUS L'ANGLE
-        # de la question (pages conservées, concurrence bornée), puis la rédaction
-        # porte sur ces synthèses ciblées — la couverture n'est plus plafonnée par
-        # un contexte unique. ----
+        # Sinon → map-reduce orienté requête : chaque PIÈCE retenue (sous-arbre de
+        # niveau 1 — même granularité que les fiches génériques) est résumée SOUS
+        # L'ANGLE de la question (pages conservées), puis la rédaction porte sur
+        # ces synthèses ciblées — la couverture n'est plus plafonnée par un
+        # contexte unique. Les fiches ciblées sont MISES EN CACHE (réutilisées sur
+        # retry / reformulation / sous-question répétée). ----
         use_map_reduce = total_len > self.SIMPLE_CONTEXT_BUDGET and len(selected) > 1
         if use_map_reduce:
+            # Regroupement par PIÈCE : une fiche ciblée par sous-arbre de niveau 1.
+            order, by_piece = [], {}
+            for doc_id, title, head_id, nid, text in selected:
+                key = (doc_id, head_id)
+                if key not in by_piece:
+                    by_piece[key] = {"title": title, "texts": []}
+                    order.append(key)
+                by_piece[key]["texts"].append(text)
             yield self._step_marker(
                 0, 0, "", "map_reduce", {"query": query},
-                f"{len(selected)} nœud(s) ({total_len} car.) > budget "
+                f"{len(order)} pièce(s) ({total_len} car.) > budget "
                 f"{self.SIMPLE_CONTEXT_BUDGET} → synthèse ciblée par pièce")
             sem = asyncio.Semaphore(self.MAP_CONCURRENCY)
 
-            async def _map(doc_id, title, nid, text):
+            async def _map(doc_id, head_id, title, text):
+                ckey = (doc_id, head_id, query)
+                if ckey in self._focused_cache:          # déjà calculée → réutiliser
+                    return self._focused_cache[ckey]
                 async with sem:
-                    return await self._focused_summary(
-                        title, doc_id, nid, text, query, model_type)
+                    fiche = await self._focused_summary(
+                        title, doc_id, head_id, text, query, model_type)
+                self._focused_cache[ckey] = fiche         # mémorise (même None)
+                return fiche
 
-            tasks = [asyncio.create_task(_map(*s)) for s in selected]
+            tasks = []
+            for key in order:
+                doc_id, head_id = key
+                pc = by_piece[key]
+                text = "\n\n".join(pc["texts"])[: self.SIMPLE_CONTEXT_BUDGET]
+                tasks.append(asyncio.create_task(_map(doc_id, head_id, pc["title"], text)))
             fiches, done_n = [], 0
             for coro in asyncio.as_completed(tasks):
                 fiche = await coro
@@ -910,7 +935,7 @@ Provide a clear, comprehensive answer in French."""
                     fiches.append(fiche)
                 yield self._step_marker(
                     0, 0, "", "map_reduce", {},
-                    f"synthèses ciblées : {done_n}/{len(selected)} "
+                    f"synthèses ciblées : {done_n}/{len(order)} "
                     f"— {len(fiches)} pièce(s) pertinente(s)")
             parts, refs = [], []
             for f in fiches:
@@ -921,7 +946,7 @@ Provide a clear, comprehensive answer in French."""
                              "question, pages d'origine conservées)】\n")
         else:
             parts, refs, used = [], [], 0
-            for doc_id, title, nid, text in selected:
+            for doc_id, title, head_id, nid, text in selected:
                 if used + len(text) > self.SIMPLE_CONTEXT_BUDGET and parts:
                     break
                 block = (f"=== {title} — Section node_{nid} ===\n"
