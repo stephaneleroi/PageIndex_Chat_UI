@@ -28,10 +28,12 @@ erreur : bouton « Relancer » (ou `POST /api/documents/<id>/retry`).
 ## Principes structurants (décisions utilisateur, ne pas revenir dessus)
 
 1. **Paradigme PageIndex pur** : le retrieval passe exclusivement par le
-   raisonnement sur l'arbre (titres + résumés). `keyword_search`,
-   `summarize_nodes` et le repli littéral de `cross_search` sont désactivés
-   (code conservé). Quand une pièce est introuvable, le correctif est
-   d'améliorer l'arbre (résumés identitaires), jamais la recherche littérale.
+   raisonnement sur l'arbre (titres + résumés) — `tree_search` puis lecture des
+   nœuds, rien d'autre. La recherche littérale (`keyword_search`), les résumés
+   intermédiaires (`summarize_nodes`) et la boucle ReAct multi-outils
+   (`cross_search`…) ont été **supprimés** (code mort — récupérable via git).
+   Quand une pièce est introuvable, le correctif est d'améliorer l'arbre
+   (résumés identitaires), jamais la recherche littérale.
 2. **L'application ne doit pas dégrader le modèle** : hors documents
    (conversation libre), le modèle est interrogé NU — aucune instruction
    système, aucun style, aucune température imposée. Voir DIAGNOSTIC-UEMO.md

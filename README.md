@@ -52,26 +52,18 @@ Le RAG traditionnel s'appuie sur les Embeddings vectoriels — or un fragment s�
 
 ## ✨ Fonctionnalités clés
 
-### Agent multi-outils
+### Moteur de réponse — 4 voies
 
-Le moteur de questions-réponses est un Agent (function calling natif, repli JSON texte) qui planifie ses chemins de recherche, de lecture et de synthèse. **Règle structurante : le retrieval passe exclusivement par le raisonnement sur l'arbre PageIndex** — les outils hors paradigme sont désactivés (code conservé) :
+Le moteur ne repose **pas** sur une boucle d'outils : selon le contexte, `run_session` (`services/agent.py`) choisit l'une de **quatre voies**, toutes fondées sur le même pipeline canonique PageIndex (recherche par raisonnement → lecture des nœuds → rédaction citée). **Règle structurante : le retrieval passe exclusivement par le raisonnement sur l'arbre PageIndex** (`tree_search`) — pas de recherche plein-texte, pas d'embeddings.
 
-| Outil | État | Description |
-| :--: | :--: | :--: |
-| `tree_search` | ✔ | Recherche par raisonnement sur l'arborescence (prompt canonique du cookbook) |
-| `read_node` | ✔ | Lit le texte complet d'un nœud donné |
-| `view_pages` | ✔ | Envoie des images de pages au VLM pour analyser graphiques/formules/tableaux |
-| `list_documents` | ✔ | Liste les métadonnées des documents accessibles (mode KB) |
-| `read_document_toc` | ✔ | Lit la structure de la table des matières d'un document (mode KB) |
-| `cross_search` | ✔ | `tree_search` en parallèle sur plusieurs documents (mode KB) |
-| `keyword_search` | ✘ désactivé | Recherche littérale — contourne le raisonnement sur l'arbre |
-| `summarize_nodes` | ✘ désactivé | Étape absente du flux canonique, dégrade la traçabilité des pages |
+| Voie | Quand | Principe |
+| :-- | :-- | :-- |
+| **Conversation libre** | aucun document | modèle **nu** (sans prompt système), réponses « sans sources » |
+| **Mono-pièce** | 1 pièce | un `tree_search` → lecture des nœuds → rédaction citée |
+| **Corpus** | ≥ 2 pièces | un `tree_search` sur les fiches de toutes les pièces → lecture des pièces retenues (drill-down des pièces volumineuses) → rédaction avec inventaire en appui |
+| **Synthèse globale** | demande de vue d'ensemble | rédaction directe sur les fiches de toutes les pièces |
 
-À chaque tour de conversation, l'Agent exécute le cycle complet **décomposition → recherche par raisonnement → génération de la réponse → auto-évaluation** :
-
-* Les questions complexes sont automatiquement décomposées en sous-questions, recherchées séparément puis synthétisées.
-* Après génération, la qualité de la réponse est évaluée automatiquement ; si elle est insuffisante, une recherche complémentaire est lancée et la réponse réécrite.
-* Une fois l'indexation terminée, le document est analysé automatiquement pour produire un résumé, des découvertes clés et des questions suggérées.
+Après chaque réponse documentée : **note de qualité calculée** (déterministe) et, si besoin, **réflexion** — une seule recherche complémentaire ciblée, jamais de boucle. Une fois l'indexation terminée, le document est analysé automatiquement (résumé + questions suggérées).
 
 ### Double mode texte / vision
 
@@ -170,15 +162,10 @@ PageIndex_Chat_UI/
 │   └── config.yaml         #   Paramètres d'indexation
 │
 ├── services/               # Couche de logique métier
-│   ├── agent.py            #   Agent : décomposition / ReAct / réflexion / analyse
-│   ├── rag_service.py      #   Service RAG + appels LLM/VLM
+│   ├── agent.py            #   Agent : 4 voies de réponse + réflexion + analyse
+│   ├── rag_service.py      #   PageIndexService (LLM/VLM, tree_search) + RAGService
 │   ├── indexing_service.py #   Ordonnancement de l'indexation
-│   ├── skill_manager.py    #   Gestion des compétences
-│   └── tools/              #   8 outils de l'Agent
-│       ├── base.py
-│       ├── tree_search.py  ├── node_reader.py  ├── keyword_search.py
-│       ├── page_viewer.py  ├── summarizer.py
-│       ├── list_documents.py  ├── read_toc.py  ├── cross_search.py
+│   └── skill_manager.py    #   Gestion des compétences (skills Markdown)
 │
 ├── skills/                 # Compétences personnalisées (Markdown)
 │   ├── key_info_extraction.md
@@ -219,7 +206,7 @@ Les sessions des deux modes n'interfèrent pas entre elles ; le stockage et l'in
 
 **Voie corpus en mode KB**
 
-En mode KB, le retrieval ne charge jamais le texte intégral du dossier : un seul `tree_search` raisonne sur l'**inventaire des fiches de pièces** pour retenir les pièces pertinentes (≤ 12 lues en intégral, le reste restant citable via l'inventaire) ; une pièce composite volumineuse est elle-même sélectionnée section par section (hiérarchie niveau 2). L'ancienne boucle ReAct + `cross_search` (un appel LLM par pièce, trop lent sur Ollama) est **conservée mais dormante** (réactivable via `USE_CORPUS_SIMPLE = False`).
+En mode KB, le retrieval ne charge jamais le texte intégral du dossier : un seul `tree_search` raisonne sur l'**inventaire des fiches de pièces** pour retenir les pièces pertinentes (≤ 12 lues en intégral, le reste restant citable via l'inventaire) ; une pièce composite volumineuse est elle-même sélectionnée section par section (hiérarchie niveau 2). Une demande de synthèse d'ensemble est rédigée directement sur les fiches de toutes les pièces.
 
 ---
 
@@ -262,7 +249,7 @@ Ollama expose une API compatible OpenAI. Après avoir récupéré un modèle (`o
 
 **À garder en tête avec des modèles locaux :**
 
-* **JSON.** L'Agent attend du JSON strict (décomposition, ReAct, auto-évaluation, analyse). Les petits modèles peuvent produire du JSON imparfait — des *fallbacks* évitent tout plantage, mais la qualité du raisonnement dépend de la capacité du modèle (privilégiez ≥ 14B).
+* **JSON.** L'agent attend du JSON strict pour la réflexion (auto-évaluation) et l'analyse de document. Les petits modèles peuvent produire du JSON imparfait — des *fallbacks* évitent tout plantage, mais la qualité du raisonnement dépend de la capacité du modèle (privilégiez un modèle costaud).
 * **Vision.** Le mode vision envoie des images en base64 ; utilisez un modèle multimodal et vérifiez sa prise en charge.
 * **Vitesse.** L'indexation déclenche de nombreux appels LLM (TOC, résumé de chaque nœud) : cela peut être lent sur CPU local.
 
@@ -270,10 +257,11 @@ Ollama expose une API compatible OpenAI. Après avoir récupéré un modèle (`o
 
 | Paramètre | Valeur | Description |
 |------|-----|------|
-| `MAX_REACT_STEPS` | 5 | Nombre maximal d'étapes ReAct |
-| `MAX_RETRY` | 1 | Nombre maximal de nouvelles tentatives en cas d'échec de la réflexion |
-| `REFLECT_ACCEPT_THRESHOLD` | 6 | Une note de réflexion inférieure déclenche une nouvelle tentative (sur 10) |
-| `max_page_num_each_node` | 10 | Nombre maximal de pages par nœud |
+| `REFLECT_ACCEPT_THRESHOLD` | 6 | Une note de réflexion inférieure déclenche une recherche complémentaire (sur 10) |
+| `SIMPLE_CONTEXT_BUDGET` | 60000 | Caractères de texte source fournis au rédacteur |
+| `CORPUS_INVENTORY_BUDGET` | 45000 | Budget de l'inventaire des fiches (voie corpus) |
+| `CORPUS_MAX_PIECES_READ` | 12 | Pièces lues en intégral par réponse |
+| `SUMMARY_CONCURRENCY` | 3 | Résumés de pièces concurrents max à l'indexation |
 | `max_token_num_each_node` | 20000 | Nombre maximal de tokens par nœud |
 
 ---
