@@ -27,7 +27,7 @@
 Trois modes de conversation :
 
 * **Conversation mono-document (Single)** : questions-réponses approfondies sur un seul PDF, via la voie simple canonique du cookbook PageIndex (une recherche par raisonnement → lecture des nœuds → rédaction citée).
-* **Questions-réponses sur base de connaissances (KB)** : l'utilisateur coche des documents ou des dossiers entiers ; l'Agent effectue recherche et synthèse entre documents par divulgation progressive (métadonnées → table des matières → contenu des chapitres).
+* **Questions-réponses sur base de connaissances (KB)** : l'utilisateur coche des documents ou des dossiers entiers ; le dossier est traité comme **un seul arbre PageIndex** (les pièces sont les nœuds, leurs fiches les résumés). L'**unité de travail est la pièce**, pas le fichier : un fichier composite (plusieurs documents dans un même PDF/.docx) est lui-même éclaté en pièces traitées séparément. La voie corpus localise les pièces pertinentes par un raisonnement sur l'inventaire des fiches, puis les lit ; une demande de synthèse d'ensemble est rédigée directement sur les fiches.
 * **Conversation libre** : sans document sélectionné, le dialogue passe au modèle **nu** — aucune instruction ajoutée, aucun réglage forcé (principe : l'application ne doit pas dégrader le modèle, voir `DIAGNOSTIC-UEMO.md`). Ces réponses sont signalées « sans sources ».
 
 
@@ -99,6 +99,7 @@ Des fichiers Markdown définissent des compétences spécialisées de l'Agent, p
 ### Robustesse documentaire (dossiers de procédure)
 
 * **Import de dossiers** entiers (arborescence conservée dans la bibliothèque et cochable d'un bloc), import **.docx** (conversion LibreOffice), **OCR vision** pour les pages scannées.
+* **Unité = pièce** : qu'il s'agisse d'un répertoire de fichiers OU de plusieurs documents réunis dans un seul fichier, chaque pièce (sous-arbre de niveau 1) est une unité de travail isolée, citable par son propre `doc_id` ; à l'indexation, **un résumé par pièce** dont les points saillants citent la page `(p. N)`, avec régime compilation (fiches isolées) vs document unique (fiches cumulatives) détecté automatiquement.
 * **File d'indexation séquentielle**, **deux tentatives automatiques** par pièce, bouton « Relancer » sur les pièces en erreur.
 * **Cache de réimportation** : l'arbre est sauvegardé à côté du PDF source (`<nom>.pdf.pageindex.json`) ; réimporter le même fichier ne refait aucun appel LLM.
 * **Arbre éditable** (titres et résumés des nœuds) depuis la modale « Structure » — l'arbre étant l'index de recherche, c'est le levier d'intervention humaine le plus rentable.
@@ -216,9 +217,9 @@ Le changement central de la refonte : la Session n'est plus liée au cycle de vi
 
 Les sessions des deux modes n'interfèrent pas entre elles ; le stockage et l'indexation sont isolés par mode.
 
-**Divulgation progressive en mode KB**
+**Voie corpus en mode KB**
 
-En mode KB, le system prompt n'intègre pas l'arborescence complète (coût en tokens trop élevé) ; l'Agent décide lui-même de la profondeur d'exploration : `list_documents` (métadonnées) → `read_document_toc` (table des matières) → `tree_search` (contenu détaillé).
+En mode KB, le retrieval ne charge jamais le texte intégral du dossier : un seul `tree_search` raisonne sur l'**inventaire des fiches de pièces** pour retenir les pièces pertinentes (≤ 12 lues en intégral, le reste restant citable via l'inventaire) ; une pièce composite volumineuse est elle-même sélectionnée section par section (hiérarchie niveau 2). L'ancienne boucle ReAct + `cross_search` (un appel LLM par pièce, trop lent sur Ollama) est **conservée mais dormante** (réactivable via `USE_CORPUS_SIMPLE = False`).
 
 ---
 
@@ -228,11 +229,11 @@ Ce projet appelle les LLM via le **SDK Python OpenAI** (`openai` >= 1.0) et est 
 
 | Profil | Exemple local (Ollama) | Description |
 |------|----------|------|
-| `light` (rapide) | `gpt-oss-20b-128k` | Indexation (TOC, structure, résumés) + étapes internes de l'agent ; hérite de `text` si absent |
-| `text` | `nemotron-3-super` | Rédaction des réponses, conversation libre |
+| `light` (rapide) | `gpt-oss-20b-128k` | **Indexation initiale uniquement** (construction de la structure de l'arbre) ; hérite de `text` si absent |
+| `text` | `nemotron-3-super` | Rédaction des réponses, conversation libre **ET toutes les étapes internes de l'agent** (`tree_search`, réflexion, analyse) + résumés de pièces à l'indexation |
 | `vision` | `qwen3.6` | Analyse visuelle de pages, OCR des scans |
 
-Ce projet **n'utilise pas de modèle d'Embedding ni de base de données vectorielle**. Aucune température n'est imposée : chaque modèle tourne avec les réglages de son Modelfile (recommandations de l'éditeur).
+L'agent ne tourne **pas** sur `light` : sur Ollama, alterner de modèle à chaque étape force un rechargement VRAM coûteux → tout passe sur `text` sauf l'indexation initiale (décision délibérée). Ce projet **n'utilise pas de modèle d'Embedding ni de base de données vectorielle**. Aucune température n'est imposée : chaque modèle tourne avec les réglages de son Modelfile (recommandations de l'éditeur).
 
 ### 🔧 Configurer le LLM (URL personnalisée, fournisseurs compatibles)
 

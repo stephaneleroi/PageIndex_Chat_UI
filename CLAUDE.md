@@ -33,7 +33,15 @@ erreur : bouton « Relancer » (ou `POST /api/documents/<id>/retry`).
 3. **Toujours vérifier les renvois aux pages** : toute évolution touchant
    citations/réponses se valide en contrôlant les pages citées contre le
    texte réel du PDF (cf. tests/accept_chauvin.py).
-4. **Simplicité** : modifications minimales et ciblées, pas de
+4. **Unité = pièce** (`USE_PIECE_UNIT`) : l'unité de travail est la **pièce**
+   (sous-arbre de niveau 1), pas le fichier. Un fichier composite (plusieurs
+   documents dans un PDF/.docx) est traité comme un dossier de pièces — voie
+   corpus, chaque pièce isolée. À l'indexation, **un résumé par pièce**
+   (`generate_summaries_for_structure`), avec régime **compilation** (fiches
+   isolées, défaut anti-contamination) vs **document unique** (fiches
+   cumulatives) décidé par `is_compilation`. Les « Points saillants » des
+   fiches citent la page `(p. N)` → synthèse globale citable sans relire.
+5. **Simplicité** : modifications minimales et ciblées, pas de
    sur-conception. Les évaluations factuelles de prompts se font sur
    PLUSIEURS tirages (les Modelfiles sont à température non nulle).
 
@@ -58,7 +66,11 @@ erreur : bouton « Relancer » (ou `POST /api/documents/<id>/retry`).
 
 ## Données
 
-- Corpus de référence : `../data/Procedure-PN-1-PDF/` (25 pièces réelles).
+- Corpus de référence : `../data/Procedure-PN-1-PDF/` (25 pièces réelles,
+  répertoire de fichiers). Cas **composites** (plusieurs pièces dans UN fichier,
+  voie corpus via unité = pièce) : `../data/Rapports_LSC.docx` (4 rapports,
+  compilation), `../data/Dossier Théo Blanchet.pdf` (5 documents). Cas **gros
+  document unique** : `../data/Synthèse_2026.pdf` (114 pages → régime cumulatif).
 - Les arbres indexés sont cachés à côté des PDF sources
   (`<nom>.pdf.pageindex.json`, clé SHA-256) : réimporter ne refait aucun
   appel LLM. `SOURCE_DATA_DIR` (défaut `../data`) configure la racine.

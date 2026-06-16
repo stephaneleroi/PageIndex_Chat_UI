@@ -98,7 +98,8 @@ raisonnement pur trouve la pièce.
    (3 stratégies selon présence/qualité du sommaire), **vérification LLM**
    de chaque entrée + réparation, hiérarchisation, identifiants de nœuds,
    texte balisé `<page_N>…</page_N>`, découpage des pages partagées,
-   fusion des nœuds au texte identique, résumés par nœud. Échec → **deux
+   fusion des nœuds au texte identique, **résumé par pièce** (voir ci-dessous).
+   Échec → **deux
    tentatives automatiques** avant le statut erreur ; une pièce en erreur
    se relance d'un clic (« Relancer » → `POST /documents/<id>/retry`).
 4. Résultat figé dans `results/documents/<id>/structure.json`, et copié à
@@ -107,12 +108,30 @@ raisonnement pur trouve la pièce.
    `node_map` (nœud → plage de pages), surlignages (bbox par nœud, PyMuPDF),
    analyse automatique (résumé global + questions suggérées).
 
-**Les résumés de nœuds sont l'index de recherche** : le prompt
-(`generate_node_summary`, `pageindex/utils.py`) exige d'ouvrir chaque résumé
-par l'**identité** de la partie — nature de la pièce (lettre, note, ordonnance,
-rapport…), auteur/signataire, destinataire, date — avant les points couverts,
-en citant les noms propres. C'est ce qui permet au raisonnement de retrouver
-une pièce désignée comme un humain le ferait (« la note de M. X au juge Y »).
+**Les fiches de pièces sont l'index de recherche.** L'unité de résumé est la
+**pièce** = un sous-arbre de premier niveau (`piece_head_nodes`), pas le nœud :
+`generate_summaries_for_structure` produit **un résumé par pièce**, construit
+sur le texte concaténé de tout son sous-arbre et stocké sur son nœud de tête
+(les sous-nœuds gardent leur titre, sans résumé propre). Beaucoup moins d'appels
+LLM (4-5 fiches au lieu de 36-43 nœuds sur un dossier type) et une fiche
+complète plutôt que le seul préambule de la tête. Le prompt
+(`generate_node_summary`) exige d'ouvrir chaque fiche par l'**identité** de la
+partie — nature (lettre, note, ordonnance, rapport…), auteur/signataire,
+destinataire, date — avant des « Points saillants » qui **citent la page de
+chaque fait `(p. N)`** (depuis les balises `<page_N>`). C'est ce qui permet au
+raisonnement de retrouver une pièce désignée comme un humain le ferait (« la
+note de M. X au juge Y ») **et** à une synthèse globale bâtie sur les seules
+fiches de citer la page exacte.
+
+**Régime de résumé : compilation vs document unique** (`is_compilation`,
+détection asymétrique) — un **dossier de pièces indépendantes** (défaut sûr,
+anti-contamination) est résumé **pièce par pièce isolément** (en parallèle) ;
+un **document unique** (signal fort de plan cohérent : pas de pièces numérotées,
+dates/auteurs non divergents, natures de plan « chapitre/partie/… ») est résumé
+de façon **cumulative et séquentielle**, chaque section recevant en contexte les
+fiches des sections précédentes (continuité du fil). Confondre une compilation
+avec un document unique contaminerait les fiches : le défaut penche donc
+toujours vers la compilation.
 
 La construction de la structure (sommaire, arbre) utilise le profil
 **« rapide »** (`light`, configurable via l'onglet « Modèle rapide ») ; les
@@ -126,6 +145,17 @@ explicite (boutons Réessayer / Supprimer).
 ## Cycle de vie d'une question
 
 `services/agent.py`, événement Socket.IO `agent_chat`. Trois voies selon le mode :
+
+**Unité = pièce** (`USE_PIECE_UNIT`) : ce qui détermine la voie n'est plus le
+nombre de *fichiers* mais le nombre de **pièces**. `_extract_pieces` découpe
+chaque arbre en pièces (`_piece_heads` : ≥ 2 racines → autant de pièces ; racine
+unique englobant des pièces numérotées → ses enfants ; sinon le document entier),
+chaque pièce gardant son **vrai `doc_id`** pour des citations `doc::node`
+exactes. Conséquence : un **fichier composite** (plusieurs documents dans un même
+PDF/.docx, ex. `Rapports_LSC.docx`, `Dossier Théo`) bascule sur la **voie
+corpus** — exactement comme un répertoire de fichiers — et chaque pièce y est
+traitée séparément (pas de contamination). `effective_single` ne vaut donc vrai
+que pour un document réellement mono-pièce.
 
 ### Conversation libre (Q-R sans document) : le modèle NU
 
@@ -266,8 +296,10 @@ Ajustements locaux (« quality in, quality out », cf. ETUDE-RAGFLOW.md) :
    (`split_shared_boundary_pages`) : quand une pièce finit au milieu d'une
    page où la suivante commence, chaque nœud ne garde que SA part du texte —
    fin des contaminations croisées (résumés, sélection, réponses) ;
-4. résumés de nœuds « identitaires » (nature, auteur, destinataire, date —
-   voir plus haut) et dans la langue du document, titres jamais traduits ;
+4. résumés « identitaires » par PIÈCE (nature, auteur, destinataire, date —
+   voir plus haut ; `generate_summaries_for_structure` résume chaque sous-arbre
+   de niveau 1, pas chaque nœud), dans la langue du document, titres jamais
+   traduits ;
 5. garde-fou dans la génération de structure : les pages viennent des
    balises `<physical_index_X>` où le contenu commence réellement, jamais
    d'une liste/sommaire interne au document (pagination souvent périmée
@@ -282,7 +314,17 @@ Ajustements locaux (« quality in, quality out », cf. ETUDE-RAGFLOW.md) :
    même page (un PV d'une page découpé en 5 nœuds au même texte) coûtait un
    résumé LLM par nœud et rendait les surlignages ambigus ;
 10. **aucune température imposée** dans les appels LLM de la bibliothèque
-    (réglages du Modelfile de chaque modèle).
+    (réglages du Modelfile de chaque modèle) ;
+11. **résumé par pièce** plutôt que par nœud (`generate_summaries_for_structure`,
+    `piece_head_nodes`) : l'index de recherche est à la granularité de la pièce
+    (sous-arbre de niveau 1) — 4-5 appels LLM au lieu d'un par nœud ;
+12. **régime de résumé compilation vs document unique** (`is_compilation`,
+    asymétrique) : pièces indépendantes → fiches isolées (anti-contamination) ;
+    document unique → fiches cumulatives (chaque section avec le contexte des
+    précédentes) ;
+13. **citations de page dans les fiches** : les « Points saillants » portent
+    `(p. N)` (depuis les `<page_N>`) → une synthèse globale bâtie sur les seules
+    fiches reste citable à la page.
 
 ## Dimensionnement multi-documents (dossiers de procédure)
 
@@ -314,16 +356,19 @@ interne (planificateur, réflexion) garde ses formats structurés.
   thèmes du dossier mais ne restitue pas le détail factuel fin de chaque pièce
   (le texte intégral de toutes les pièces ne tient pas dans le contexte — 145 k
   car. pour 26 pièces vs budget 60 k). Le levier de qualité est la richesse des
-  fiches (prompt `generate_node_summary`). De plus, sous la pression du
-  grounding (« cite chaque affirmation »), le modèle tend encore à **énumérer**
-  les pièces par catégorie plutôt qu'à les fondre en une vraie synthèse
-  transversale — l'instruction de prompt seule n'y suffit pas toujours.
+  fiches (prompt `generate_node_summary`) — désormais enrichies de citations de
+  page, si bien que la synthèse globale **cite à la page** sans relire le texte.
+  De plus, sous la pression du grounding (« cite chaque affirmation »), le
+  modèle tend encore à **énumérer** les pièces par catégorie plutôt qu'à les
+  fondre en une vraie synthèse transversale — l'instruction de prompt seule n'y
+  suffit pas toujours.
 - **Sélection hiérarchique tributaire de la fiche racine** : au niveau 1, une
-  pièce composite est jugée sur le résumé de son **nœud racine**. Si ce résumé
-  ne reflète pas le contenu profond (cas réel : un en-tête ministériel pour un
-  sujet de concours), la pièce est **ratée** et donc jamais sélectionnée ni
-  « drillée » (niveau 2). Correctif identifié, non implémenté : enrichir la
-  fiche de niveau 1 avec les titres/résumés des sous-sections.
+  pièce composite est jugée sur sa **fiche**. Si celle-ci ne reflète pas le
+  contenu profond (cas réel : un en-tête ministériel pour un sujet de concours),
+  la pièce risque d'être **ratée** et donc jamais sélectionnée ni « drillée »
+  (niveau 2). Correctif **appliqué** (`_selection_fiche` / `_piece_fiche`) : la
+  fiche de niveau 1 inclut les **titres des sous-sections** (en plus du résumé
+  de tête), de sorte que le `tree_search` « voie » le contenu profond.
 - ~~Pas d'OCR~~ : les pages sans couche texte sont **transcrites par le
   modèle vision** configuré (profil « vision », ex. qwen3.6 local) au moment
   de l'extraction ; si aucun modèle vision n'est utilisable, comportement
