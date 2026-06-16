@@ -806,8 +806,9 @@ Destinataire : <to whom it is addressed>
 Date et heure : <date and time of the piece>
 Personnes : <each person named, with their role in the matter (suspect, victim, witness, parent...)>
 Objet : <one sentence: what this piece is for>
-Points saillants : <2 to 4 sentences in continuous prose covering the main points, with the key names, places, dates and numbers exactly as written>
+Points saillants : <2 to 4 sentences in continuous prose covering the main points, with the key names, places, dates and numbers exactly as written, and the page of EACH fact appended as "(p. N)">
 
+The source text is wrapped in <page_N>…</page_N> markers. In "Points saillants", append to each fact its page as "(p. N)", taking N from the enclosing <page_N> marker — never guess a page, and never echo the markers themselves. These page citations let a global summary built from the sheets alone still cite the exact page.
 Copy names, dates and relationships EXACTLY as stated in the text — never infer or invert a relationship (author vs recipient, parent vs child).
 {context_block}
 Partial Document Text: {node['text']}
