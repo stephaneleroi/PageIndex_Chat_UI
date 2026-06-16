@@ -29,21 +29,32 @@ intitulés.
 
 ### 1.3 Règle structurante : le retrieval passe **uniquement** par l'arbre
 
+Répondre se fait en **deux étapes** : on **choisit** d'abord où regarder (sur les
+résumés), puis on **lit** seulement les passages choisis.
+
 | Brique | Rôle |
 |---|---|
-| `pageindex/` | Bibliothèque amont : PDF → arbre (sommaire, vérification, résumés). Fork local (§8). |
-| `tree_search` | Recherche par raisonnement : reçoit **(question + arbre SANS le texte)** → renvoie `{thinking, node_list}`. Prompt du cookbook officiel. `PageIndexService.tree_search` (`services/rag_service.py`). |
-| Lecture des nœuds | Le **texte** des nœuds retenus est chargé puis fourni au rédacteur. |
+| `pageindex/` | Bibliothèque amont : PDF → arbre de nœuds, **chaque nœud portant un titre et un résumé**. Fork local (§8). |
+| `tree_search` | **Étape 1 — choisir où regarder.** Reçoit la question + l'arbre réduit à ses **titres et résumés** (`remove_fields(tree, ['text'])` : le *texte intégral des pages* est retiré, les résumés restent) → renvoie `{thinking, node_list}`. C'est **en lisant les résumés** qu'il décide quels nœuds sont pertinents. `PageIndexService.tree_search` (`services/rag_service.py`), prompt du cookbook officiel. |
+| Lecture des nœuds | **Étape 2 — lire pour de vrai.** Le **texte** des seuls nœuds retenus à l'étape 1 est alors chargé et fourni au rédacteur. |
 | Rédaction ancrée | « réponds uniquement à partir du contexte » + citations `(node_<id>, page N)`. |
 
-**Conséquence directe — la qualité des résumés EST la qualité du retrieval.**
-`tree_search` ne voit que les **titres et les résumés**, jamais le texte. Cas réel
-fondateur : « résume la note de M. X au juge Y » restait **introuvable** parce que
-le résumé de cette note ne mentionnait ni auteur, ni destinataire, ni nature — le
-modèle ne pouvait pas la relier à la question. Le correctif **conforme** n'a pas
-été d'ajouter une recherche plein-texte, mais d'**enrichir le résumé** pour qu'il
-porte cette identité (voir §2.3 et §4). Quand une pièce est introuvable, on
-améliore l'arbre — jamais on ne contourne le paradigme.
+**À quoi servent les résumés, alors ?** Ce sont eux — *pas* le texte — que
+`tree_search` lit pour **choisir** les nœuds (étape 1). On retire le texte intégral
+à cette étape pour deux raisons : (a) un dossier entier ne tiendrait pas dans le
+contexte du modèle, et (b) on veut raisonner sur des **synthèses** (« cette pièce
+est la note de X au juge Y ») plutôt que sur des pages brutes. Le texte n'est lu
+qu'à l'**étape 2**, et seulement pour les nœuds retenus.
+
+**Conséquence — la qualité des résumés EST la qualité du retrieval.** Puisque le
+choix (étape 1) se fait sur les résumés, **un résumé pauvre rend une pièce
+invisible**. Cas réel fondateur : « résume la note de M. X au juge Y » restait
+**introuvable** parce que le résumé de cette note ne mentionnait ni auteur, ni
+destinataire, ni nature — le modèle ne pouvait pas la relier à la question. Le
+correctif **conforme** n'a pas été d'ajouter une recherche plein-texte, mais
+d'**enrichir le résumé** pour qu'il porte cette identité (la « fiche d'identité »,
+§2 et §4). Quand une pièce est introuvable, on améliore l'arbre — jamais on ne
+contourne le paradigme.
 
 ---
 
