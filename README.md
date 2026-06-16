@@ -63,6 +63,10 @@ Le moteur ne repose **pas** sur une boucle d'outils : selon le contexte, `run_se
 | **Corpus** | ≥ 2 pièces | un `tree_search` sur les fiches de toutes les pièces → lecture des pièces retenues (drill-down des pièces volumineuses) → rédaction avec inventaire en appui |
 | **Synthèse globale** | demande de vue d'ensemble | rédaction directe sur les fiches de toutes les pièces |
 
+**Décomposition & aiguillage** : un appel LLM (`decompose_query`) scinde les questions composites en sous-questions et classe l'**intention** de chacune — `overview` (vue d'ensemble → fiches) ou `detail` (fait précis / comparaison → lecture du texte). Chaque sous-question part alors sur la voie de son intention, les réponses sont assemblées en sections.
+
+**Map-reduce ciblé** : dans la voie corpus, si le texte des pièces retenues dépasse le budget de lecture, chaque pièce est résumée **à chaud, sous l'angle de la question** (en conservant les pages `(p. N)`) puis compilée — la couverture transversale fine n'est plus plafonnée par un contexte unique (utile « à l'échelle »). Sinon, lecture directe.
+
 Après chaque réponse documentée : **note de qualité calculée** (déterministe) et, si besoin, **réflexion** — une seule recherche complémentaire ciblée, jamais de boucle. Une fois l'indexation terminée, le document est analysé automatiquement (résumé + questions suggérées).
 
 ### Double mode texte / vision
@@ -146,7 +150,7 @@ Ouvrez le panneau des paramètres et renseignez le nom, la clé API et la Base U
 
 ### 📁 Arborescence du projet
 
-Documentation détaillée : [`ARCHITECTURE.md`](./ARCHITECTURE.md) (fonctionnement interne, où PageIndex est utilisé et où il ne l'est pas, modifications locales de la bibliothèque), [`DIAGNOSTIC-UEMO.md`](./DIAGNOSTIC-UEMO.md) (enquête sur la dégradation du modèle par les enrobages de prompt), [`ETUDE-RAGFLOW.md`](./ETUDE-RAGFLOW.md) (étude comparative), [`ETUDE-SEGMENTATION-PIECES.md`](./ETUDE-SEGMENTATION-PIECES.md) (conception : pré-segmentation déterministe des pièces), [`ETUDE-MAP-REDUCE-CIBLE.md`](./ETUDE-MAP-REDUCE-CIBLE.md) (conception : fiches spécifiques à chaud / map-reduce orienté requête), [`tests/`](./tests/) (tests d'acceptation).
+Documentation détaillée : [`ARCHITECTURE.md`](./ARCHITECTURE.md) (fonctionnement interne, où PageIndex est utilisé et où il ne l'est pas, modifications locales de la bibliothèque), [`DIAGNOSTIC-UEMO.md`](./DIAGNOSTIC-UEMO.md) (enquête sur la dégradation du modèle par les enrobages de prompt), [`ETUDE-RAGFLOW.md`](./ETUDE-RAGFLOW.md) (étude comparative), [`ETUDE-SEGMENTATION-PIECES.md`](./ETUDE-SEGMENTATION-PIECES.md) (conception : pré-segmentation déterministe des pièces), [`ETUDE-MAP-REDUCE-CIBLE.md`](./ETUDE-MAP-REDUCE-CIBLE.md) (note de conception du map-reduce ciblé, **implémenté**), [`tests/`](./tests/) (tests d'acceptation).
 
 ```
 PageIndex_Chat_UI/

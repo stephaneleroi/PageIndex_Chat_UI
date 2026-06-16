@@ -39,9 +39,12 @@ erreur : bouton « Relancer » (ou `POST /api/documents/<id>/retry`).
    système, aucun style, aucune température imposée. Voir DIAGNOSTIC-UEMO.md
    pour la démonstration (les consignes de directivité font confabuler).
    Aucune température n'est imposée nulle part : réglages Modelfile.
-3. **Toujours vérifier les renvois aux pages** : toute évolution touchant
-   citations/réponses se valide en contrôlant les pages citées contre le
-   texte réel du PDF (cf. tests/accept_chauvin.py).
+3. **Citation à la page = fonctionnalité centrale** : toute voie de réponse
+   doit produire des citations vérifiables. Toute évolution touchant
+   citations/réponses se valide en contrôlant les pages citées contre le texte
+   réel du PDF (cf. tests/accept_chauvin.py). En particulier, les **fiches à
+   chaud** du map-reduce (`_focused_summary`) DOIVENT conserver les `(p. N)`
+   (sinon le reduce ne peut plus citer — c'est la condition de viabilité).
 4. **Unité = pièce** (`USE_PIECE_UNIT`) : l'unité de travail est la **pièce**
    (sous-arbre de niveau 1), pas le fichier. Un fichier composite (plusieurs
    documents dans un PDF/.docx) est traité comme un dossier de pièces — voie
@@ -50,7 +53,14 @@ erreur : bouton « Relancer » (ou `POST /api/documents/<id>/retry`).
    isolées, défaut anti-contamination) vs **document unique** (fiches
    cumulatives) décidé par `is_compilation`. Les « Points saillants » des
    fiches citent la page `(p. N)` → synthèse globale citable sans relire.
-5. **Simplicité** : modifications minimales et ciblées, pas de
+5. **Décomposition & aiguillage** (`decompose_query`) : un appel LLM scinde les
+   questions composites et classe l'**intention** de chaque (sous-)question —
+   `overview` (→ fiches) ou `detail` (→ lecture du texte) ; l'intention prime sur
+   `_is_global_summary` (repli). En voie corpus `detail`, si le texte retenu
+   déborde `SIMPLE_CONTEXT_BUDGET` → **map-reduce ciblé** (fiche à chaud par pièce,
+   pages conservées, cache `_focused_cache`, concurrence `MAP_CONCURRENCY`).
+   Pas de boucle ReAct : décomposition + N voies normales + assemblage.
+6. **Simplicité** : modifications minimales et ciblées, pas de
    sur-conception. Les évaluations factuelles de prompts se font sur
    PLUSIEURS tirages (les Modelfiles sont à température non nulle).
 

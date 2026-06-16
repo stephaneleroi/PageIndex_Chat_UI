@@ -1,8 +1,11 @@
 # Étude — Fiches spécifiques à chaud (map-reduce orienté requête)
 
-> **Statut : étude / conception.** Rien n'est implémenté. À reprendre sur une
-> **branche dédiée**. Autoporteur : problème, rôle des fiches, architecture,
-> point d'insertion exact, condition de viabilité (citations), coûts, étapes.
+> **Statut : IMPLÉMENTÉ** (voie corpus, `services/agent.py`). Le présent document
+> reste comme note de conception. Réalisé : bascule par volume dans
+> `_run_corpus_simple`, map par PIÈCE (`_focused_summary`, pages conservées —
+> vérifié), reduce avec citations vérifiées, concurrence bornée
+> (`MAP_CONCURRENCY`), cache (`_focused_cache`). Aiguillage : intention `detail`
+> **et** volume débordant le budget. Voir `ARCHITECTURE.md` §6.3.
 
 ## 1. Problème
 

@@ -154,6 +154,17 @@ pas de fichiers. `_extract_pieces` découpe chaque arbre en pièces (`_piece_hea
 chacune gardant son **vrai `doc_id`** (citations `doc::node` exactes). Un fichier
 composite (plusieurs documents dans un PDF/.docx) bascule donc sur la voie corpus.
 
+**Décomposition & aiguillage** : avant de router, `run_session` appelle
+`decompose_query` — **un seul** appel LLM qui (a) scinde la question en
+sous-questions si elle regroupe plusieurs demandes distinctes, et (b) classe
+l'**intention** de chaque (sous-)question : `overview` (synthèse / vue d'ensemble
+→ fiches) ou `detail` (fait précis, comparaison de versions → **lecture du
+texte**). Cette intention **prime** sur l'heuristique `_is_global_summary` (qui
+ne sert plus que de repli). Si la question est composite, `_run_decomposed`
+traite chaque sous-question par la voie de son intention et **assemble les
+réponses en sections** sous un seul cycle. Ce n'est **pas** une boucle ReAct
+(supprimée) : juste une décomposition + N voies normales + assemblage.
+
 ### 6.1 Conversation libre (`_run_free_chat`) — le modèle NU
 
 Mode kb **sans document** : dialogue direct avec le modèle. **Aucune instruction
@@ -172,14 +183,30 @@ qualité (signalé « sans sources » dans l'IHM).
 
 ### 6.3 Voie corpus (`_run_corpus_simple`) — le dossier est un arbre
 
-Mode kb, ≥ 2 pièces :
-1. **Un** `tree_search` sur les **fiches de toutes les pièces** (`CORPUS_SELECT_BUDGET`) ;
-2. lecture des pièces retenues (≤ `CORPUS_MAX_PIECES_READ`=12) ; une pièce
-   composite volumineuse (> `CORPUS_PIECE_DRILL_THRESHOLD`=20 000 car.) est
-   sélectionnée section par section (`tree_search` interne — *hiérarchie niveau 2*) ;
-3. rédaction avec l'**inventaire complet** des fiches en appui
-   (`CORPUS_INVENTORY_BUDGET`=45 000 car. — toute pièce reste citable même non lue) ;
+Mode kb, ≥ 2 pièces, intention `detail` :
+1. **Un** `tree_search` sur les **fiches de toutes les pièces** (`CORPUS_SELECT_BUDGET`)
+   → pièces retenues (≤ `CORPUS_MAX_PIECES_READ`=12) ; une pièce composite
+   volumineuse (> `CORPUS_PIECE_DRILL_THRESHOLD`=20 000 car.) est sélectionnée
+   section par section (`tree_search` interne — *hiérarchie niveau 2*) ;
+2. **Aiguillage lecture directe vs map-reduce ciblé**, selon le volume du texte
+   retenu :
+   - **tient** dans `SIMPLE_CONTEXT_BUDGET`=60 000 car. → **lecture directe** du
+     texte intégral (rapide, défaut) ;
+   - **déborde** → **map-reduce ciblé** : chaque PIÈCE retenue (sous-arbre de
+     niveau 1, même granularité que les fiches génériques) est résumée *sous
+     l'angle de la question* (`_focused_summary` — **pages `(p. N)` conservées**,
+     concurrence bornée `MAP_CONCURRENCY`=3, fiches mises en **cache**
+     `_focused_cache`). La couverture n'est plus plafonnée par un contexte
+     unique ; les citations restent à la page (cf. §6.5) ;
+3. rédaction (texte brut **ou** synthèses ciblées) avec l'**inventaire complet**
+   des fiches en appui (`CORPUS_INVENTORY_BUDGET`=45 000 car. — toute pièce reste
+   citable même non lue) ;
 4. auto-évaluation conditionnelle.
+
+> **Aiguillage du map-reduce, en clair** : il n'est invoqué que (a) pour une
+> intention `detail` (les `overview` partent sur les fiches via la synthèse
+> globale) **et** (b) si le texte retenu déborde le budget de lecture directe.
+> Sinon, lecture directe.
 
 ### 6.4 Synthèse globale (`_run_global_summary`)
 
@@ -206,9 +233,11 @@ dans la synthèse).
 |---|---|
 | Contexte | `_build_tool_context`, `_ensure_doc_loaded`, `_build_docs_overview`, `_single_doc_tree_summary`, `_build_history_context` |
 | Pièces | `_piece_heads`, `_subtree_nodes`, `_extract_pieces`, `_piece_fiche`, `_selection_fiche`, `_build_corpus_inventory` |
+| Décomposition | `decompose_query` (scinde + classe l'intention), `_run_decomposed` (assemble en sections), `_relay_subquery` (relaie une sous-voie sans dupliquer le cycle) |
 | Voies | `run_session`, `_run_free_chat`, `_run_single_simple`, `_run_corpus_simple`, `_run_global_summary` |
+| Map-reduce ciblé | `_focused_summary` (fiche à chaud d'une pièce, pages conservées), cache `_focused_cache` |
 | Rédaction | `_build_simple_answer_prompt`, `_build_answer_prompt`, `_build_vision_answer_prompt`, `_collect_images_for_refs` |
-| Évaluation | `_estimate_quality`, `reflect`, `_is_global_summary`, `_build_summary_entries` |
+| Évaluation | `_estimate_quality`, `reflect`, `_is_global_summary` (repli d'aiguillage), `_build_summary_entries` |
 | Analyse | `analyze_document` (résumé + questions suggérées après indexation) |
 | Divers | `_step_marker` (télémétrie `[AGENT_STEP]`), `_extract_json_str` (repli JSON) |
 
@@ -333,11 +362,12 @@ structurés.
 
 ## 14. Limites connues
 
-- **Synthèse globale = niveau « fiches »** : dégage structure et thèmes mais pas
-  le détail fin de chaque pièce (le texte intégral ne tient pas dans le contexte).
-  Le levier de qualité est la richesse des fiches — désormais citables à la page.
-  Sous la pression du grounding, le modèle tend encore à **énumérer** les pièces
-  plutôt qu'à les fondre en une vraie synthèse.
+- **Synthèse globale (overview) = niveau « fiches »** : une vue d'ensemble dégage
+  structure et thèmes mais pas le détail fin de chaque pièce. Le levier de qualité
+  est la richesse des fiches — citables à la page. Sous la pression du grounding,
+  le modèle tend encore à **énumérer** les pièces plutôt qu'à les fondre. *(Les
+  questions de détail / comparaison passent, elles, en intention `detail` →
+  lecture du texte, voire map-reduce ciblé à l'échelle, cf. §6.3.)*
 - **Sélection hiérarchique tributaire de la fiche** : une pièce composite est
   jugée sur sa fiche (résumé de tête + titres des sous-sections via
   `_selection_fiche`/`_piece_fiche`). Si la fiche ne reflète pas le contenu
