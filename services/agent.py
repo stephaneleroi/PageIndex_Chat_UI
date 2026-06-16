@@ -476,7 +476,8 @@ Context:
 Provide a clear, comprehensive answer in French."""
 
     async def _run_single_simple(self, session_id, query, model_type,
-                                 use_memory, tool_context, context_overview):
+                                 use_memory, tool_context, context_overview,
+                                 persist=True):
         """UNE recherche par raisonnement sur l'arbre → lecture des nœuds
         retenus → rédaction. Pas de décomposition, pas de boucle ReAct.
         L'auto-évaluation reste comme garde-fou, avec au plus UNE expansion
@@ -485,7 +486,8 @@ Provide a clear, comprehensive answer in French."""
         # résumés de toutes les sections (pas de sélection top-k).
         if self._is_global_summary(query):
             async for chunk in self._run_global_summary(
-                    session_id, query, model_type, use_memory, tool_context, context_overview):
+                    session_id, query, model_type, use_memory, tool_context,
+                    context_overview, persist=persist):
                 yield chunk
             return
         doc_id = tool_context["primary_doc_id"]
@@ -567,6 +569,11 @@ Provide a clear, comprehensive answer in French."""
         # La rédaction est terminée : le front peut rendre la réponse
         # exploitable (pastilles) sans attendre l'éventuelle auto-évaluation.
         yield "[ANSWER_DONE]\n"
+
+        # En sous-question (décomposition), run_session gère la persistance et
+        # l'évaluation sur la réponse assemblée — la voie ne le fait pas ici.
+        if not persist:
+            return
 
         self.sessions.add_message(session_id, Message(role="user", content=query))
         self.sessions.add_message(session_id, Message(
@@ -757,7 +764,7 @@ Provide a clear, comprehensive answer in French."""
                 "de la pièce concernée.】\n" + "\n\n".join(lines))
 
     async def _run_corpus_simple(self, session_id, query, model_type, use_memory,
-                                 tool_context, context_overview):
+                                 tool_context, context_overview, persist=True):
         """Le dossier EST un arbre PageIndex : UN seul tree_search sur les
         fiches de toutes les pièces (au lieu d'un cross_search par document),
         lecture intégrale des pièces retenues, rédaction citée avec l'inventaire
@@ -773,7 +780,8 @@ Provide a clear, comprehensive answer in French."""
         # fiches de toutes les pièces (pas de tree_search ni de lecture).
         if self._is_global_summary(query):
             async for chunk in self._run_global_summary(
-                    session_id, query, model_type, use_memory, tool_context, context_overview):
+                    session_id, query, model_type, use_memory, tool_context,
+                    context_overview, persist=persist):
                 yield chunk
             return
 
@@ -886,6 +894,11 @@ Provide a clear, comprehensive answer in French."""
                 yield chunk
         yield "[ANSWER_DONE]\n"
 
+        # En sous-question (décomposition), run_session gère la persistance et
+        # l'évaluation sur la réponse assemblée — la voie ne le fait pas ici.
+        if not persist:
+            return
+
         self.sessions.add_message(session_id, Message(role="user", content=query))
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
@@ -948,7 +961,7 @@ Provide a clear, comprehensive answer in French."""
         return entries
 
     async def _run_global_summary(self, session_id, query, model_type, use_memory,
-                                  tool_context, context_overview):
+                                  tool_context, context_overview, persist=True):
         """Synthèse GLOBALE transversale : rédaction sur les fiches/résumés de
         TOUTES les pièces (ou sections), sans tree_search ni lecture détaillée.
         Citations au niveau pièce (nœud racine + page de début). Un seul appel
@@ -994,6 +1007,11 @@ Provide a clear, comprehensive answer in French."""
             yield chunk
         yield "[ANSWER_DONE]\n"
 
+        # En sous-question (décomposition), run_session gère la persistance et
+        # l'évaluation sur la réponse assemblée — la voie ne le fait pas ici.
+        if not persist:
+            return
+
         self.sessions.add_message(session_id, Message(role="user", content=query))
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
@@ -1038,6 +1056,92 @@ Provide a clear, comprehensive answer in French."""
         yield "[ANSWER_DONE]\n"
         self.sessions.add_message(session_id, Message(role="user", content=query))
         self.sessions.add_message(session_id, Message(role="assistant", content=full_answer))
+
+    async def decompose_query(self, query, context_overview="", model_type="text"):
+        """Décomposition LÉGÈRE (1 appel LLM) : ne scinde que si la question
+        regroupe PLUSIEURS demandes distinctes. Retourne
+        {needs_decomposition: bool, sub_questions: [str]}. Repli sûr : pas de
+        découpage. PAS de boucle ReAct ni d'outils — chaque sous-question est
+        ensuite traitée par une voie normale."""
+        prompt = (
+            "Tu analyses la question d'un utilisateur sur un dossier documentaire.\n"
+            "Si elle regroupe PLUSIEURS demandes DISTINCTES (par ex. une synthèse "
+            "d'ensemble ET un point factuel précis ET une comparaison de versions), "
+            "découpe-la en sous-questions autonomes et autosuffisantes, dans l'ordre "
+            "logique. Si c'est une seule demande, NE découpe PAS.\n"
+            "Réponds en JSON STRICT, sans commentaire : "
+            '{"needs_decomposition": true|false, "sub_questions": ["...", "..."]}\n\n'
+            f"Question : {query}"
+        )
+        try:
+            raw = await self.pageindex.call_llm(prompt, model_type)
+            data = json.loads(self._extract_json_str(raw))
+            subs = [s.strip() for s in (data.get("sub_questions") or []) if s and s.strip()]
+            need = bool(data.get("needs_decomposition")) and len(subs) > 1
+            return {"needs_decomposition": need, "sub_questions": subs if need else [query]}
+        except Exception as e:
+            logger.warning(f"decompose_query: repli sans décomposition ({e})")
+            return {"needs_decomposition": False, "sub_questions": [query]}
+
+    async def _relay_subquery(self, gen, text_sink: list, refs_sink: list):
+        """Consomme une voie exécutée en sous-question : relaie au frontend le
+        texte et les marqueurs utiles (nœuds, étapes), MAIS masque les marqueurs
+        de cycle ([SEARCHING]/[ANSWERING]/[ANSWER_DONE]/[REFLECTING]) pour que la
+        réponse décomposée reste UN seul cycle. Accumule texte + refs."""
+        in_answer = False
+        async for chunk in gen:
+            s = chunk.strip()
+            if s.startswith('[ANSWERING]'):
+                in_answer = True
+                continue
+            if s.startswith('[ANSWER_DONE]'):
+                in_answer = False
+                continue
+            if (s.startswith('[SEARCHING]') or s.startswith('[REFLECTING]')
+                    or s.startswith('[AGENT_REFLECT]')):
+                continue
+            if s.startswith('[NODES]'):
+                try:
+                    refs_sink.extend(json.loads(s[len('[NODES]'):].strip()))
+                except Exception:
+                    pass
+                yield chunk
+                continue
+            if s.startswith('[AGENT_STEP]'):
+                yield chunk
+                continue
+            if in_answer:
+                text_sink.append(chunk)
+            yield chunk
+
+    async def _run_decomposed(self, session_id, query, subs, model_type, use_memory,
+                              tool_context, context_overview, effective_single):
+        """Question composite : chaque sous-question est routée vers la voie
+        adaptée (mono-pièce, ou corpus qui gère la synthèse globale en interne),
+        et les réponses sont assemblées en sections sous UN seul cycle."""
+        yield "[SEARCHING]\n"
+        yield "[ANSWERING]\n"
+        sections, all_refs = [], []
+        for i, sq in enumerate(subs):
+            header = ("\n\n" if i else "") + f"## {sq}\n\n"
+            yield header
+            text_sink = []
+            if effective_single:
+                gen = self._run_single_simple(session_id, sq, model_type, use_memory,
+                                              tool_context, context_overview, persist=False)
+            else:
+                gen = self._run_corpus_simple(session_id, sq, model_type, use_memory,
+                                              tool_context, context_overview, persist=False)
+            async for chunk in self._relay_subquery(gen, text_sink, all_refs):
+                yield chunk
+            sections.append(header + "".join(text_sink))
+        yield "[ANSWER_DONE]\n"
+        full = "".join(sections)
+        self.sessions.add_message(session_id, Message(role="user", content=query))
+        self.sessions.add_message(session_id, Message(
+            role="assistant", content=full, nodes=all_refs,
+            thinking="Décomposition en sous-questions",
+            quality=self._estimate_quality(full, all_refs, tool_context)))
 
     async def run_session(self, session_id: str, query: str,
                           model_type: str = "text",
@@ -1096,10 +1200,21 @@ Provide a clear, comprehensive answer in French."""
             if tree_str:
                 context_overview = context_overview + "\n\nPrimary document TOC (text elided):\n" + tree_str[:6000]
 
+        # ---- Question composite → décomposition légère : un appel LLM décide
+        # si la question regroupe plusieurs demandes distinctes ; si oui, chaque
+        # sous-question est routée vers la voie adaptée (mono-pièce / corpus /
+        # synthèse globale) et les réponses sont assemblées en sections. ----
+        decomp = await self.decompose_query(query, context_overview, model_type)
+        if decomp.get("needs_decomposition"):
+            async for chunk in self._run_decomposed(
+                    session_id, query, decomp["sub_questions"], model_type,
+                    use_memory, tool_context, context_overview, effective_single):
+                yield chunk
+            return
+
         # ---- Voie simple (mono-document) : pipeline canonique du cookbook
-        # PageIndex (tree_search une fois → lecture des nœuds → rédaction),
-        # sans décomposition ni boucle ReAct. La boucle d'agent reste le
-        # chemin du mode kb (plusieurs documents).
+        # PageIndex (tree_search une fois → lecture des nœuds → rédaction).
+        # La voie corpus prend le relais en mode kb multi-pièces.
         if effective_single:
             async for chunk in self._run_single_simple(
                 session_id, query, model_type, use_memory,
