@@ -1,0 +1,12 @@
+{
+  "eval_id": 0,
+  "eval_name": "procedure-composite",
+  "prompt": "Évaluer la réponse Procédure (dossier composite 25 pièces) contre les PDF source.",
+  "assertions": [
+    "Classe le certificat « Lignier médecin » comme artefact des données (🟡) plutôt que comme une hallucination/fabrication de l'app",
+    "Détecte au moins un faux verbatim (guillemets sur paraphrase) dans la section versions",
+    "Fonde les constats sur le texte source avec page physique (vérification déterministe, pas de mémoire)",
+    "Sépare explicitement défauts de l'app / artefacts de données / limites connues",
+    "Repère l'omission du témoin Aline Truite"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "eval_id": 1,
+  "eval_name": "synthese-mapreduce",
+  "prompt": "Évaluer la réponse Synthèse (run map-reduce forcé) contre le PDF source.",
+  "assertions": [
+    "Détecte l'affirmation d'exhaustivité interdite (« aucun autre chiffre »)",
+    "Traite le décalage page physique / folio imprimé comme limite connue, pas comme erreur",
+    "Attribue les omissions de constats au seuil map-reduce forcé (artefact de test), pas à la rédaction",
+    "Vérifie les citations contre la page physique du PDF",
+    "Sépare explicitement défauts de l'app / artefacts de données / limites connues"
+  ]
+}

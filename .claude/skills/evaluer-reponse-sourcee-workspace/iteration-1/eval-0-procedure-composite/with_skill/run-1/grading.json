@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "Classe le certificat « Lignier médecin » comme artefact des données (🟡) plutôt que comme une hallucination/fabrication de l'app",
+      "passed": true,
+      "evidence": "#10 🟡 (certificat signé Lignier, identité Legrand, médecin vide) + #7 🔴 mineur (non-recours à MEDECINE DOUCE)"
+    },
+    {
+      "text": "Détecte au moins un faux verbatim (guillemets sur paraphrase) dans la section versions",
+      "passed": true,
+      "evidence": "#1-#3 série de faux verbatims via quote"
+    },
+    {
+      "text": "Fonde les constats sur le texte source avec page physique (vérification déterministe, pas de mémoire)",
+      "passed": true,
+      "evidence": "verif_source.py page/grep/quote ; chaque constat porte preuve+page physique"
+    },
+    {
+      "text": "Sépare explicitement défauts de l'app / artefacts de données / limites connues",
+      "passed": true,
+      "evidence": "Tableau 🔴/🟡/🔵 explicite"
+    },
+    {
+      "text": "Repère l'omission du témoin Aline Truite",
+      "passed": false,
+      "evidence": "Aline Truite non mentionnée"
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "failed": 1,
+    "total": 5,
+    "pass_rate": 0.8
+  }
+}
