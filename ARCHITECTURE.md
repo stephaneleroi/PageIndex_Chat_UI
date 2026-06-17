@@ -79,6 +79,10 @@ Trois termes structurent toute l'application. Le schéma ci-dessous les relie.
 - **Nœud** : une unité de l'arbre (`node_id` ex. `node_0006`), avec un *titre*, un
   *texte* (les pages du document, balisées `<page_N>…</page_N>`) et une *plage de
   pages*. Les nœuds forment une hiérarchie (sections, sous-sections).
+  `N` est la **page physique du PDF** (index extrait par PyMuPDF) : les citations
+  `(p. N)` et la visionneuse partagent cette numérotation (le clic ouvre la page N
+  du PDF), qui peut différer du **folio imprimé** sur la page. Les PDF n'embarquent
+  pas de PageLabels exploitables ; l'IHM l'explicite (« Page N du PDF »).
 
 - **Pièce** = **un nœud de premier niveau** (le nœud de tête **+ tout son
   sous-arbre**) = **un document logique** (une audition, une note, un rapport, un

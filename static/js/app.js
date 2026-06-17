@@ -2728,7 +2728,7 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
             return `<div class="page-image-container${isCurrent ? ' current-node-page' : ''}" data-index="${i}">`
                 + `<img src="${p.url}" alt="Page ${pageNum}" class="page-preview-image">`
                 + (tags ? `<div class="page-node-tags">${tags}</div>` : '')
-                + `<div class="page-number">Page ${pageNum}</div></div>`;
+                + `<div class="page-number" title="Numérotation des pages du PDF (peut différer du folio imprimé sur la page)">Page ${pageNum} du PDF</div></div>`;
         }).join('');
         imgs.querySelectorAll('.page-preview-image').forEach(img => {
             img.addEventListener('click', () => openFullscreen(img.src));

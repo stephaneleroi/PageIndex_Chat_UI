@@ -83,9 +83,19 @@ le **texte** des pièces n'est lu (*à chaud*) que pour les questions `detail`.
   **lu le texte** (le volume tenait dans le budget → lecture directe, sans
   map-reduce).
 - **Sourcing** : 14 citations `(doc, node, page)`, aucune fuite de raisonnement.
+- **Fiabilité par facette** (évaluation externe sur les 25 pièces) : les facettes
+  **`detail`** (faits, versions — *lecture du texte*) sont jugées **fidèles**. La
+  facette **`overview`** (synthèse — *agrégation des fiches*) **survole** : elle
+  peut **omettre** un élément pourtant présent dans une fiche (ex. un témoin
+  cité dans la fiche « saisine ») et **ordonne parfois mal** la chronologie. Elle
+  **reproduit fidèlement les incohérences du dossier** (ex. un certificat médical
+  mal renseigné : pièce nommée d'un mis en cause mais portant l'identité de
+  l'autre, signataire = nom de l'OPJ) **sans les filtrer** — c'est de la fidélité
+  au texte, pas une hallucination, mais `overview` ne signale pas ces anomalies.
 - **Ce que ça illustre** : la **décomposition** d'une question composite et
   l'**aiguillage par sous-question** — chaque facette part sur la voie adaptée
-  (survol sur fiches / détail sur texte), assemblées en une seule réponse.
+  (survol sur fiches / détail sur texte), assemblées en une seule réponse. Sur un
+  dossier composite, **`detail` (texte) est plus fiable que `overview` (fiches)**.
 
 ### Test 3 — « Résume les différents rapports » (Rapports_LSC, 1 fichier = 4 rapports)
 
@@ -131,7 +141,7 @@ le **texte** des pièces n'est lu (*à chaud*) que pour les questions `detail`.
 | **Pièce désignée** vs **dossier** | Test 1 vs Test 4 | « la note de X » (detail/texte) vs « le dossier » (overview/fiches) |
 | **Couverture multi-pièces** | Test 3 | 4 rapports sur 4, lecture du texte |
 | **Anti-contamination** | Tests 1, 3 | chaque pièce traitée isolément, pas de mélange |
-| **Sourcing à la page** | les 4 | citations `(doc, node, page)` vérifiables contre le PDF |
+| **Sourcing à la page** | les 4 | citations `(doc, node, page)` vérifiables contre le PDF — `N` = **page physique du PDF** (≠ folio imprimé ; la visionneuse ouvre la page N) |
 | **Passage à l'échelle** | Tests 2 (25 pièces), 4 (114 p.) | sélection + budget de lecture ; map-reduce en réserve si débordement |
 
 **En une phrase** : l'application **lit la question** (la découpe si plusieurs
@@ -164,3 +174,27 @@ sections pertinentes dépassent le budget (très gros volume transversal). Déta
 
 *(Données issues des audits `audits/night_test*.md` ; méthodologie et corrections
 dans `audits/RAPPORT_NUIT.md`.)*
+
+## 6. Enseignements des évaluations externes (relecture des réponses contre les PDF)
+
+Deux réponses ont été évaluées pièce par pièce contre les documents source (test
+map-reduce sur `Synthèse_2026`, test composite sur `Procedure-PN-1`). Bilan :
+
+- **`detail` (lecture du texte) > `overview` (agrégation des fiches) en fidélité**
+  sur un dossier composite : la lecture du texte rend des faits/versions fidèles ;
+  l'agrégation de nombreuses fiches survole et peut omettre. Privilégier `detail`
+  quand la fidélité prime.
+- **Le système est fidèle au texte — y compris à ses incohérences.** Quand une
+  pièce est mal renseignée (formulaire incomplet, identité erronée, nom réutilisé),
+  la fiche et la réponse **reproduisent** le contenu sans l'inventer ni le corriger.
+  Ce n'est pas une hallucination ; ne pas « corriger » dégraderait la fidélité.
+  Conséquence pratique : un évaluateur peut prendre un artefact des **données**
+  pour une erreur de l'application — vérifier le texte source avant de conclure.
+- **Convention de page** : `(p. N)` = **page physique du PDF** (index PyMuPDF,
+  balises `<page_N>`), partagée avec la visionneuse (le clic ouvre la page N). Elle
+  peut différer du **folio imprimé** sur la page ; l'IHM l'explicite (« Page N du
+  PDF »). Les PDF testés n'embarquent pas de PageLabels exploitables.
+- **Corrections de grounding** issues de ces relectures : interdiction d'affirmer
+  l'**exhaustivité/absence** (« aucun autre chiffre ») ; **guillemets réservés au
+  verbatim exact** (pas de paraphrase présentée comme citation — essentiel en
+  contexte judiciaire). Voir `services/agent.py`, `GROUNDING_INSTRUCTION_KB`.
