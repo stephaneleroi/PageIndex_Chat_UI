@@ -139,24 +139,28 @@ demandes), **décide pour chaque demande** s'il faut un *survol* (fiches) ou le
 *détail* (lecture du texte), **sélectionne les bonnes pièces** par raisonnement
 sur les fiches, et **cite à la page** ce qu'elle affirme.
 
-## 5. Zone non couverte : le map-reduce ciblé
+## 5. Le map-reduce ciblé — quand il se déclenche (et quand le drill-down l'évite)
 
-⚠️ **Aucun des 4 tests n'a déclenché le map-reduce.** Il ne s'active que si le
-texte des pièces retenues **dépasse `SIMPLE_CONTEXT_BUDGET` (60 000 car.)** ; or
-les pièces de ces dossiers sont **courtes** (auditions de 2-5 k car., rapports de
-quelques pages) → le total tient toujours dans le budget → **lecture directe**.
+Le map-reduce ne s'active que si le texte des pièces retenues **dépasse
+`SIMPLE_CONTEXT_BUDGET` (60 000 car.)**. Observations des tests (T5 sur
+Synthèse_2026, 179 k car.) :
 
-État du map-reduce :
-- **implémenté** (`_run_corpus_simple` → bascule par volume ; `_focused_summary`
-  pour le *map* par pièce ; cache `_focused_cache` ; `MAP_CONCURRENCY`) ;
-- **validé isolément** : le *map* conserve bien les pages `(p. N)` (test de
-  `_focused_summary` : 5/5 cohérentes) → citabilité assurée ;
-- **non exercé en E2E** : la chaîne complète *map → reduce → réponse citée* n'a
-  pas été observée sur ces dossiers (volumes trop faibles).
+- **Aucun des tests « normaux » (T1-T4) ne l'a déclenché** : les pièces des
+  dossiers sont courtes, ou — pour Synthèse_2026 (gros document) — le
+  **drill-down niveau 2** sélectionne les **sections pertinentes** (< 60 k) au
+  lieu des parties entières. Une question `detail` sur Synthèse a donc fait
+  **lecture directe** (26 citations, 26/26 pages cohérentes). *Sur un document
+  bien structuré, le drill-down rend souvent le map-reduce inutile.*
+- **Mécanique validée E2E** (en forçant un seuil bas, T5 run B) : bascule sur
+  2 pièces (37 825 car. > seuil) → **une fiche ciblée par pièce** (les 2
+  pertinentes) → reduce → **6 citations, 6/6 pages cohérentes vs PDF**. La chaîne
+  *map (pages conservées) → reduce → réponse citée* fonctionne.
 
-Pour le valider en conditions réelles, il faudrait un cas qui **déborde le
-budget** (beaucoup de pièces longues retenues) — ou, pour tester la seule
-mécanique, abaisser temporairement le seuil.
+**Bilan** : le map-reduce est **implémenté et validé** (bascule + map par pièce +
+citations à la page). En conditions réelles il est **rarement nécessaire** (le
+drill-down cible les sections) ; il sert de filet pour les cas où même les
+sections pertinentes dépassent le budget (très gros volume transversal). Détail :
+`audits/night_test5_mapreduce.md`.
 
 *(Données issues des audits `audits/night_test*.md` ; méthodologie et corrections
 dans `audits/RAPPORT_NUIT.md`.)*
