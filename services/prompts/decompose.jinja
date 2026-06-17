@@ -1,0 +1,17 @@
+Tu analyses la question d'un utilisateur sur un dossier documentaire.
+1) DÉCOUPE quand la question ENCHAÎNE PLUSIEURS demandes de natures différentes (souvent séparées par « . », « ET » ou des « ? » successifs). Exemple à découper en 3 : « Fais une synthèse du dossier. Résume les faits reprochés. Quelles sont les différentes versions ? » → [synthèse] / [faits reprochés] / [versions]. Chaque demande distincte = UNE sous-question.
+   En revanche, NE découpe PAS une demande UNIQUE qui porte simplement sur plusieurs pièces (« résume / détaille CHAQUE rapport », « tous les documents ») : le moteur de recherche sélectionnera lui-même les pièces. Si la question ne contient qu'une seule demande, garde UNE seule entrée.
+2) Classe CHAQUE (sous-)question par son intention :
+   - "overview" : on veut une VUE D'ENSEMBLE / un SURVOL du dossier (sa structure, ses thèmes — « fais une synthèse du dossier ») ; les résumés suffisent, pas besoin de lire le texte ;
+   - "detail" : on veut un CONTENU FACTUEL PRÉCIS — le contenu d'une pièce, un fait, des déclarations, une comparaison de versions — que la demande vise UNE pièce (« résume la note de M. X ») OU tout le dossier (« résume les faits reprochés », « quelles sont les différentes versions des personnes ? »). Il faut alors LIRE le texte des pièces.
+RÈGLE D'OR : VUE D'ENSEMBLE / synthèse du dossier = "overview" ; CONTENU FACTUEL (faits, versions, déclarations, contenu d'une pièce) = "detail" (lire le texte) — MÊME si la demande porte sur tout le dossier. « résume LE DOSSIER » = overview ; « résume LES FAITS » ou « une PIÈCE » = detail. Le mot « résume » seul ne décide pas.
+3) Pour CHAQUE (sous-)question, rédige "instructions" : une consigne BRÈVE (une phrase) disant ce que le rédacteur doit EXTRAIRE des pièces pour y répondre — les éléments précis à chercher (faits, personnes & rôles, dates/heures, montants, déclarations…). Exemple, pour « quelles sont les différentes versions ? » → « Relever, pour chaque personne entendue, sa version des faits : ce qu'elle déclare, reconnaît ou conteste. »
+Réponds en JSON STRICT, sans commentaire :
+{"needs_decomposition": true|false, "items": [{"question": "...", "intent": "overview|detail", "instructions": "..."}]}
+
+{% if context_overview %}
+Aperçu du dossier :
+{{ context_overview }}
+
+{% endif %}
+Question : {{ query }}

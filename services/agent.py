@@ -20,6 +20,7 @@ from typing import AsyncGenerator, List, Optional
 from models.document import DocumentStore
 from models.session import Message, SessionStore, session_store
 from services.skill_manager import skill_manager
+from services.prompt_templates import render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -73,60 +74,12 @@ GLOBAL_SUMMARY_INSTRUCTION = (
 # Grounding ASSOUPLI pour la synthèse globale : traçabilité SANS forcer une
 # citation par phrase (ce qui poussait le modèle à énumérer les pièces) —
 # citations groupées par thème.
-GROUNDING_INSTRUCTION_SUMMARY = (
-    "Grounding rules for a GLOBAL SUMMARY (MUST follow):\n"
-    "1. Base the synthesis ONLY on the provided fiches; never invent facts; if a "
-    "point isn't covered, say so.\n"
-    "2. Support the synthesis with citations, but do NOT cite one per sentence: cite "
-    "per THEME and GROUP several pieces in a single citation when they share a point "
-    "(e.g. `(doc: a.pdf, node_0000, page 1 ; doc: b.pdf, node_0000, page 1)`). For a "
-    "single document use `(node_<id>, page N)`. Do NOT produce one citation per piece, "
-    "nor a catalogue of pieces.\n"
-    "3. Use plain ASCII parentheses and the REAL node ids; never 【】 nor a "
-    "placeholder like `source`.\n"
-)
-
-# System-wide grounding rules. The multi-doc clause is appended dynamically when mode=='kb'.
-GROUNDING_INSTRUCTION_SINGLE = (
-    "Grounding rules (MUST follow):\n"
-    "1. Ground every concrete claim in the Context. Cite the source inline as "
-    "`(node_<id>, page N)`, always using the REAL node id verbatim (e.g. `(node_0007, page 3)`) "
-    "so it can be linked. Use plain ASCII parentheses `( )` — NEVER `【】` or other brackets — "
-    "and never a placeholder like `source` in place of the node id. "
-    "Preserve original numbers and units verbatim.\n"
-    "2. Node text in the Context is wrapped in `<page_N>…</page_N>` markers: take the page "
-    "number of each claim from its enclosing marker — NEVER guess a page. Cite the specific "
-    "page for EACH claim or paragraph (not just once per section), and never echo the "
-    "`<page_N>` markers themselves in your answer.\n"
-    "3. If the Context does not cover the question, say so explicitly "
-    "(e.g. `Non mentionné dans le document...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
-    "4. Never attribute a role (author, signatory, recipient, doctor, police officer, magistrate...) "
-    "to a person unless the Context states it explicitly. Do NOT infer or invert a relationship "
-    "(author vs recipient, doctor vs investigator, parent vs child), even when two people share a name. "
-    "If a role is not stated, write `non précisé` rather than guessing."
-)
-
-GROUNDING_INSTRUCTION_KB = (
-    "Grounding rules (MUST follow):\n"
-    "1. Ground every concrete claim in the Context. Cite the source inline as "
-    "`(doc: <filename>, node_<id>, page N)`, always using the REAL node id verbatim "
-    "(e.g. `(doc: rapport.pdf, node_0007, page 3)`) so the reader knows WHICH document each claim "
-    "came from and the citation can be linked. Use plain ASCII parentheses `( )` — NEVER `【】` or "
-    "other brackets — and never a placeholder like `source` in place of the node id. "
-    "Preserve original numbers and units verbatim.\n"
-    "2. Node text in the Context is wrapped in `<page_N>…</page_N>` markers: take the page "
-    "number of each claim from its enclosing marker — NEVER guess a page. Cite the specific "
-    "page for EACH claim or paragraph (not just once per section), and never echo the "
-    "`<page_N>` markers themselves in your answer.\n"
-    "3. If the Context does not cover the question, say so explicitly "
-    "(e.g. `Non mentionné dans les documents sélectionnés...`). Never fabricate facts, citations, or fill gaps from prior knowledge.\n"
-    "4. When comparing across documents, make the document identity unambiguous in every bullet "
-    "(e.g. `Le document A utilise X, le document B utilise Y`).\n"
-    "5. Never attribute a role (author, signatory, recipient, doctor, police officer, magistrate...) "
-    "to a person unless the Context states it explicitly. Do NOT infer or invert a relationship "
-    "(author vs recipient, doctor vs investigator, parent vs child), even when two people share a name. "
-    "If a role is not stated, write `non précisé` rather than guessing."
-)
+# Prompts de grounding externalisés en gabarits Jinja (services/prompts/*.jinja) :
+# c'est la surface de prompt qu'on itère et qu'on évalue → diff lisible, A/B aisé.
+# La clause multi-doc du KB est intégrée au gabarit ; le texte est inchangé.
+GROUNDING_INSTRUCTION_SUMMARY = render_prompt("grounding_summary")
+GROUNDING_INSTRUCTION_SINGLE = render_prompt("grounding_single")
+GROUNDING_INSTRUCTION_KB = render_prompt("grounding_kb")
 
 
 class DocumentAgent:
@@ -453,7 +406,9 @@ Output JSON only:
     #  Voie simple mono-document — pipeline canonique PageIndex
     #  (cookbook/pageindex_RAG_simple.ipynb)
     # ============================================================ #
-    SIMPLE_CONTEXT_BUDGET = 60000   # caractères de texte source pour le rédacteur
+    # Défaut 60000 ; surchargeable par env (PAGEINDEX_CTX_BUDGET) pour forcer la
+    # bascule map-reduce en test sans toucher au code (cf. skill evaluer-reponse-sourcee).
+    SIMPLE_CONTEXT_BUDGET = int(os.environ.get("PAGEINDEX_CTX_BUDGET", "60000"))  # caractères de texte source pour le rédacteur
     SIMPLE_MAX_NODES = 10
 
     # ---- Voie corpus (le dossier EST un arbre PageIndex) ----
@@ -465,7 +420,8 @@ Output JSON only:
     #   section par section (tree_search interne) au lieu d'être lue en entier (hiérarchie niv. 2)
     MAP_CONCURRENCY = 3             # synthèses ciblées (map) concurrentes max (santé Ollama)
 
-    def _build_simple_answer_prompt(self, query, context, history_context, grounding):
+    def _build_simple_answer_prompt(self, query, context, history_context, grounding,
+                                    allowed_citations: str = ""):
         return f"""Answer the question based on the context below — the selected sections of the
 document. Their text is wrapped in <page_N>…</page_N> markers.
 
@@ -478,7 +434,7 @@ Context:
 {LANG_INSTRUCTION}
 
 {grounding}
-
+{allowed_citations}
 {STYLE_INSTRUCTION}
 
 Provide a clear, comprehensive answer in French."""
@@ -559,7 +515,8 @@ Provide a clear, comprehensive answer in French."""
         yield "[ANSWERING]\n"
         history_context = self._build_history_context(session_id, use_memory)
         answer_prompt = self._build_simple_answer_prompt(
-            query, context, history_context, GROUNDING_INSTRUCTION_SINGLE)
+            query, context, history_context, GROUNDING_INSTRUCTION_SINGLE,
+            allowed_citations=self._build_allowed_citations(refs, tool_context))
 
         full_answer = ""
         image_paths = self._collect_images_for_refs(refs, tool_context) if is_vision else []
@@ -641,7 +598,8 @@ Provide a clear, comprehensive answer in French."""
             issues_note = ("\nA first draft was judged insufficient for these reasons — fix them:\n- "
                            + "\n- ".join(str(i) for i in issues) + "\n")
         retry_prompt = self._build_simple_answer_prompt(
-            query, context, history_context + issues_note, GROUNDING_INSTRUCTION_SINGLE)
+            query, context, history_context + issues_note, GROUNDING_INSTRUCTION_SINGLE,
+            allowed_citations=self._build_allowed_citations(refs, tool_context))
         full_answer = ""
         async for chunk in self.pageindex.call_llm_stream(retry_prompt, model_type):
             full_answer += chunk
@@ -775,25 +733,19 @@ Provide a clear, comprehensive answer in French."""
                 "`(doc: <fichier>, node_<id>, page N)` avec le fichier et le node de la ligne 📄 "
                 "de la pièce concernée.】\n" + "\n\n".join(lines))
 
-    async def _focused_summary(self, title, doc_id, nid, node_text, question, model_type):
+    async def _focused_summary(self, title, doc_id, nid, node_text, question,
+                               model_type, instructions=None):
         """MAP (map-reduce ciblé) : résumé d'UN nœud orienté par la question, en
         CONSERVANT les pages « (p. N) » (depuis les <page_N>) pour que le reduce
         puisse citer. Renvoie None si la pièce n'apporte rien d'utile à la
-        question (pour ne pas polluer la compilation)."""
-        prompt = (
-            "Tu lis le texte d'une pièce d'un dossier, balisé par des marqueurs "
-            "<page_N>…</page_N> qui donnent la page de chaque passage.\n"
-            "En te fondant UNIQUEMENT sur ce texte, extrais ce qui répond à la "
-            "question.\n"
-            "RÈGLE ABSOLUE (citations) : CHAQUE fait rapporté DOIT être suivi de "
-            "sa page, au format « (p. N) », où N vient de la balise <page_N> qui "
-            "entoure le passage. N'invente jamais de page et n'écris jamais les "
-            "marqueurs eux-mêmes. Un fait sans sa page est INUTILISABLE (il ne "
-            "pourra pas être cité) — indique donc toujours la page.\n"
-            "Sois factuel et concis. Si la pièce n'apporte RIEN sur la question, "
-            "réponds EXACTEMENT « (rien) ».\n\n"
-            f"Question : {question}\n\nTexte de la pièce :\n{node_text}"
-        )
+        question (pour ne pas polluer la compilation).
+
+        `instructions` (optionnel) = consigne d'extraction propre à cette
+        (sous-)question, issue de la décomposition : on dit au map CE QU'IL DOIT
+        extraire de cette pièce, et non plus seulement « ce qui répond »."""
+        prompt = render_prompt(
+            "focused_summary", question=question, node_text=node_text,
+            instructions=instructions or "")
         try:
             out = (await self.pageindex.call_llm(prompt, model_type) or "").strip()
         except Exception as e:
@@ -805,7 +757,7 @@ Provide a clear, comprehensive answer in French."""
 
     async def _run_corpus_simple(self, session_id, query, model_type, use_memory,
                                  tool_context, context_overview, persist=True,
-                                 intent=None):
+                                 intent=None, instructions=None):
         """Le dossier EST un arbre PageIndex : UN seul tree_search sur les
         fiches de toutes les pièces (au lieu d'un cross_search par document),
         lecture intégrale des pièces retenues, rédaction citée avec l'inventaire
@@ -917,12 +869,13 @@ Provide a clear, comprehensive answer in French."""
             sem = asyncio.Semaphore(self.MAP_CONCURRENCY)
 
             async def _map(doc_id, head_id, title, text):
-                ckey = (doc_id, head_id, query)
+                ckey = (doc_id, head_id, query, instructions)
                 if ckey in self._focused_cache:          # déjà calculée → réutiliser
                     return self._focused_cache[ckey]
                 async with sem:
                     fiche = await self._focused_summary(
-                        title, doc_id, head_id, text, query, model_type)
+                        title, doc_id, head_id, text, query, model_type,
+                        instructions=instructions)
                 self._focused_cache[ckey] = fiche         # mémorise (même None)
                 return fiche
 
@@ -996,6 +949,7 @@ Provide a clear, comprehensive answer in French."""
                 query, [query], context, history_context, "aggregate",
                 grounding=GROUNDING_INSTRUCTION_KB, mode="kb",
                 docs_overview=context_overview,
+                allowed_citations=self._build_allowed_citations(refs, tool_context),
             )
             async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
                 full_answer += chunk
@@ -1175,41 +1129,8 @@ Provide a clear, comprehensive answer in French."""
         Retourne {needs_decomposition, items:[{question, intent}]}. L'intention
         prime sur l'heuristique `_is_global_summary` ; repli (échec LLM) :
         intent=None → l'heuristique reprend la main."""
-        apercu = (f"Aperçu du dossier :\n{context_overview[:1200]}\n\n"
-                  if context_overview else "")
-        prompt = (
-            "Tu analyses la question d'un utilisateur sur un dossier documentaire.\n"
-            "1) DÉCOUPE quand la question ENCHAÎNE PLUSIEURS demandes de natures "
-            "différentes (souvent séparées par « . », « ET » ou des « ? » "
-            "successifs). Exemple à découper en 3 : « Fais une synthèse du dossier. "
-            "Résume les faits reprochés. Quelles sont les différentes versions ? » "
-            "→ [synthèse] / [faits reprochés] / [versions]. Chaque demande "
-            "distincte = UNE sous-question.\n"
-            "   En revanche, NE découpe PAS une demande UNIQUE qui porte simplement "
-            "sur plusieurs pièces (« résume / détaille CHAQUE rapport », « tous les "
-            "documents ») : le moteur de recherche sélectionnera lui-même les "
-            "pièces. Si la question ne contient qu'une seule demande, garde UNE "
-            "seule entrée.\n"
-            "2) Classe CHAQUE (sous-)question par son intention :\n"
-            '   - "overview" : on veut une VUE D\'ENSEMBLE / un SURVOL du dossier '
-            "(sa structure, ses thèmes — « fais une synthèse du dossier ») ; les "
-            "résumés suffisent, pas besoin de lire le texte ;\n"
-            '   - "detail" : on veut un CONTENU FACTUEL PRÉCIS — le contenu d\'une '
-            "pièce, un fait, des déclarations, une comparaison de versions — que la "
-            "demande vise UNE pièce (« résume la note de M. X ») OU tout le dossier "
-            "(« résume les faits reprochés », « quelles sont les différentes "
-            "versions des personnes ? »). Il faut alors LIRE le texte des pièces.\n"
-            "RÈGLE D'OR : VUE D'ENSEMBLE / synthèse du dossier = \"overview\" ; "
-            "CONTENU FACTUEL (faits, versions, déclarations, contenu d'une pièce) = "
-            "\"detail\" (lire le texte) — MÊME si la demande porte sur tout le "
-            "dossier. « résume LE DOSSIER » = overview ; « résume LES FAITS » ou "
-            "« une PIÈCE » = detail. Le mot « résume » seul ne décide pas.\n"
-            "Réponds en JSON STRICT, sans commentaire :\n"
-            '{"needs_decomposition": true|false, '
-            '"items": [{"question": "...", "intent": "overview|detail"}]}\n\n'
-            + apercu
-            + f"Question : {query}"
-        )
+        prompt = render_prompt("decompose",
+                               context_overview=context_overview[:1200], query=query)
         try:
             raw = await self.pageindex.call_llm(prompt, model_type)
             data = json.loads(self._extract_json_str(raw))
@@ -1220,16 +1141,18 @@ Provide a clear, comprehensive answer in French."""
                     continue
                 intent = it.get("intent")
                 items.append({"question": q,
-                              "intent": intent if intent in ("overview", "detail") else None})
+                              "intent": intent if intent in ("overview", "detail") else None,
+                              "instructions": (it.get("instructions") or "").strip() or None})
             if not items:
-                items = [{"question": query, "intent": None}]
+                items = [{"question": query, "intent": None, "instructions": None}]
             need = bool(data.get("needs_decomposition")) and len(items) > 1
             if not need:
                 items = items[:1]
             return {"needs_decomposition": need, "items": items}
         except Exception as e:
             logger.warning(f"decompose_query: repli sans décomposition ({e})")
-            return {"needs_decomposition": False, "items": [{"question": query, "intent": None}]}
+            return {"needs_decomposition": False,
+                    "items": [{"question": query, "intent": None, "instructions": None}]}
 
     async def _relay_subquery(self, gen, text_sink: list, refs_sink: list):
         """Consomme une voie exécutée en sous-question : relaie au frontend le
@@ -1273,6 +1196,7 @@ Provide a clear, comprehensive answer in French."""
         for i, it in enumerate(items):
             sq = it["question"]
             intent = it.get("intent")
+            instructions = it.get("instructions")
             header = ("\n\n" if i else "") + f"## {sq}\n\n"
             yield header
             text_sink = []
@@ -1283,7 +1207,8 @@ Provide a clear, comprehensive answer in French."""
             else:
                 gen = self._run_corpus_simple(session_id, sq, model_type, use_memory,
                                               tool_context, context_overview,
-                                              persist=False, intent=intent)
+                                              persist=False, intent=intent,
+                                              instructions=instructions)
             async for chunk in self._relay_subquery(gen, text_sink, all_refs):
                 yield chunk
             sections.append(header + "".join(text_sink))
@@ -1369,6 +1294,7 @@ Provide a clear, comprehensive answer in French."""
         # Question unique : l'intention classée prime sur l'heuristique
         # _is_global_summary (transmise à la voie, repli si intent absent).
         intent = items[0].get("intent")
+        instructions = items[0].get("instructions")
 
         # ---- Voie simple (mono-document) : pipeline canonique du cookbook
         # PageIndex (tree_search une fois → lecture des nœuds → rédaction).
@@ -1387,6 +1313,7 @@ Provide a clear, comprehensive answer in French."""
         async for chunk in self._run_corpus_simple(
             session_id, query, model_type, use_memory,
             tool_context, context_overview, intent=intent,
+            instructions=instructions,
         ):
             yield chunk
         return
@@ -1515,12 +1442,38 @@ Question: {query}
 
 Provide a clear, comprehensive answer in French."""
 
+    def _build_allowed_citations(self, refs: list, tool_context: dict) -> str:
+        """Liste EXPLICITE des (doc, node) présents dans le contexte : SEULS ces
+        node ids sont citables. Injectée au rédacteur pour verrouiller les
+        citations — pas d'id inventé, pas de placeholder « source »."""
+        docs = (tool_context or {}).get("docs") or {}
+        seen, lines = set(), []
+        for ref in refs or []:
+            did, nid = (ref.split("::", 1) if "::" in ref
+                        else (tool_context.get("primary_doc_id"), ref))
+            if (did, nid) in seen:
+                continue
+            seen.add((did, nid))
+            fn = (docs.get(did) or {}).get("filename") or did
+            lines.append(f"- node_{nid} (doc: {fn})")
+        if not lines:
+            return ""
+        return (
+            "\n【Citations autorisées — n'en cite AUCUNE autre】\n"
+            "Tu ne peux citer QUE les sources ci-dessous, en reprenant le node id "
+            "EXACTEMENT (verbatim) ; n'invente jamais un node id, ne modifie pas son "
+            "numéro, n'utilise jamais un placeholder. Si un fait n'est couvert par "
+            "aucune de ces sources, dis-le plutôt que de fabriquer une référence.\n"
+            + "\n".join(lines) + "\n"
+        )
+
     def _build_answer_prompt(self, query, sub_questions, context,
                              history_context, strategy,
                              grounding: str = GROUNDING_INSTRUCTION_SINGLE,
                              mode: str = "single",
                              docs_overview: str = "",
-                             summary_mode: bool = False):
+                             summary_mode: bool = False,
+                             allowed_citations: str = ""):
         sub_q_note = ""
         if len(sub_questions) > 1:
             sub_q_note = (
@@ -1566,7 +1519,7 @@ Context:
 {LANG_INSTRUCTION}
 
 {grounding}
-
+{allowed_citations}
 {STYLE_INSTRUCTION}
 
 {GLOBAL_SUMMARY_INSTRUCTION if summary_mode else ""}
