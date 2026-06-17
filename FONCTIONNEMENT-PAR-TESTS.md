@@ -139,5 +139,24 @@ demandes), **décide pour chaque demande** s'il faut un *survol* (fiches) ou le
 *détail* (lecture du texte), **sélectionne les bonnes pièces** par raisonnement
 sur les fiches, et **cite à la page** ce qu'elle affirme.
 
+## 5. Zone non couverte : le map-reduce ciblé
+
+⚠️ **Aucun des 4 tests n'a déclenché le map-reduce.** Il ne s'active que si le
+texte des pièces retenues **dépasse `SIMPLE_CONTEXT_BUDGET` (60 000 car.)** ; or
+les pièces de ces dossiers sont **courtes** (auditions de 2-5 k car., rapports de
+quelques pages) → le total tient toujours dans le budget → **lecture directe**.
+
+État du map-reduce :
+- **implémenté** (`_run_corpus_simple` → bascule par volume ; `_focused_summary`
+  pour le *map* par pièce ; cache `_focused_cache` ; `MAP_CONCURRENCY`) ;
+- **validé isolément** : le *map* conserve bien les pages `(p. N)` (test de
+  `_focused_summary` : 5/5 cohérentes) → citabilité assurée ;
+- **non exercé en E2E** : la chaîne complète *map → reduce → réponse citée* n'a
+  pas été observée sur ces dossiers (volumes trop faibles).
+
+Pour le valider en conditions réelles, il faudrait un cas qui **déborde le
+budget** (beaucoup de pièces longues retenues) — ou, pour tester la seule
+mécanique, abaisser temporairement le seuil.
+
 *(Données issues des audits `audits/night_test*.md` ; méthodologie et corrections
 dans `audits/RAPPORT_NUIT.md`.)*
