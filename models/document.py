@@ -12,6 +12,7 @@ import os
 import json
 import shutil
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
@@ -365,6 +366,57 @@ class DocumentStore:
         # (et donc les infos de la visionneuse) reconstruit à la demande.
         self.tree_cache.pop(doc_id, None)
         self.node_map_cache.pop(doc_id, None)
+        return True
+
+    # ---- Notes utilisateur (annotations sur les pièces) ----
+    # Prises de notes libres, persistées À PART (notes.json à côté de
+    # structure.json) : elles N'ALTÈRENT PAS l'arbre PageIndex (l'index de
+    # recherche reste intact). Forme : { node_id: [{id, text, ts}] }.
+    def _notes_path(self, doc) -> str:
+        return os.path.join(os.path.dirname(doc.structure_path), 'notes.json')
+
+    def get_notes(self, doc_id: str) -> dict:
+        doc = self.get_document(doc_id)
+        if not doc:
+            return {}
+        path = self._notes_path(doc)
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_notes(self, doc, notes: dict):
+        with open(self._notes_path(doc), 'w', encoding='utf-8') as f:
+            json.dump(notes, f, indent=2, ensure_ascii=False)
+
+    def add_note(self, doc_id: str, node_id: str, text: str) -> Optional[dict]:
+        doc = self.get_document(doc_id)
+        if not doc:
+            return None
+        notes = self.get_notes(doc_id)
+        note = {'id': uuid.uuid4().hex[:10], 'text': text.strip(),
+                'ts': time.strftime('%Y-%m-%d %H:%M')}
+        notes.setdefault(node_id, []).append(note)
+        self._save_notes(doc, notes)
+        return note
+
+    def delete_note(self, doc_id: str, node_id: str, note_id: str) -> bool:
+        doc = self.get_document(doc_id)
+        if not doc:
+            return False
+        notes = self.get_notes(doc_id)
+        lst = notes.get(node_id) or []
+        new = [n for n in lst if n.get('id') != note_id]
+        if len(new) == len(lst):
+            return False
+        if new:
+            notes[node_id] = new
+        else:
+            notes.pop(node_id, None)
+        self._save_notes(doc, notes)
         return True
 
     def cache_node_map(self, doc_id: str, node_map: dict):

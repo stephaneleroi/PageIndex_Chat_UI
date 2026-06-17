@@ -510,6 +510,48 @@ def update_tree_node(doc_id, node_id):
     return jsonify({'success': True})
 
 
+@api_bp.route('/documents/<doc_id>/focused-fiches', methods=['GET'])
+def get_focused_fiches(doc_id):
+    """Fiches à chaud (map-reduce) générées par les requêtes, regroupées par
+    pièce (head node). En MÉMOIRE (cache de l'agent) → perdues au redémarrage."""
+    cache = getattr(rag_service.agent, '_focused_cache', {}) or {}
+    by_piece = {}
+    for key, fiche in cache.items():
+        if not (isinstance(key, tuple) and len(key) == 3) or not fiche:
+            continue
+        cdoc, head_id, query = key
+        if cdoc != doc_id:
+            continue
+        by_piece.setdefault(head_id, []).append({
+            'query': query, 'text': fiche.get('text', ''),
+            'nid': fiche.get('nid', head_id),
+        })
+    return jsonify({'fiches': by_piece})
+
+
+@api_bp.route('/documents/<doc_id>/notes', methods=['GET'])
+def list_doc_notes(doc_id):
+    """Notes utilisateur (annotations) du document, par node_id."""
+    return jsonify({'notes': document_store.get_notes(doc_id)})
+
+
+@api_bp.route('/documents/<doc_id>/nodes/<node_id>/notes', methods=['POST'])
+def add_doc_note(doc_id, node_id):
+    text = ((request.json or {}).get('text') or '').strip()
+    if not text:
+        return jsonify({'error': 'text requis'}), 400
+    note = document_store.add_note(doc_id, node_id, text)
+    if note is None:
+        return jsonify({'error': 'Document introuvable'}), 404
+    return jsonify({'success': True, 'note': note})
+
+
+@api_bp.route('/documents/<doc_id>/nodes/<node_id>/notes/<note_id>', methods=['DELETE'])
+def delete_doc_note(doc_id, node_id, note_id):
+    ok = document_store.delete_note(doc_id, node_id, note_id)
+    return jsonify({'success': ok}), (200 if ok else 404)
+
+
 @api_bp.route('/documents/<doc_id>/analysis', methods=['GET'])
 def get_document_analysis(doc_id):
     doc = document_store.get_document(doc_id)

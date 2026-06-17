@@ -2514,7 +2514,10 @@ async function showPageRef(docId, page) {
     }
 }
 
-// PageIndex tree (table of contents) viewer, fed by /api/documents/<id>/tree.
+// Vue « Structure + lecture » à DEUX PANNEAUX (fed by /api/documents/<id>/tree) :
+// l'arbre (gauche) est une aide à la lecture PERSISTANTE ; cliquer un nœud
+// affiche sa page dans le PDF (droite) SANS fermer l'arbre. Les pièces (nœuds de
+// premier niveau) montrent leur fiche d'identité.
 async function showDocTree(docId) {
     let tree;
     try {
@@ -2526,67 +2529,262 @@ async function showDocTree(docId) {
         showNotification('Impossible de charger la structure', 'error');
         return;
     }
+    await ensurePreviewData(docId);   // images de pages + node_map pour le panneau PDF
+    const allPages = State.allPagesCache[docId] || [];
+    const nMap = State.nodeMapCache[docId] || {};
+    const pageNodeMap = buildPageNodeMap(nMap);
+    // Notes utilisateur (3°) + fiches à chaud du map-reduce (2°), par node_id
+    const [notesR, fichesR] = await Promise.all([
+        fetch(`/api/documents/${docId}/notes`).then(r => r.json()).catch(() => ({ notes: {} })),
+        fetch(`/api/documents/${docId}/focused-fiches`).then(r => r.json()).catch(() => ({ fiches: {} })),
+    ]);
+    const srCtx = { notes: notesR.notes || {}, fiches: fichesR.fiches || {} };
+
     let modal = document.getElementById('docTreeModal');
     if (!modal) {
         modal = document.createElement('div');
         modal.id = 'docTreeModal';
-        modal.className = 'doc-tree-modal';
-        modal.innerHTML = `<div class="doc-tree-content">
-            <div class="doc-tree-header">
-                <h5 class="doc-tree-title"><i class="bi bi-diagram-3"></i> <span></span></h5>
-                <button class="doc-tree-close"><i class="bi bi-x-lg"></i></button>
+        modal.className = 'structure-reader';
+        modal.innerHTML = `<div class="sr-content">
+            <div class="sr-header">
+                <h5 class="sr-title"><i class="bi bi-diagram-3"></i> <span></span></h5>
+                <button class="sr-close" title="Fermer"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="doc-tree-body"></div>
+            <div class="sr-body">
+                <div class="sr-tree"></div>
+                <div class="sr-viewer"><div class="sr-viewer-pages"></div></div>
+            </div>
         </div>`;
         document.body.appendChild(modal);
-        modal.querySelector('.doc-tree-close').addEventListener('click', () => modal.classList.remove('active'));
+        modal.querySelector('.sr-close').addEventListener('click', () => modal.classList.remove('active'));
         modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('active'); });
+        modal.querySelector('.sr-tree').addEventListener('click', srNoteAction);  // notes : add/save/cancel/del
     }
     const docInfo = (State.documents || []).find(x => x.doc_id === docId);
-    modal.querySelector('.doc-tree-title span').textContent = docInfo?.filename || 'Structure du document';
-    modal.querySelector('.doc-tree-body').innerHTML = renderTreeNodes(tree);
-    modal.querySelectorAll('.tree-node-row[data-node-id]').forEach(row => {
-        row.addEventListener('click', () => {
-            modal.classList.remove('active');
-            showNodePreview(row.dataset.nodeId, docId);
+    modal.querySelector('.sr-title span').textContent = docInfo?.filename || 'Structure du document';
+    modal.dataset.docId = docId;
+    modal._srActiveNode = null;
+
+    // ---- Panneau gauche : l'arbre ----
+    const treePane = modal.querySelector('.sr-tree');
+    treePane.innerHTML = renderStructureTree(tree, 0, srCtx);
+    treePane.querySelectorAll('.sr-toggle').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            btn.closest('.sr-node')?.classList.toggle('collapsed');
         });
     });
-    modal.querySelectorAll('.tree-node-edit').forEach(btn => {
+    treePane.querySelectorAll('.sr-node-row[data-node-id]').forEach(row => {
+        row.addEventListener('click', () => srFocusNode(modal, docId, row.dataset.nodeId, row));
+    });
+    treePane.querySelectorAll('.sr-node-edit').forEach(btn => {
         btn.addEventListener('click', e => {
             e.stopPropagation();
             startEditTreeNode(modal, docId, btn.dataset.nodeId);
         });
     });
+
+    // ---- Panneau droit : le PDF (toutes les pages) ----
+    const pagesPane = modal.querySelector('.sr-viewer-pages');
+    pagesPane.innerHTML = buildPageImagesHtml(allPages, pageNodeMap, null, 0, 0);
+    pagesPane.querySelectorAll('.page-preview-image').forEach(img => {
+        img.addEventListener('click', () => openFullscreen(img.src));
+        img.addEventListener('load', () => {
+            const nid = modal._srActiveNode;
+            if (!nid) return;
+            const c = img.closest('.page-image-container');
+            if (c) drawHighlightsOnPage(c, (allPages[parseInt(c.dataset.index)] || {}).page,
+                                       State.highlightsCache[docId], nMap, nid);
+        });
+    });
+    pagesPane.querySelectorAll('.page-node-tag').forEach(tag => {
+        tag.addEventListener('click', e => { e.stopPropagation(); srFocusNode(modal, docId, tag.dataset.nodeId); });
+    });
+
     modal.classList.add('active');
+    fetchTextHighlights(docId);   // précharge les surlignages (asynchrone)
 }
 
-function renderTreeNodes(node, depth = 0) {
-    if (Array.isArray(node)) return node.map(n => renderTreeNodes(n, depth)).join('');
+// Clic sur un nœud (arbre ou étiquette de page) : amène le PDF à la page du nœud,
+// le surligne, marque le nœud actif — SANS fermer l'arbre.
+function srFocusNode(modal, docId, nodeId, rowEl) {
+    const nMap = State.nodeMapCache[docId] || {};
+    let nid = nodeId;
+    if (!(nid in nMap)) {
+        const bare = nid.replace(/^node[_\s]*/i, '');
+        if (bare in nMap) nid = bare;
+        else if (/^\d+$/.test(bare) && bare.padStart(4, '0') in nMap) nid = bare.padStart(4, '0');
+    }
+    const info = nMap[nid];
+    if (!info) { showNotification('Informations du nœud introuvables', 'error'); return; }
+    modal._srActiveNode = nid;
+
+    // Nœud actif dans l'arbre + déplie pour révéler sa fiche
+    modal.querySelectorAll('.sr-node-row.active').forEach(r => r.classList.remove('active'));
+    const activeRow = rowEl || modal.querySelector(`.sr-node-row[data-node-id="${CSS.escape(nodeId)}"]`);
+    activeRow?.classList.add('active');
+    activeRow?.closest('.sr-node')?.classList.remove('collapsed');
+
+    // Pages courantes + surlignage du nœud
+    const start = info.start_index || 1;
+    const end = info.end_index || start;
+    const allPages = State.allPagesCache[docId] || [];
+    const hlData = State.highlightsCache[docId];
+    modal.querySelectorAll('.page-image-container').forEach(c => {
+        const pageNum = (allPages[parseInt(c.dataset.index)] || {}).page;
+        c.classList.toggle('current-node-page', pageNum >= start && pageNum <= end);
+        drawHighlightsOnPage(c, pageNum, hlData, nMap, nid);
+    });
+    modal.querySelectorAll('.page-node-tag').forEach(t =>
+        t.classList.toggle('highlight-active', t.dataset.nodeId === nid));
+
+    // Défile le panneau PDF jusqu'à la 1re page du nœud
+    const scrollParent = modal.querySelector('.sr-viewer-pages');
+    const idx = allPages.findIndex(p => p.page === start);
+    const target = idx >= 0 ? modal.querySelectorAll('.page-image-container')[idx] : null;
+    if (target && scrollParent) scrollParent.scrollTop = target.offsetTop - scrollParent.offsetTop;
+}
+
+// Arbre de la vue Structure : nœuds repliables ; les PIÈCES (niveau 0) sont mises
+// en avant avec leur FICHE D'IDENTITÉ (le résumé structuré), les sous-nœuds avec
+// un résumé discret.
+function renderStructureTree(node, depth = 0, ctx = {}) {
+    if (Array.isArray(node)) return node.map(n => renderStructureTree(n, depth, ctx)).join('');
     if (!node || typeof node !== 'object') return '';
     const children = node.children || node.nodes || [];
-    if (!node.title) return renderTreeNodes(children, depth);
+    if (!node.title) return renderStructureTree(children, depth, ctx);
+    const hasKids = Array.isArray(children) && children.some(c => c && c.title);
+    const isPiece = depth === 0;
     const pages = node.start_index
-        ? `<span class="tree-node-pages">p. ${node.start_index}${node.end_index && node.end_index !== node.start_index ? '–' + node.end_index : ''}</span>`
+        ? `<span class="sr-node-pages">p. ${node.start_index}${node.end_index && node.end_index !== node.start_index ? '–' + node.end_index : ''}</span>`
         : '';
     const editBtn = node.node_id
-        ? `<button class="tree-node-edit" data-node-id="${esc(node.node_id)}" title="Corriger le titre / résumé (améliore la recherche)"><i class="bi bi-pencil"></i></button>`
+        ? `<button class="sr-node-edit" data-node-id="${esc(node.node_id)}" title="Corriger le titre / résumé (améliore la recherche)"><i class="bi bi-pencil"></i></button>`
         : '';
+    const fiche = node.summary
+        ? `<div class="sr-fiche${isPiece ? ' sr-fiche-piece' : ''}">${isPiece ? renderFiche(node.summary) : esc(node.summary)}</div>`
+        : '';
+    const kids = hasKids ? `<div class="sr-children">${renderStructureTree(children, depth + 1, ctx)}</div>` : '';
+    // Sur une PIÈCE (niveau 0) : fiches à chaud du map-reduce (2°) + notes user (3°).
+    const extras = isPiece ? srExtrasHtml(node.node_id, ctx) : '';
+    // Le corps (fiche + extras + sous-nœuds) est repliable ; replié PAR DÉFAUT →
+    // l'arbre se lit d'abord comme une table des matières, on déplie pour voir.
+    const hasBody = hasKids || !!fiche || !!extras;
+    const toggle = hasBody
+        ? `<button class="sr-toggle" title="Déplier / replier (fiche + sous-éléments)"><i class="bi bi-caret-down-fill"></i></button>`
+        : `<span class="sr-toggle-spacer"></span>`;
+    const body = hasBody ? `<div class="sr-node-body">${fiche}${extras}${kids}</div>` : '';
     return `
-        <div class="tree-node" style="--tree-depth:${depth}" data-node-id="${esc(node.node_id || '')}">
-            <div class="tree-node-row" ${node.node_id ? `data-node-id="${esc(node.node_id)}"` : ''} title="Voir dans le document">
-                <span class="tree-node-title">${esc(node.title)}</span>${pages}${editBtn}
+        <div class="sr-node${isPiece ? ' sr-piece' : ''}${hasBody ? ' collapsed' : ''}" data-depth="${depth}" data-node-id="${esc(node.node_id || '')}" data-summary="${esc(node.summary || '')}">
+            <div class="sr-node-row" ${node.node_id ? `data-node-id="${esc(node.node_id)}"` : ''} title="Voir dans le document">
+                ${toggle}${isPiece ? '<span class="sr-piece-marker">◆</span>' : ''}<span class="sr-node-title">${esc(node.title)}</span>${pages}${editBtn}
             </div>
-            <div class="tree-node-summary">${esc(node.summary || '')}</div>
-        </div>` + renderTreeNodes(children, depth + 1);
+            ${body}
+        </div>`;
+}
+
+// Fiche d'identité formatée : « Label : valeur » → ligne titrée. Sans deux-points,
+// on affiche la ligne telle quelle.
+function renderFiche(summary) {
+    return String(summary).split('\n').filter(l => l.trim()).map(l => {
+        const m = l.match(/^\s*([^:]{2,30}?)\s*:\s*(.+)$/);
+        return m
+            ? `<div class="sr-fiche-line"><span class="sr-fiche-k">${esc(m[1].trim())}</span><span class="sr-fiche-v">${esc(m[2].trim())}</span></div>`
+            : `<div class="sr-fiche-line"><span class="sr-fiche-v">${esc(l.trim())}</span></div>`;
+    }).join('');
+}
+
+// Extras d'une PIÈCE : fiches à chaud (2°) + bloc de notes utilisateur (3°).
+function srExtrasHtml(nodeId, ctx) {
+    const fiches = (ctx.fiches && ctx.fiches[nodeId]) || [];
+    const notes = (ctx.notes && ctx.notes[nodeId]) || [];
+    let html = '';
+    if (fiches.length) {
+        html += `<div class="sr-hotfiches"><div class="sr-extra-h" title="Générées en mémoire par vos requêtes map-reduce (perdues au redémarrage du serveur)"><i class="bi bi-fire"></i> Fiches à chaud (${fiches.length})</div>`
+            + fiches.map(f => `<div class="sr-hotfiche"><div class="sr-hotfiche-q">« ${esc(f.query)} »</div><div class="sr-hotfiche-t">${esc(f.text)}</div></div>`).join('')
+            + `</div>`;
+    }
+    html += `<div class="sr-notes" data-node-id="${esc(nodeId)}">`
+        + `<div class="sr-extra-h"><i class="bi bi-journal-text"></i> Mes notes</div>`
+        + `<div class="sr-notes-list">${notes.map(srNoteHtml).join('')}</div>`
+        + `<button class="sr-note-add" type="button"><i class="bi bi-plus-lg"></i> Ajouter une note</button>`
+        + `</div>`;
+    return html;
+}
+
+function srNoteHtml(n) {
+    return `<div class="sr-note" data-note-id="${esc(n.id)}"><span class="sr-note-text">${esc(n.text)}</span>`
+        + `<span class="sr-note-ts">${esc(n.ts || '')}</span>`
+        + `<button class="sr-note-del" type="button" title="Supprimer">×</button></div>`;
+}
+
+// Délégation des actions de notes (le bloc est attaché une fois au panneau arbre).
+async function srNoteAction(e) {
+    const modal = e.currentTarget.closest('.structure-reader');
+    const docId = modal && modal.dataset.docId;
+    if (!docId) return;
+
+    const add = e.target.closest('.sr-note-add');
+    if (add) {
+        e.stopPropagation();
+        const box = add.closest('.sr-notes');
+        if (box.querySelector('.sr-note-form')) return;
+        const form = document.createElement('div');
+        form.className = 'sr-note-form';
+        form.innerHTML = `<textarea class="sr-note-input" rows="2" placeholder="Votre note sur cette pièce…"></textarea>`
+            + `<div class="sr-note-actions"><button class="sr-note-cancel" type="button">Annuler</button>`
+            + `<button class="sr-note-save" type="button">Enregistrer</button></div>`;
+        add.before(form);
+        form.querySelector('.sr-note-input').focus();
+        return;
+    }
+    const cancel = e.target.closest('.sr-note-cancel');
+    if (cancel) { e.stopPropagation(); cancel.closest('.sr-note-form')?.remove(); return; }
+
+    const save = e.target.closest('.sr-note-save');
+    if (save) {
+        e.stopPropagation();
+        const box = save.closest('.sr-notes');
+        const form = save.closest('.sr-note-form');
+        const text = form.querySelector('.sr-note-input').value.trim();
+        if (!text) return;
+        save.disabled = true;
+        try {
+            const r = await fetch(`/api/documents/${docId}/nodes/${encodeURIComponent(box.dataset.nodeId)}/notes`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text }),
+            });
+            const d = await r.json();
+            if (!d.success) throw new Error(d.error || 'échec');
+            box.querySelector('.sr-notes-list').insertAdjacentHTML('beforeend', srNoteHtml(d.note));
+            form.remove();
+        } catch (err) {
+            showNotification('Échec de l\'ajout : ' + err.message, 'error');
+            save.disabled = false;
+        }
+        return;
+    }
+    const del = e.target.closest('.sr-note-del');
+    if (del) {
+        e.stopPropagation();
+        const note = del.closest('.sr-note');
+        const box = del.closest('.sr-notes');
+        try {
+            const r = await fetch(`/api/documents/${docId}/nodes/${encodeURIComponent(box.dataset.nodeId)}/notes/${note.dataset.noteId}`,
+                                  { method: 'DELETE' });
+            if (r.ok) note.remove();
+        } catch { /* silencieux */ }
+        return;
+    }
 }
 
 // Édition humaine de l'arbre : l'arbre est l'index de recherche — corriger un
 // titre ou un résumé améliore directement le retrieval par raisonnement.
 function startEditTreeNode(modal, docId, nodeId) {
-    const wrap = modal.querySelector(`.tree-node[data-node-id="${nodeId}"]`);
+    const wrap = modal.querySelector(`.sr-node[data-node-id="${CSS.escape(nodeId)}"]`);
     if (!wrap || modal.querySelector('.tree-node-edit-form')) return;
-    const title = wrap.querySelector('.tree-node-title')?.textContent || '';
-    const summary = wrap.querySelector('.tree-node-summary')?.textContent || '';
+    const title = wrap.querySelector('.sr-node-title')?.textContent || '';
+    const summary = wrap.dataset.summary || '';
     const form = document.createElement('div');
     form.className = 'tree-node-edit-form';
     form.innerHTML = `
@@ -2650,6 +2848,32 @@ function getNodeColor(nodeId, nodeMap) {
     return NODE_COLORS[(idx >= 0 ? idx : 0) % NODE_COLORS.length];
 }
 
+// Rendu PUR de la liste des pages (réutilisé par la modale d'aperçu ET la vue
+// Structure deux-panneaux). Markup identique à l'existant pour ne rien changer
+// visuellement à la modale.
+function buildPageImagesHtml(allPages, pageNodeMap, activeNodeId, curStart, curEnd) {
+    if (!allPages?.length) {
+        return '<div style="padding:40px;text-align:center;color:var(--text-secondary)">Aucune image de page</div>';
+    }
+    return allPages.map((p, i) => {
+        const pageNum = p.page;
+        const isCurrent = !!activeNodeId && pageNum >= curStart && pageNum <= curEnd;
+        const nodes = pageNodeMap[pageNum] || [];
+        const tags = nodes.map(n => {
+            const isActive = n.id === activeNodeId;
+            const label = n.title.length > 20 ? n.title.slice(0, 18) + '…' : n.title;
+            return `<span class="page-node-tag${isActive ? ' active-node' : ''}" data-node-id="${n.id}" `
+                + `style="background:${n.color.bg};color:${n.color.text}" `
+                + `title="Cliquer pour surligner ${esc(n.id + ': ' + n.title)}">`
+                + `<span class="page-node-tag-id">${n.id}</span> ${esc(label)}</span>`;
+        }).join('');
+        return `<div class="page-image-container${isCurrent ? ' current-node-page' : ''}" data-index="${i}">`
+            + `<img src="${p.url}" alt="Page ${pageNum}" class="page-preview-image">`
+            + (tags ? `<div class="page-node-tags">${tags}</div>` : '')
+            + `<div class="page-number" title="Numérotation des pages du PDF (peut différer du folio imprimé sur la page)">Page ${pageNum} du PDF</div></div>`;
+    }).join('');
+}
+
 async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighlight = true, focusPage = null) {
     let modal = document.getElementById('pagePreviewModal');
     if (!modal) {
@@ -2710,26 +2934,8 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     }
 
     const imgs = modal.querySelector('.page-preview-images');
-    if (!allPages?.length) {
-        imgs.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)">Aucune image de page</div>';
-    } else {
-        imgs.innerHTML = allPages.map((p, i) => {
-            const pageNum = p.page;
-            const isCurrent = !!nodeId && pageNum >= currentStart && pageNum <= currentEnd;
-            const nodes = pageNodeMap[pageNum] || [];
-            const tags = nodes.map(n => {
-                const isActive = n.id === nodeId;
-                const label = n.title.length > 20 ? n.title.slice(0, 18) + '…' : n.title;
-                return `<span class="page-node-tag${isActive ? ' active-node' : ''}" data-node-id="${n.id}" `
-                    + `style="background:${n.color.bg};color:${n.color.text}" `
-                    + `title="Cliquer pour surligner ${esc(n.id + ': ' + n.title)}">`
-                    + `<span class="page-node-tag-id">${n.id}</span> ${esc(label)}</span>`;
-            }).join('');
-            return `<div class="page-image-container${isCurrent ? ' current-node-page' : ''}" data-index="${i}">`
-                + `<img src="${p.url}" alt="Page ${pageNum}" class="page-preview-image">`
-                + (tags ? `<div class="page-node-tags">${tags}</div>` : '')
-                + `<div class="page-number" title="Numérotation des pages du PDF (peut différer du folio imprimé sur la page)">Page ${pageNum} du PDF</div></div>`;
-        }).join('');
+    imgs.innerHTML = buildPageImagesHtml(allPages, pageNodeMap, nodeId, currentStart, currentEnd);
+    if (allPages?.length) {
         imgs.querySelectorAll('.page-preview-image').forEach(img => {
             img.addEventListener('click', () => openFullscreen(img.src));
             // Highlights are drawn in image-pixel space, so a page can only be
