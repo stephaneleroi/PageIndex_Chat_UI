@@ -150,7 +150,7 @@ Ouvrez le panneau des paramètres et renseignez le nom, la clé API et la Base U
 
 ### 📁 Arborescence du projet
 
-Documentation détaillée : [`ARCHITECTURE.md`](./ARCHITECTURE.md) (fonctionnement interne, où PageIndex est utilisé et où il ne l'est pas, modifications locales de la bibliothèque), [`DIAGNOSTIC-UEMO.md`](./DIAGNOSTIC-UEMO.md) (enquête sur la dégradation du modèle par les enrobages de prompt), [`ETUDE-RAGFLOW.md`](./ETUDE-RAGFLOW.md) (étude comparative), [`ETUDE-SEGMENTATION-PIECES.md`](./ETUDE-SEGMENTATION-PIECES.md) (conception : pré-segmentation déterministe des pièces), [`ETUDE-MAP-REDUCE-CIBLE.md`](./ETUDE-MAP-REDUCE-CIBLE.md) (note de conception du map-reduce ciblé, **implémenté**), [`tests/`](./tests/) (tests d'acceptation).
+Documentation détaillée : [`ARCHITECTURE.md`](./ARCHITECTURE.md) (fonctionnement interne, où PageIndex est utilisé et où il ne l'est pas, modifications locales de la bibliothèque), [`DIAGNOSTIC-UEMO.md`](./DIAGNOSTIC-UEMO.md) (enquête sur la dégradation du modèle par les enrobages de prompt), [`ETUDE-RAGFLOW.md`](./ETUDE-RAGFLOW.md) (étude comparative), [`ETUDE-SEGMENTATION-PIECES.md`](./ETUDE-SEGMENTATION-PIECES.md) (conception : pré-segmentation déterministe des pièces), [`ETUDE-MAP-REDUCE-CIBLE.md`](./ETUDE-MAP-REDUCE-CIBLE.md) (note de conception du map-reduce ciblé, **implémenté**), [`FONCTIONNEMENT-PAR-TESTS.md`](./FONCTIONNEMENT-PAR-TESTS.md) (décomposition, aiguillage et sourcing expliqués par 4 cas réels), [`tests/`](./tests/) (tests d'acceptation).
 
 ```
 PageIndex_Chat_UI/
