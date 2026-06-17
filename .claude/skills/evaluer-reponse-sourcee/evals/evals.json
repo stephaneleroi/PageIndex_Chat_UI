@@ -1,0 +1,17 @@
+{
+  "skill_name": "evaluer-reponse-sourcee",
+  "evals": [
+    {
+      "id": 0,
+      "name": "procedure-composite",
+      "prompt": "Évalue rigoureusement la qualité de la réponse de PageIndex_Chat_UI contenue dans le fichier .claude/skills/evaluer-reponse-sourcee/evals/inputs/case1_procedure_answer.md. La question posée était : « Fais-moi une synthèse de ce dossier pénal en distinguant : les actes de procédure, le déroulé chronologique, les professionnels intervenus (OPJ, magistrats...) et les personnes concernées (mis en cause, victimes, témoins). Fais moi un résumé des faits reprochés. Quelles sont les différentes versions des différentes personnes concernées ? ». Les documents source sont dans /Users/stephaneleroi/Dev/demo_pageindex/data/Procedure-PN-1-PDF. Produis un rapport d'évaluation.",
+      "files": [".claude/skills/evaluer-reponse-sourcee/evals/inputs/case1_procedure_answer.md"]
+    },
+    {
+      "id": 1,
+      "name": "synthese-mapreduce",
+      "prompt": "Évalue rigoureusement la qualité de la réponse de PageIndex_Chat_UI contenue dans le fichier .claude/skills/evaluer-reponse-sourcee/evals/inputs/case2_synthese_answer.md. La question posée était : « Détaille les principales recommandations du rapport et les constats chiffrés sur lesquels elles s'appuient, pour l'accès aux soins, les mobilités et le numérique. ». Le document source est /Users/stephaneleroi/Dev/demo_pageindex/data/Synthèse_2026.pdf. Cette réponse provient d'un run map-reduce dont le seuil de bascule avait été forcé bas (texte tronqué par pièce). Produis un rapport d'évaluation.",
+      "files": [".claude/skills/evaluer-reponse-sourcee/evals/inputs/case2_synthese_answer.md"]
+    }
+  ]
+}
