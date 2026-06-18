@@ -838,6 +838,81 @@ def _piece_subtree(node):
     return out
 
 
+def segment_pieces(page_list, opt):
+    """PRÉ-SEGMENTATION d'un fichier composite. Un fichier réunit parfois PLUSIEURS
+    documents distincts (un « dossier » de pièces). UN seul appel LLM (bien moins
+    cher que le découpage récursif : on n'envoie que les en-têtes de page) décide sur
+    quelles pages commence un NOUVEAU document. Renvoie [(start, end, title)] 1-indexé.
+    CONSERVATEUR : doute / échec / un seul document → 1 pièce (= comportement actuel,
+    tout le fichier passe par tree_parser)."""
+    import json as _json
+    n = len(page_list)
+    one = [(1, n, None)]
+    if n <= SMALL_DOC_MAX_PAGES:
+        return one
+
+    def _first_line(i):
+        for ln in (page_list[i][0] or "").splitlines():
+            ln = ln.strip()
+            if ln:
+                return ln[:80]
+        return ""
+
+    heads = []
+    for i in range(n):
+        lines = [x.strip() for x in (page_list[i][0] or "").splitlines() if x.strip()]
+        heads.append(f"p{i+1}: " + " | ".join(lines[:5])[:200])
+    prompt = (
+        "Ce fichier PDF réunit peut-être PLUSIEURS documents distincts dans un seul "
+        "fichier (un « dossier » de pièces : notice, rapport, note, ordonnance, "
+        "certificat, audition, avis, requête, lexique, procès-verbal…).\n"
+        "Première(s) ligne(s) de chaque page :\n\n" + "\n".join(heads) + "\n\n"
+        "Si c'est UN SEUL document continu (un rapport avec des chapitres/sections), "
+        'réponds {"starts": [1]}.\n'
+        "Sinon, donne les pages où commence un NOUVEAU document. Une SOUS-SECTION "
+        "d'un même document (« Situation familiale », « Conclusions », "
+        "« Recommandations », « Chiffres clés »…) n'est PAS un nouveau document.\n"
+        'Réponds UNIQUEMENT en JSON : {"starts": [numéros de page de début]}'
+    )
+    try:
+        raw = ChatGPT_API(opt.model, prompt) or ""
+    except Exception as e:
+        logging.error(f"segment_pieces: appel LLM échoué ({e}) → 1 pièce")
+        return one
+    starts = []
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        try:
+            starts = _json.loads(m.group(0)).get("starts", [])
+        except Exception:
+            starts = []
+    clean = sorted({int(s) for s in starts
+                    if str(s).strip().isdigit() and 1 <= int(s) <= n})
+    if 1 not in clean:
+        clean = [1] + clean
+    if len(clean) <= 1:
+        return one
+    bounds = []
+    for k, s in enumerate(clean):
+        e = (clean[k + 1] - 1) if k + 1 < len(clean) else n
+        bounds.append((s, e, _first_line(s - 1) or None))
+    logging.info(f"segment_pieces: {len(bounds)} pièce(s) → {[(s, e) for s, e, _ in bounds]}")
+    return bounds
+
+
+def shift_node_indices(nodes, off):
+    """Recale les index d'un sous-arbre issu de tree_parser sur une SOUS-liste de
+    pages (coordonnées 1..len(sous-liste)) vers les pages GLOBALES du document."""
+    if isinstance(nodes, dict):
+        nodes = [nodes]
+    for node in nodes or []:
+        for k in ('start_index', 'end_index', 'physical_index'):
+            v = node.get(k)
+            if isinstance(v, int):
+                node[k] = v + off
+        shift_node_indices(node.get('nodes') or [], off)
+
+
 def piece_head_nodes(structure):
     """Têtes des pièces : liste de ≥2 racines → autant de pièces ; racine unique
     englobante → enfants du conteneur de pièces numérotées (Document/Pièce/

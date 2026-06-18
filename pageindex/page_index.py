@@ -1106,7 +1106,25 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
     logger.info({'total_token': sum([page[1] for page in page_list])})
 
     async def page_index_builder():
-        if len(page_list) <= SMALL_DOC_MAX_PAGES:
+        # PRÉ-SEGMENTATION déterministe/LLM des pièces (avant tree_parser) : sur un
+        # fichier COMPOSITE, on pose d'abord les frontières de PIÈCES, puis on
+        # n'applique tree_parser qu'à L'INTÉRIEUR de chaque pièce → frontières de
+        # niveau 1 fiables (ne dépendent plus du découpage global du LLM).
+        boundaries = segment_pieces(page_list, opt)
+        if len(boundaries) > 1:
+            logger.info({'presegmentation_pieces': len(boundaries),
+                         'boundaries': [(s, e) for s, e, _ in boundaries]})
+            structure = []
+            for (start, end, title) in boundaries:
+                sub_pages = page_list[start - 1:end]
+                node = {'title': title or f'Pièce (p. {start})',
+                        'start_index': start, 'end_index': end}
+                if len(sub_pages) > SMALL_DOC_MAX_PAGES:
+                    sub_tree = await tree_parser(sub_pages, opt, doc=doc, logger=logger)
+                    shift_node_indices(sub_tree, start - 1)  # 1..len(sous-liste) → pages globales
+                    node['nodes'] = sub_tree
+                structure.append(node)
+        elif len(page_list) <= SMALL_DOC_MAX_PAGES:
             # Pièce courte = un nœud A PRIORI : aucune détection de structure
             # LLM (sommaire, découpage, vérification) — une pièce de quelques
             # pages se cherche et se cite comme UNE pièce, sa fiche
