@@ -254,6 +254,29 @@ pas une chaîne inline (diff lisible, A/B simple pour le skill d'évaluation) :
 Les builders à flot de contrôle (`_build_answer_prompt`…) restent en Python et
 **interpolent** ces gabarits.
 
+### 3.2 PageIndex (amont) vs **notre couche** — qui fait quoi
+
+Frontière nette : PageIndex **construit l'arbre et le fouille** (`tree_search`) ;
+tout le reste — **pièce, fiche identitaire, routing, voies, map-reduce, citations
+à la page, notes** — est **notre couche** par-dessus.
+
+| Brique | PageIndex (`pageindex/`, amont) | Notre couche (`services/`, `models/`, IHM) |
+|---|---|---|
+| PDF → arbre de nœuds (sommaire, hiérarchie, `node_id`) | **✅ cœur** | retouches d'extraction (§8) |
+| Résumé d'un **nœud** | ✅ prompt canonique… | …**remplacé par une FICHE par PIÈCE** (`generate_summaries_for_structure`, §4.2) |
+| Notion de **pièce** (unité de travail) | ✘ (ne connaît que des nœuds) | **✅** `piece_head_nodes`, régime compilation/doc unique |
+| **`tree_search`** (choisir des nœuds sur résumés/titres) | **✅ prompt du cookbook** | on **l'appelle** : niveau 1 (fiches) / niveau 2 (sections) |
+| `remove_fields(tree, ['text'])` (raisonner sans le texte) | ✅ | on l'utilise |
+| **Citations à la page** (`<page_N>`, pastilles, visionneuse) | ✘ | **✅** |
+| **Routing** (`decompose_query` : intention + `instructions`) | ✘ | **✅** |
+| **Les 4 voies** (libre / mono-pièce / synthèse globale / corpus) | ✘ | **✅** `DocumentAgent` |
+| **Map-reduce ciblé** + **fiches à chaud** persistées | ✘ | **✅** `_focused_summary` |
+| **IDs de citation autorisés**, auto-éval déterministe, **notes** | ✘ | **✅** |
+
+En une phrase : **PageIndex fournit l'arbre et `tree_search` ; nous fournissons la
+pièce, la fiche identitaire, le routing, les voies, le map-reduce, les citations à
+la page et les notes.** Les retouches *internes* à `pageindex/` sont en §8.
+
 ---
 
 ## 4. Indexation — la phase « à FROID »
@@ -337,6 +360,31 @@ question
         └────────────────────────────────────────────────────────────┘
    (questions composites : chaque sous-réponse devient une section ## ; assemblage)
 ```
+
+**Trois briques élémentaires, recombinées par les voies :**
+
+- **`tree_search` — *choisir*** *(brique PageIndex)* : sur les **fiches** (niveau 1,
+  entre pièces) ou sur les **titres de sections** (niveau 2, dans une grosse pièce).
+  Ne lit **jamais** le texte intégral.
+- **Lecture du texte — *lire*** *(notre couche)* : charge le **texte** des seuls
+  nœuds retenus, pour la rédaction citée.
+- **Fiches — *réutiliser des résumés*** *(notre couche)* : soit **agrégées** telles
+  quelles (synthèse globale), soit **recomposées à chaud** par pièce sous l'angle de
+  la question (map-reduce).
+
+**Quelle voie mobilise quelle brique** (seul `tree_search` est PageIndex ; le reste
+est notre orchestration — §3.2) :
+
+| Voie | Intention | `tree_search` n.1 (fiches) | `tree_search` n.2 (sections) | Lecture du **texte** | **Fiches** |
+|---|---|:--:|:--:|:--:|---|
+| Conversation libre (§5.2) | — *(aucun doc)* | — | — | — | — |
+| Mono-pièce (§5.2) | `detail`, 1 pièce | — | ✅ *interne à la pièce* | ✅ | — |
+| Synthèse globale (§5.3) | `overview` | — | — | — | **agrégation de toutes** |
+| Corpus — lecture directe (§5.4) | `detail`, ≥ 2 p. | ✅ | si pièce volumineuse | ✅ | inventaire en appui |
+| Corpus — map-reduce (§5.4) | `detail`, ≥ 2 p., gros volume | ✅ | ✅ | *dans le map* | **fiches à chaud** + inventaire |
+
+*(Mono-pièce = un seul `tree_search` sur l'arbre de la pièce ; « n.2 » y désigne donc
+la recherche interne à cette pièce.)*
 
 L'intention classée par le LLM **prime** sur l'ancienne heuristique de mots-clés
 `_is_global_summary` (conservée en repli) — seul le *sens* décide, pas les mots.
