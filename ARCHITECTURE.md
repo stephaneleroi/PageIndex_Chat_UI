@@ -568,6 +568,27 @@ seule, **0 appel LLM**). Un fichier lui-même composite y voit **toutes** ses pi
 remonter (ex. dossier de 25 fichiers → 30 pièces). **100 % présentation** — aucun
 impact indexation/retrieval/citations ; les cartes par fichier restent.
 
+### 10.2 Les notes comme **consignes** (orientation + épinglage)
+
+Une note utilisateur **n'est ni une source ni une pièce** : c'est une **consigne /
+pré-rédaction** de l'utilisateur. Elle est donc réinjectée dans le pipeline à deux
+endroits (`agent.py`) — **jamais** comme contexte sourcé ni citable :
+
+- **Rédaction (orientation)** — `_build_user_consignes(refs, tool_context)` construit
+  un bloc « Consignes de l'utilisateur (ses notes) » joint aux prompts des trois
+  voies (`_build_simple_answer_prompt`, `_build_answer_prompt`), **distinct** du
+  contexte sourcé. Il oriente le **cadrage et la mise en avant** ; règle explicite :
+  *ne jamais citer une note, ne pas la traiter comme une preuve ; si une consigne
+  contredit le source, suivre le SOURCE*.
+- **Sélection (épinglage)** — dans la voie corpus, une pièce **annotée** est
+  **priorisée** (`_piece_has_notes`) même si `tree_search` ne l'a pas retenue (signal
+  humain « cette pièce compte »). La note n'entre pas dans la fiche de sélection
+  (elle ne *décrit* pas la pièce) : c'est un *pin*.
+
+Les **fiches à chaud** (map-reduce), elles, sont du **contenu sourcé** (cité à la
+page) — leur réinjection éventuelle relèverait du contexte/inventaire, pas des
+consignes (non implémenté : réserve « orientées par une question passée »).
+
 ---
 
 ## 11. Modèles & configuration (`config.py` → `config.json`, hors git)

@@ -421,7 +421,7 @@ Output JSON only:
     MAP_CONCURRENCY = 3             # synthèses ciblées (map) concurrentes max (santé Ollama)
 
     def _build_simple_answer_prompt(self, query, context, history_context, grounding,
-                                    allowed_citations: str = ""):
+                                    allowed_citations: str = "", user_consignes: str = ""):
         return f"""Answer the question based on the context below — the selected sections of the
 document. Their text is wrapped in <page_N>…</page_N> markers.
 
@@ -430,7 +430,7 @@ Question: {query}
 Context:
 {context}
 {history_context}
-
+{user_consignes}
 {LANG_INSTRUCTION}
 
 {grounding}
@@ -516,7 +516,8 @@ Provide a clear, comprehensive answer in French."""
         history_context = self._build_history_context(session_id, use_memory)
         answer_prompt = self._build_simple_answer_prompt(
             query, context, history_context, GROUNDING_INSTRUCTION_SINGLE,
-            allowed_citations=self._build_allowed_citations(refs, tool_context))
+            allowed_citations=self._build_allowed_citations(refs, tool_context),
+            user_consignes=self._build_user_consignes(refs, tool_context))
 
         full_answer = ""
         image_paths = self._collect_images_for_refs(refs, tool_context) if is_vision else []
@@ -706,6 +707,47 @@ Provide a clear, comprehensive answer in French."""
                 fiche = (fiche + "\nSections :\n" + "\n".join(titres)).strip()
         return (fiche[:budget] + "…") if len(fiche) > budget else (fiche or "(pas de fiche)")
 
+    def _build_user_consignes(self, refs, tool_context, budget: int = 6000) -> str:
+        """Bloc de CONSIGNES utilisateur (ses notes) pour la rédaction. Une note
+        n'est NI une source NI une pièce : c'est une consigne / pré-rédaction qui
+        ORIENTE la réponse — jamais citée, jamais traitée comme une preuve."""
+        docs_ctx = tool_context.get("docs") or {}
+        doc_ids, lines = [], []
+        for r in refs or []:
+            d = str(r).split("::")[0]
+            if d and d not in doc_ids:
+                doc_ids.append(d)
+        for doc_id in doc_ids:
+            try:
+                notes = self.store.get_notes(doc_id) or {}
+            except Exception:
+                notes = {}
+            nm = (docs_ctx.get(doc_id) or {}).get("node_map") or {}
+            for node_id, lst in notes.items():
+                node = (nm.get(node_id) or {}).get("node", {})
+                title = (node.get("title") if isinstance(node, dict) else "") or node_id
+                for n in (lst or []):
+                    t = (n.get("text") or "").strip()
+                    if t:
+                        lines.append(f"- [{title}] {t}")
+        if not lines:
+            return ""
+        body = "\n".join(lines)
+        if len(body) > budget:
+            body = body[:budget] + "…"
+        return (
+            "\n【Consignes de l'utilisateur (ses notes) — ORIENTENT la rédaction】\n"
+            "Ce sont des consignes / une pré-rédaction de l'utilisateur, PAS des "
+            "sources : ne les cite JAMAIS, ne les traite pas comme une preuve. "
+            "Tiens-en compte pour le cadrage et la mise en avant ; si une consigne "
+            "contredit le contexte sourcé, suis le SOURCE.\n" + body + "\n"
+        )
+
+    def _piece_has_notes(self, pc, notes_by_doc: dict) -> bool:
+        """Vrai si l'utilisateur a annoté un nœud de cette pièce (→ épinglage)."""
+        notes = notes_by_doc.get(pc["doc_id"], {})
+        return any(notes.get(nid) for nid in pc.get("node_ids", []))
+
     def _build_corpus_inventory(self, tool_context: dict) -> str:
         """Inventaire des fiches identitaires de TOUTES les pièces — source
         citable en appui (synthèse de corpus). Budget PAR FICHE adaptatif
@@ -803,11 +845,26 @@ Provide a clear, comprehensive answer in French."""
             if j.isdigit() and 0 <= int(j) < len(pieces):
                 picked_idx.append(int(j))
         picked = [pieces[j] for j in dict.fromkeys(picked_idx)][:self.CORPUS_MAX_PIECES_READ]
+        # Épinglage : une pièce ANNOTÉE par l'utilisateur (signal humain « ça compte »)
+        # est priorisée, même si tree_search ne l'a pas retenue. La note reste une
+        # consigne (cf. _build_user_consignes), pas un contenu de sélection.
+        notes_by_doc = {}
+        for pc in pieces:
+            did = pc["doc_id"]
+            if did not in notes_by_doc:
+                try:
+                    notes_by_doc[did] = self.store.get_notes(did) or {}
+                except Exception:
+                    notes_by_doc[did] = {}
+        pinned = [pc for pc in pieces if pc not in picked and self._piece_has_notes(pc, notes_by_doc)]
+        if pinned:
+            picked = (picked + pinned)[:self.CORPUS_MAX_PIECES_READ]
         thinking = (res.get("thinking") or "").strip()
         yield self._step_marker(
             0, 0, thinking, "tree_search", {"query": query},
-            f"{len(picked)} pièce(s) retenue(s) : "
-            + (", ".join(pc["title"] for pc in picked) or "—"),
+            f"{len(picked)} pièce(s) retenue(s)"
+            + (f" (dont {len(pinned)} épinglée(s) par vos notes)" if pinned else "")
+            + " : " + (", ".join(pc["title"] for pc in picked) or "—"),
         )
 
         # ---- 3. Sélection fine des nœuds retenus. Hiérarchie niveau 2 : une
@@ -954,6 +1011,7 @@ Provide a clear, comprehensive answer in French."""
                 grounding=GROUNDING_INSTRUCTION_KB, mode="kb",
                 docs_overview=context_overview,
                 allowed_citations=self._build_allowed_citations(refs, tool_context),
+                user_consignes=self._build_user_consignes(refs, tool_context),
             )
             async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
                 full_answer += chunk
@@ -1066,7 +1124,8 @@ Provide a clear, comprehensive answer in French."""
         answer_prompt = self._build_answer_prompt(
             query, [query], inventory, history_context, "aggregate",
             grounding=grounding, mode=("kb" if is_kb else "single"),
-            docs_overview=context_overview, summary_mode=True)
+            docs_overview=context_overview, summary_mode=True,
+            user_consignes=self._build_user_consignes(refs, tool_context))
         full_answer = ""
         async for chunk in self.pageindex.call_llm_stream(answer_prompt, model_type):
             full_answer += chunk
@@ -1477,7 +1536,8 @@ Provide a clear, comprehensive answer in French."""
                              mode: str = "single",
                              docs_overview: str = "",
                              summary_mode: bool = False,
-                             allowed_citations: str = ""):
+                             allowed_citations: str = "",
+                             user_consignes: str = ""):
         sub_q_note = ""
         if len(sub_questions) > 1:
             sub_q_note = (
@@ -1518,6 +1578,7 @@ Question: {query}
 Context:
 {context[:60000]}
 {history_context}
+{user_consignes}
 {skill_note}
 
 {LANG_INSTRUCTION}
