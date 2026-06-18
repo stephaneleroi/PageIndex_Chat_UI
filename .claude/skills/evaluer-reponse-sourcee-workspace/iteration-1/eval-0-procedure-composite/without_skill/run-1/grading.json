@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "Classe le certificat « Lignier médecin » comme artefact des données (🟡) plutôt que comme une hallucination/fabrication de l'app",
+      "passed": false,
+      "evidence": "Qualifie « Lignier médecin » d'« hallucination caractérisée / fabrication directe » — ne voit pas que le certificat est signé Lignier"
+    },
+    {
+      "text": "Détecte au moins un faux verbatim (guillemets sur paraphrase) dans la section versions",
+      "passed": true,
+      "evidence": "Faux verbatim Adrien détecté (§2.6/§3)"
+    },
+    {
+      "text": "Fonde les constats sur le texte source avec page physique (vérification déterministe, pas de mémoire)",
+      "passed": true,
+      "evidence": "Extraction PyMuPDF, pages physiques vérifiées"
+    },
+    {
+      "text": "Sépare explicitement défauts de l'app / artefacts de données / limites connues",
+      "passed": false,
+      "evidence": "Pas de discipline 3 catégories (mélange hallucination/erreur/données)"
+    },
+    {
+      "text": "Repère l'omission du témoin Aline Truite",
+      "passed": true,
+      "evidence": "Aline TRUITE relevée comme omission (§2.4, §5)"
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 2,
+    "total": 5,
+    "pass_rate": 0.6
+  }
+}

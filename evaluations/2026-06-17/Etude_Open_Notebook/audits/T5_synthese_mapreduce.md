@@ -1,0 +1,24 @@
+# Audit (run live) — T5 — Synthèse / map-reduce forcé 2000 [Etude_ON] — 2026-06-17 16:17
+
+- **Branche / commit** : `Etude_Open_Notebook` @ `DEMO_1-4-g52a6913`
+- **Session IHM** : `sess_kb_1781705719_02fde2` (mode kb) — 1 document(s)
+- **Question** : Détaille les principales recommandations du rapport et les constats chiffrés sur lesquels elles s'appuient, pour l'accès aux soins, les mobilités et le numérique.
+- **Durée** : 154s | réflexion(s) : []
+- **map-reduce** : OUI | indices décomposition : 2
+- **Nœuds mobilisés** : 2 → ['20260616_192821_f1d3::0003', '20260616_192821_f1d3::0009']
+- **Citations (pages détectées dans la réponse)** : 10 → pages [20, 53, 54, 55]
+
+## Étapes (trace agent)
+  1. [tree_search] 2 pièce(s) retenue(s) : PREMIÈRE PARTIE - Garantir l’accès aux services essentiels, DEUXIÈME PARTIE - Soutenir le développement des territoires
+  2. [tree_search] [PREMIÈRE PARTIE - Garantir l’accès aux services essentiels] pièce volumineuse : 5 section(s) retenue(s)
+  3. [tree_search] [DEUXIÈME PARTIE - Soutenir le développement des territoires] pièce volumineuse : 2 section(s) retenue(s)
+  4. [map_reduce] 2 pièce(s) (84907 car.) > budget 2000 → synthèse ciblée par pièce
+  5. [map_reduce] synthèses ciblées : 1/2 — 1 pièce(s) pertinente(s)
+  6. [map_reduce] synthèses ciblées : 2/2 — 2 pièce(s) pertinente(s)
+
+## Réponse complète
+Le rapport formule trois recommandations majeures concernant l’accès aux soins : il préconise d’abord de réorganiser le maillage de l’offre hospitalière afin de réduire les distances entre le domicile du patient et l’établissement, le constat chiffré indique que les 2 380 sites hospitaliers recensés en 2023 laissent encore les patients parcourir en moyenne 43 km (environ 48 minutes) pour 75 % des prises en charge, 119 km (≈ 1 h 36) pour les transplantations d’organes, et 25 km (≈ 33 minutes) pour les urgences obstétricales ; le nombre de spécialités est passé de 8 en 1947 à 44 actuellement, montrant que le maillage n’a guère évolué malgré la hausse des besoins (node_0003, page 20‑21). La deuxième recommandation porte sur le renforcement de la gouvernance territoriale des hôpitaux, le rapport souligne que seules 26 groupements sur 135 (soit 19 %) ont mis en place une direction commune, limitant la coordination inter‑site (node_0003, page 20). Enfin, il recommande d’adapter l’offre aux besoins croissants de prise en charge des maladies chroniques ; le constat indique que 25 millions de patients étaient concernés en 2023, soit une hausse de 7 % depuis 2015, avec des dépenses associées d’environ 126 milliards d’euros et un déficit de 2,4 milliards d’euros des hôpitaux publics la même année (node_0003, page 20).
+
+Pour les mobilités, le rapport propose plusieurs mesures : il suggère de compléter la loi d’orientation des mobilités (LOM) par un cadre financier rénové dédié aux trajets du quotidien, constatant qu’aucun levier financier n’est encore dédié et que ce cadre est indispensable en complément de la loi du 24 décembre 2019 (node_0009, page 53). Il recommande de renforcer la gouvernance locale en incitant davantage d’intercommunalités à devenir Autorités Organisatrices de la Mobilité Locale (AOML), les données montrant que 50 % des communautés de communes le sont déjà (node_0009, page 55). La diversification des modes de transport dans les zones rurales et périurbaines est également préconisée, alors que plus de 70 % des résidents de ces territoires n’ont pas le choix entre plusieurs modes (node_0009, page 54). Le rapport incite à améliorer l’accès des jeunes ruraux aux lieux d’étude en développant des solutions de mobilité quotidienne, le constat indiquant que 30 % des jeunes ruraux ont déjà renoncé à se rendre à leur établissement d’enseignement à cause de l’insuffisance de mobilité (node_0009, page 54). Il appelle à développer les infrastructures de recharge pour véhicules électriques, avec 184 141 bornes publiques opérationnelles fin novembre 2025 (node_0009, page 54). Le renforcement du transport collectif quotidien est soutenu par une hausse de 7,7 % de l’offre kilométrique entre 2019 et 2023 (node_0009, page 54). Enfin, le rapport promeut le covoiturage, qui a enregistré 12,8 millions de trajets intermédiaires en 2024, soit huit fois plus qu’en 2021 (node_0009, page 54).
+
+Concernant le numérique, le rapport ne formule pas de recommandation explicite, mais il décrit plusieurs constats chiffrés : en 2025, 92 % des locaux sont raccordables à la fibre optique, 91 % des Français de plus de 12 ans possèdent un smartphone, et 215 800 personnes résident encore en zone blanche, c’est‑à‑dire sans accès haut débit (node_0009, pages 68‑69). Ces données illustrent les disparités numériques constatées, même si aucune mesure précise n’est proposée dans la synthèse étudiée.

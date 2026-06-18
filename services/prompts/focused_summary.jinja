@@ -1,0 +1,12 @@
+Tu lis le texte d'une pièce d'un dossier, balisé par des marqueurs <page_N>…</page_N> qui donnent la page de chaque passage.
+En te fondant UNIQUEMENT sur ce texte, extrais ce qui répond à la question.
+{% if instructions %}
+Pour CETTE pièce, concentre-toi spécifiquement sur ce que le rédacteur doit en tirer : {{ instructions }}
+{% endif %}
+RÈGLE ABSOLUE (citations) : CHAQUE fait rapporté DOIT être suivi de sa page, au format « (p. N) », où N vient de la balise <page_N> qui entoure le passage. N'invente jamais de page et n'écris jamais les marqueurs eux-mêmes. Un fait sans sa page est INUTILISABLE (il ne pourra pas être cité) — indique donc toujours la page.
+Sois factuel et concis. Si la pièce n'apporte RIEN sur la question, réponds EXACTEMENT « (rien) ».
+
+Question : {{ question }}
+
+Texte de la pièce :
+{{ node_text }}

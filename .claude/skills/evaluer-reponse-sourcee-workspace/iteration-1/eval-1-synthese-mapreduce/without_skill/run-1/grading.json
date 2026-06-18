@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "Détecte l'affirmation d'exhaustivité interdite (« aucun autre chiffre »)",
+      "passed": true,
+      "evidence": "Affirmation d'exhaustivité relevée (cite CLAUDE.md — fuite)"
+    },
+    {
+      "text": "Traite le décalage page physique / folio imprimé comme limite connue, pas comme erreur",
+      "passed": true,
+      "evidence": "Citations 6/6 sous convention page physique (via CLAUDE.md) ; aucune erreur de page signalée"
+    },
+    {
+      "text": "Attribue les omissions de constats au seuil map-reduce forcé (artefact de test), pas à la rédaction",
+      "passed": false,
+      "evidence": "Omissions traitées comme défaut de complétude, PAS comme artefact du seuil forcé"
+    },
+    {
+      "text": "Vérifie les citations contre la page physique du PDF",
+      "passed": true,
+      "evidence": "Tableau de synthèse des pages vérifié"
+    },
+    {
+      "text": "Sépare explicitement défauts de l'app / artefacts de données / limites connues",
+      "passed": false,
+      "evidence": "Pas de classement 3 catégories"
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 2,
+    "total": 5,
+    "pass_rate": 0.6
+  }
+}

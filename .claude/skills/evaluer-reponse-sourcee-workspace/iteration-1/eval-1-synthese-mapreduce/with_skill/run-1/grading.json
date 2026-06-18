@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "Détecte l'affirmation d'exhaustivité interdite (« aucun autre chiffre »)",
+      "passed": true,
+      "evidence": "#1 🔴 exhaustivité + démonstration p.68"
+    },
+    {
+      "text": "Traite le décalage page physique / folio imprimé comme limite connue, pas comme erreur",
+      "passed": true,
+      "evidence": "#4 🔵 folio +2 (p.20→'22')"
+    },
+    {
+      "text": "Attribue les omissions de constats au seuil map-reduce forcé (artefact de test), pas à la rédaction",
+      "passed": true,
+      "evidence": "#5 🔵 omissions imputées au seuil forcé"
+    },
+    {
+      "text": "Vérifie les citations contre la page physique du PDF",
+      "passed": true,
+      "evidence": "Pages 17,20-22,54-56,58,68-69 vérifiées"
+    },
+    {
+      "text": "Sépare explicitement défauts de l'app / artefacts de données / limites connues",
+      "passed": true,
+      "evidence": "Tableau 🔴/🟡/🔵 explicite"
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5,
+    "pass_rate": 1.0
+  }
+}

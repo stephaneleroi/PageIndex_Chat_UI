@@ -45,6 +45,14 @@ erreur : bouton « Relancer » (ou `POST /api/documents/<id>/retry`).
    réel du PDF (cf. tests/accept_chauvin.py). En particulier, les **fiches à
    chaud** du map-reduce (`_focused_summary`) DOIVENT conserver les `(p. N)`
    (sinon le reduce ne peut plus citer — c'est la condition de viabilité).
+   Les `(p. N)` désignent la **page physique du PDF** (l'index extrait par
+   PyMuPDF, balises `<page_N>`), **pas le folio imprimé** sur la page —
+   cohérent avec la visionneuse (le clic ouvre la page N du PDF, surlignage
+   juste). Les PDF n'embarquent pas de PageLabels exploitables (`get_page_labels`
+   vide), on n'aligne donc pas sur le folio imprimé ; l'IHM l'explicite
+   (« Page N du PDF »). Corollaire grounding : ne jamais affirmer
+   l'exhaustivité/absence (« aucun autre chiffre ») — le contexte peut être un
+   extrait partiel/condensé (cf. map-reduce).
 4. **Unité = pièce** (`USE_PIECE_UNIT`) : l'unité de travail est la **pièce**
    (sous-arbre de niveau 1), pas le fichier. Un fichier composite (plusieurs
    documents dans un PDF/.docx) est traité comme un dossier de pièces — voie
@@ -60,6 +68,12 @@ erreur : bouton « Relancer » (ou `POST /api/documents/<id>/retry`).
    déborde `SIMPLE_CONTEXT_BUDGET` → **map-reduce ciblé** (fiche à chaud par pièce,
    pages conservées, cache `_focused_cache`, concurrence `MAP_CONCURRENCY`).
    Pas de boucle ReAct : décomposition + N voies normales + assemblage.
+   `decompose_query` émet aussi, par (sous-)question, une **`instructions`**
+   (ce que le rédacteur doit EXTRAIRE) transmise au *map* (`_focused_summary`) —
+   inspiré du « per-search instructions » d'Open Notebook (cf.
+   `ETUDE-OPEN-NOTEBOOK.md` §3.4). La rédaction reçoit en plus la **liste
+   explicite des node ids autorisés** (`_build_allowed_citations`) : on ne cite
+   QUE ces ids, verbatim (§3.6) — verrou anti-id-inventé.
 6. **Simplicité** : modifications minimales et ciblées, pas de
    sur-conception. Les évaluations factuelles de prompts se font sur
    PLUSIEURS tirages (les Modelfiles sont à température non nulle).
@@ -72,6 +86,15 @@ erreur : bouton « Relancer » (ou `POST /api/documents/<id>/retry`).
 - `pageindex/` est une copie embarquée de VectifyAI/PageIndex (fork de
   fait) : toute modification s'y documente dans ARCHITECTURE.md, sans
   jamais toucher au paradigme ni aux prompts canoniques du cookbook.
+
+## Prompts externalisés
+
+- Les prompts qu'on **itère et qu'on évalue** (grounding ×3, *map* du
+  map-reduce, décomposition) vivent dans **`services/prompts/*.jinja`**,
+  chargés via `services/prompt_templates.py` (`render_prompt(name, **kw)`).
+  Éditer **le gabarit**, pas une chaîne inline (diff lisible, A/B simple pour le
+  skill `evaluer-reponse-sourcee`). Les builders à flot de contrôle
+  (`_build_answer_prompt`…) restent en Python et interpolent ces gabarits.
 
 ## Tests
 

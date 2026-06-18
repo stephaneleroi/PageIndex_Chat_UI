@@ -1,0 +1,236 @@
+{
+  "metadata": {
+    "skill_name": "evaluer-reponse-sourcee",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-06-17T12:08:07Z",
+    "evals_run": [
+      0,
+      1
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 0,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8,
+        "passed": 4,
+        "failed": 1,
+        "total": 5,
+        "time_seconds": 254.2,
+        "tokens": 75758,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Classe le certificat \u00ab Lignier m\u00e9decin \u00bb comme artefact des donn\u00e9es (\ud83d\udfe1) plut\u00f4t que comme une hallucination/fabrication de l'app",
+          "passed": true,
+          "evidence": "#10 \ud83d\udfe1 (certificat sign\u00e9 Lignier, identit\u00e9 Legrand, m\u00e9decin vide) + #7 \ud83d\udd34 mineur (non-recours \u00e0 MEDECINE DOUCE)"
+        },
+        {
+          "text": "D\u00e9tecte au moins un faux verbatim (guillemets sur paraphrase) dans la section versions",
+          "passed": true,
+          "evidence": "#1-#3 s\u00e9rie de faux verbatims via quote"
+        },
+        {
+          "text": "Fonde les constats sur le texte source avec page physique (v\u00e9rification d\u00e9terministe, pas de m\u00e9moire)",
+          "passed": true,
+          "evidence": "verif_source.py page/grep/quote ; chaque constat porte preuve+page physique"
+        },
+        {
+          "text": "S\u00e9pare explicitement d\u00e9fauts de l'app / artefacts de donn\u00e9es / limites connues",
+          "passed": true,
+          "evidence": "Tableau \ud83d\udd34/\ud83d\udfe1/\ud83d\udd35 explicite"
+        },
+        {
+          "text": "Rep\u00e8re l'omission du t\u00e9moin Aline Truite",
+          "passed": false,
+          "evidence": "Aline Truite non mentionn\u00e9e"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 274.3,
+        "tokens": 60239,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "D\u00e9tecte l'affirmation d'exhaustivit\u00e9 interdite (\u00ab aucun autre chiffre \u00bb)",
+          "passed": true,
+          "evidence": "#1 \ud83d\udd34 exhaustivit\u00e9 + d\u00e9monstration p.68"
+        },
+        {
+          "text": "Traite le d\u00e9calage page physique / folio imprim\u00e9 comme limite connue, pas comme erreur",
+          "passed": true,
+          "evidence": "#4 \ud83d\udd35 folio +2 (p.20\u2192'22')"
+        },
+        {
+          "text": "Attribue les omissions de constats au seuil map-reduce forc\u00e9 (artefact de test), pas \u00e0 la r\u00e9daction",
+          "passed": true,
+          "evidence": "#5 \ud83d\udd35 omissions imput\u00e9es au seuil forc\u00e9"
+        },
+        {
+          "text": "V\u00e9rifie les citations contre la page physique du PDF",
+          "passed": true,
+          "evidence": "Pages 17,20-22,54-56,58,68-69 v\u00e9rifi\u00e9es"
+        },
+        {
+          "text": "S\u00e9pare explicitement d\u00e9fauts de l'app / artefacts de donn\u00e9es / limites connues",
+          "passed": true,
+          "evidence": "Tableau \ud83d\udd34/\ud83d\udfe1/\ud83d\udd35 explicite"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 0,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.6,
+        "passed": 3,
+        "failed": 2,
+        "total": 5,
+        "time_seconds": 175.3,
+        "tokens": 99351,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Classe le certificat \u00ab Lignier m\u00e9decin \u00bb comme artefact des donn\u00e9es (\ud83d\udfe1) plut\u00f4t que comme une hallucination/fabrication de l'app",
+          "passed": false,
+          "evidence": "Qualifie \u00ab Lignier m\u00e9decin \u00bb d'\u00ab hallucination caract\u00e9ris\u00e9e / fabrication directe \u00bb \u2014 ne voit pas que le certificat est sign\u00e9 Lignier"
+        },
+        {
+          "text": "D\u00e9tecte au moins un faux verbatim (guillemets sur paraphrase) dans la section versions",
+          "passed": true,
+          "evidence": "Faux verbatim Adrien d\u00e9tect\u00e9 (\u00a72.6/\u00a73)"
+        },
+        {
+          "text": "Fonde les constats sur le texte source avec page physique (v\u00e9rification d\u00e9terministe, pas de m\u00e9moire)",
+          "passed": true,
+          "evidence": "Extraction PyMuPDF, pages physiques v\u00e9rifi\u00e9es"
+        },
+        {
+          "text": "S\u00e9pare explicitement d\u00e9fauts de l'app / artefacts de donn\u00e9es / limites connues",
+          "passed": false,
+          "evidence": "Pas de discipline 3 cat\u00e9gories (m\u00e9lange hallucination/erreur/donn\u00e9es)"
+        },
+        {
+          "text": "Rep\u00e8re l'omission du t\u00e9moin Aline Truite",
+          "passed": true,
+          "evidence": "Aline TRUITE relev\u00e9e comme omission (\u00a72.4, \u00a75)"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.6,
+        "passed": 3,
+        "failed": 2,
+        "total": 5,
+        "time_seconds": 134.1,
+        "tokens": 36914,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "D\u00e9tecte l'affirmation d'exhaustivit\u00e9 interdite (\u00ab aucun autre chiffre \u00bb)",
+          "passed": true,
+          "evidence": "Affirmation d'exhaustivit\u00e9 relev\u00e9e (cite CLAUDE.md \u2014 fuite)"
+        },
+        {
+          "text": "Traite le d\u00e9calage page physique / folio imprim\u00e9 comme limite connue, pas comme erreur",
+          "passed": true,
+          "evidence": "Citations 6/6 sous convention page physique (via CLAUDE.md) ; aucune erreur de page signal\u00e9e"
+        },
+        {
+          "text": "Attribue les omissions de constats au seuil map-reduce forc\u00e9 (artefact de test), pas \u00e0 la r\u00e9daction",
+          "passed": false,
+          "evidence": "Omissions trait\u00e9es comme d\u00e9faut de compl\u00e9tude, PAS comme artefact du seuil forc\u00e9"
+        },
+        {
+          "text": "V\u00e9rifie les citations contre la page physique du PDF",
+          "passed": true,
+          "evidence": "Tableau de synth\u00e8se des pages v\u00e9rifi\u00e9"
+        },
+        {
+          "text": "S\u00e9pare explicitement d\u00e9fauts de l'app / artefacts de donn\u00e9es / limites connues",
+          "passed": false,
+          "evidence": "Pas de classement 3 cat\u00e9gories"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 0.9,
+        "stddev": 0.1414,
+        "min": 0.8,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 264.25,
+        "stddev": 14.2128,
+        "min": 254.2,
+        "max": 274.3
+      },
+      "tokens": {
+        "mean": 67998.5,
+        "stddev": 10973.5901,
+        "min": 60239,
+        "max": 75758
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.6,
+        "stddev": 0.0,
+        "min": 0.6,
+        "max": 0.6
+      },
+      "time_seconds": {
+        "mean": 154.7,
+        "stddev": 29.1328,
+        "min": 134.1,
+        "max": 175.3
+      },
+      "tokens": {
+        "mean": 68132.5,
+        "stddev": 44149.6261,
+        "min": 36914,
+        "max": 99351
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.30",
+      "time_seconds": "+109.6",
+      "tokens": "-134"
+    }
+  },
+  "notes": []
+}
