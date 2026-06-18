@@ -17,9 +17,21 @@ visionneuse, garde-fous · 10. Notes & annotations · 11. Modèles & config ·
 
 ### 1.1 Le principe (en 30 secondes)
 
-1. **Indexer** : un PDF devient un **arbre** (sa table des matières) ; on calcule
-   **une fiche d'identité par « pièce »** (résumé structuré : nature, auteur,
-   destinataire, faits saillants…).
+1. **Indexer** : un PDF devient un **arbre** (sa table des matières — reprise des
+   **signets** du PDF si présents, sinon reconstruite, §4.1), puis on calcule **une
+   fiche d'identité par « pièce »** (résumé structuré : nature, auteur, destinataire,
+   faits saillants…). **Une seule fiche par pièce, jamais par nœud** ; selon la
+   **nature détectée** du fichier (`is_compilation`, §4.3), elle est construite de
+   **deux manières** :
+   - **dossier de pièces indépendantes** (défaut) → chaque fiche **isolée**, pièce par
+     pièce (anti-contamination) ;
+   - **document unique à plan cohérent** (chapitres/parties) → fiches **cumulatives** :
+     chaque section est résumée avec, **en contexte, les fiches des sections
+     précédentes** (continuité du fil).
+
+   *(Les deux produisent le même objet — une fiche par pièce ; seul le mode de
+   construction change. La voie « synthèse globale » à la requête se contente ensuite
+   d'**agréger** ces fiches déjà construites — §1.3, §8.3.)*
 2. **Répondre** en **deux temps** :
    - **CHOISIR** où regarder — un LLM **raisonne sur les fiches + titres** de
      l'arbre (jamais sur le texte intégral) pour retenir les bons nœuds : c'est
