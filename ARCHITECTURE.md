@@ -13,7 +13,9 @@ visionneuse, garde-fous · 10. Notes & annotations · 11. Modèles & config ·
 
 ---
 
-## 1. Le modèle mental (en 30 secondes)
+## 1. Le modèle mental
+
+### 1.1 Le principe (en 30 secondes)
 
 1. **Indexer** : un PDF devient un **arbre** (sa table des matières) ; on calcule
    **une fiche d'identité par « pièce »** (résumé structuré : nature, auteur,
@@ -25,8 +27,7 @@ visionneuse, garde-fous · 10. Notes & annotations · 11. Modèles & config ·
    - **LIRE puis RÉDIGER** — on charge le **texte** des seuls nœuds retenus et on
      rédige une réponse **citée à la page**.
 3. Pas de base vectorielle, pas d'embeddings : on **navigue dans une carte du
-   document par raisonnement**, comme un greffier qui feuillette un dossier en
-   lisant les intitulés.
+   document par raisonnement**, comme un greffier qui feuillette un dossier.
 
 **Conséquence fondatrice — la qualité de la fiche EST la qualité du retrieval.**
 Comme le *choix* se fait sur les fiches, **une fiche pauvre rend une pièce
@@ -35,6 +36,34 @@ parce que la fiche ne portait ni auteur, ni destinataire, ni nature. Le correcti
 **conforme** n'a pas été d'ajouter une recherche plein-texte, mais d'**enrichir la
 fiche** (§4.3). *Quand une pièce est ratée, on améliore l'arbre — on ne contourne
 jamais le paradigme.*
+
+### 1.2 Trois mots à connaître (détaillés en §2)
+
+- **Pièce** — un **document logique** (une audition, une note, un rapport, un
+  chapitre…) = un **nœud de premier niveau** de l'arbre. C'est l'**unité de
+  travail** : on sélectionne, lit et cite *par pièce*. Un fichier peut contenir
+  **une** pièce (un PV) ou **plusieurs** (un PDF « dossier ») ; et **un répertoire
+  de fichiers est, lui aussi, un dossier de pièces**.
+- **Fiche (d'identité)** — le **résumé structuré d'une pièce** (nature, auteur,
+  destinataire, personnes, objet, points saillants — chaque fait suivi de sa page).
+- **`tree_search`** — l'étape « **choisir** » : un LLM lit les **fiches + titres**
+  (jamais le texte) et renvoie la liste des nœuds pertinents.
+
+### 1.3 Les quatre voies de réponse (survol — détail en §7-8)
+
+Selon la question, l'app emprunte **automatiquement** (routing, §7) **une** voie :
+
+| Voie | Quand | Comment (en bref) |
+|---|---|---|
+| **Conversation libre** | aucun document | modèle **nu**, sans sources |
+| **Mono-pièce** | une pièce visée (intention `detail`) | `tree_search` dans la pièce → **lecture du texte** |
+| **Synthèse globale** | « vue d'ensemble » (intention `overview`) | **agrège les fiches**, sans lire le texte |
+| **Voie corpus** | un **dossier de ≥ 2 pièces** (intention `detail`) | `tree_search` choisit des pièces **sur leurs fiches** → **lecture de leur texte** (ou **map-reduce** si le volume déborde) ; les fiches de **toutes** les pièces restent jointes **« en appui » (mode inventaire)** pour rester citables |
+
+> Les termes employés partout dans la suite — **voie corpus**, **inventaire**,
+> **map-reduce**, intentions **`overview` / `detail`** — sont posés ici en survol,
+> puis détaillés en **§5** (sélection), **§7** (routing) et **§8** (voies). Garde
+> cette table en tête : elle rend le reste du document lisible d'une traite.
 
 ---
 
