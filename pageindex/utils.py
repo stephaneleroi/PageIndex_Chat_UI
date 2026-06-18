@@ -838,28 +838,55 @@ def _piece_subtree(node):
     return out
 
 
-def segment_pieces(page_list, opt):
-    """PRÉ-SEGMENTATION d'un fichier composite. Un fichier réunit parfois PLUSIEURS
-    documents distincts (un « dossier » de pièces). UN seul appel LLM (bien moins
-    cher que le découpage récursif : on n'envoie que les en-têtes de page) décide sur
-    quelles pages commence un NOUVEAU document. Renvoie [(start, end, title)] 1-indexé.
-    CONSERVATEUR : doute / échec / un seul document → 1 pièce (= comportement actuel,
-    tout le fichier passe par tree_parser)."""
+def tree_from_bookmarks(doc, start, end):
+    """Construit l'arbre INTERNE d'une plage de pages [start, end] (1-indexé) à partir
+    des SIGNETS PDF (table des matières intégrée au fichier), au lieu de tree_parser
+    (qui est une cascade d'appels LLM). Gratuit, instantané, déterministe. Renvoie une
+    liste de nœuds {title, start_index, end_index, nodes} au MÊME format que tree_parser,
+    ou None si aucun signet exploitable dans la plage (→ repli tree_parser).
+
+    Les signets ne segmentent PAS en pièces (ils éclatent un rapport unique, cf. mesure
+    sur Synthèse) : ils décrivent la STRUCTURE interne. Convention end_index identique à
+    post_processing : à plat, un nœud s'étend jusqu'au signet SUIVANT − 1 (le parent ne
+    possède donc que son préambule, les enfants possèdent le reste) ; list_to_tree imbrique
+    ensuite selon les niveaux."""
+    if not isinstance(doc, str):
+        return None
+    try:
+        toc = pymupdf.open(doc).get_toc()
+    except Exception:
+        return None
+    entries = [(lvl, (title or '').strip(), page) for lvl, title, page in toc
+               if isinstance(page, int) and start <= page <= end]
+    if not entries:
+        return None
+    base = min(lvl for lvl, _, _ in entries)  # rebase les niveaux : min → 1
+
+    flat, counters = [], []
+    for lvl, title, page in entries:
+        level = lvl - base + 1
+        if level <= len(counters):
+            counters = counters[:level]
+            counters[level - 1] += 1
+        else:                       # descente : padder les parents implicites
+            while len(counters) < level - 1:
+                counters.append(1)
+            counters.append(1)
+        flat.append({'structure': '.'.join(map(str, counters)),
+                     'title': title or f'Section (p. {page})',
+                     'start_index': page})
+    for i, item in enumerate(flat):
+        item['end_index'] = (max(item['start_index'], flat[i + 1]['start_index'] - 1)
+                             if i < len(flat) - 1 else end)
+    return list_to_tree(flat)
+
+
+def _piece_starts_llm(page_list, opt):
+    """UN appel LLM : sur quelles pages commence un NOUVEAU document ? On n'envoie que
+    les premières lignes de chaque page. [] sur échec/doute."""
     import json as _json
-    n = len(page_list)
-    one = [(1, n, None)]
-    if n <= SMALL_DOC_MAX_PAGES:
-        return one
-
-    def _first_line(i):
-        for ln in (page_list[i][0] or "").splitlines():
-            ln = ln.strip()
-            if ln:
-                return ln[:80]
-        return ""
-
     heads = []
-    for i in range(n):
+    for i in range(len(page_list)):
         lines = [x.strip() for x in (page_list[i][0] or "").splitlines() if x.strip()]
         heads.append(f"p{i+1}: " + " | ".join(lines[:5])[:200])
     prompt = (
@@ -877,25 +904,48 @@ def segment_pieces(page_list, opt):
     try:
         raw = ChatGPT_API(opt.model, prompt) or ""
     except Exception as e:
-        logging.error(f"segment_pieces: appel LLM échoué ({e}) → 1 pièce")
-        return one
-    starts = []
+        logging.error(f"segment_pieces[LLM]: appel échoué ({e})")
+        return []
     m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if m:
-        try:
-            starts = _json.loads(m.group(0)).get("starts", [])
-        except Exception:
-            starts = []
+    if not m:
+        return []
+    try:
+        return _json.loads(m.group(0)).get("starts", [])
+    except Exception:
+        return []
+
+
+def segment_pieces(page_list, opt, doc=None):
+    """PRÉ-SEGMENTATION en PIÈCES d'un fichier composite (un « dossier » réunissant
+    PLUSIEURS documents distincts). UN appel LLM décide sur quelles pages commence un
+    NOUVEAU document. Renvoie [(start, end, title)] 1-indexé. CONSERVATEUR : doute /
+    échec / un seul document → 1 pièce.
+
+    NB : ni les signets ni la typographie ne servent à segmenter en pièces — mesuré sur
+    Synthèse, tous deux sur-découpent un rapport unique (signets → 7, typo → 15), seul le
+    LLM le voit comme 1 document. Les signets servent désormais à l'arbre INTERNE
+    (tree_from_bookmarks)."""
+    n = len(page_list)
+    one = [(1, n, None)]
+    if n <= SMALL_DOC_MAX_PAGES:
+        return one
+
+    def _first_line(i):
+        for ln in (page_list[i][0] or "").splitlines():
+            ln = ln.strip()
+            if ln:
+                return ln[:80]
+        return ""
+
+    starts = _piece_starts_llm(page_list, opt)
     clean = sorted({int(s) for s in starts
                     if str(s).strip().isdigit() and 1 <= int(s) <= n})
     if 1 not in clean:
         clean = [1] + clean
     if len(clean) <= 1:
         return one
-    bounds = []
-    for k, s in enumerate(clean):
-        e = (clean[k + 1] - 1) if k + 1 < len(clean) else n
-        bounds.append((s, e, _first_line(s - 1) or None))
+    bounds = [(s, (clean[k + 1] - 1) if k + 1 < len(clean) else n,
+               _first_line(s - 1) or None) for k, s in enumerate(clean)]
     logging.info(f"segment_pieces: {len(bounds)} pièce(s) → {[(s, e) for s, e, _ in bounds]}")
     return bounds
 

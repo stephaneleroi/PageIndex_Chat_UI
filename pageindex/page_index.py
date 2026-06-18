@@ -1106,11 +1106,11 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
     logger.info({'total_token': sum([page[1] for page in page_list])})
 
     async def page_index_builder():
-        # PRÉ-SEGMENTATION déterministe/LLM des pièces (avant tree_parser) : sur un
-        # fichier COMPOSITE, on pose d'abord les frontières de PIÈCES, puis on
-        # n'applique tree_parser qu'à L'INTÉRIEUR de chaque pièce → frontières de
-        # niveau 1 fiables (ne dépendent plus du découpage global du LLM).
-        boundaries = segment_pieces(page_list, opt)
+        # PRÉ-SEGMENTATION en PIÈCES (1 appel LLM) : sur un fichier COMPOSITE, on pose
+        # d'abord les frontières de PIÈCES, puis on bâtit l'arbre INTERNE de chaque pièce
+        # depuis les signets PDF si présents (gratuit), sinon tree_parser. Les frontières
+        # de niveau 1 ne dépendent plus du découpage global du LLM.
+        boundaries = segment_pieces(page_list, opt, doc=doc)
         if len(boundaries) > 1:
             logger.info({'presegmentation_pieces': len(boundaries),
                          'boundaries': [(s, e) for s, e, _ in boundaries]})
@@ -1120,8 +1120,12 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
                 node = {'title': title or f'Pièce (p. {start})',
                         'start_index': start, 'end_index': end}
                 if len(sub_pages) > SMALL_DOC_MAX_PAGES:
-                    sub_tree = await tree_parser(sub_pages, opt, doc=doc, logger=logger)
-                    shift_node_indices(sub_tree, start - 1)  # 1..len(sous-liste) → pages globales
+                    # Arbre interne : signets de la plage (gratuit, déjà en pages
+                    # GLOBALES → aucun recalage) ; sinon repli tree_parser (LLM).
+                    sub_tree = tree_from_bookmarks(doc, start, end)
+                    if sub_tree is None:
+                        sub_tree = await tree_parser(sub_pages, opt, doc=doc, logger=logger)
+                        shift_node_indices(sub_tree, start - 1)  # 1..len(sous-liste) → pages globales
                     node['nodes'] = sub_tree
                 structure.append(node)
         elif len(page_list) <= SMALL_DOC_MAX_PAGES:
@@ -1135,7 +1139,11 @@ def page_index_main(doc, opt=None, summary_progress_callback=None):
             logger.info({'small_doc_single_node': title,
                          'pages': len(page_list)})
         else:
-            structure = await tree_parser(page_list, opt, doc=doc, logger=logger)
+            # Document unique > seuil : arbre interne depuis les signets si présents
+            # (gratuit, déterministe — économise toute la cascade LLM de tree_parser),
+            # sinon tree_parser (comportement historique).
+            structure = (tree_from_bookmarks(doc, 1, len(page_list))
+                         or await tree_parser(page_list, opt, doc=doc, logger=logger))
         if opt.if_add_node_id == 'yes':
             write_node_id(structure)
         if opt.if_add_node_text == 'yes':
