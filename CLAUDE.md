@@ -14,8 +14,14 @@
   budgets (~31k tokens), marge ~1,6×, ~76 Go VRAM. Toute hausse des budgets
   (`SIMPLE_CONTEXT_BUDGET`, `CORPUS_INVENTORY_BUDGET`) doit rester sous 65536,
   sinon Ollama tronque silencieusement (citations faussées).
-- Indexation : résumés de pièces à **concurrence bornée** (`SUMMARY_CONCURRENCY=3`)
-  — sans borne, N gros appels concurrents gèlent Ollama.
+- Indexation : résumés de pièces à **concurrence bornée** (`SUMMARY_CONCURRENCY=3`
+  par défaut) — sans borne, N gros appels concurrents gèlent Ollama. Idem côté
+  requête pour le map-reduce (`MAP_CONCURRENCY=3`). Les **deux sont surchargeables
+  par variable d'environnement** du même nom : garder `3` sur Ollama (un seul gros
+  modèle local, limité par la bande passante mémoire), aligner sur
+  `OLLAMA_NUM_PARALLEL` si on l'augmente, ou pousser plus haut derrière **vLLM**
+  (vrai *continuous batching*). vLLM ne tourne PAS sur Mac (CUDA-first, pas de
+  Metal) : ces leviers visent le serveur vLLM/GPU du ministère.
 
 ## ⚠️ Piège n°1 : ne JAMAIS modifier un fichier .py pendant une indexation
 

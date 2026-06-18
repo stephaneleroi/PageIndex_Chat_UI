@@ -418,7 +418,9 @@ Output JSON only:
     CORPUS_MAX_PIECES_READ = 12     # pièces lues en intégral (le reste : citable via l'inventaire)
     CORPUS_PIECE_DRILL_THRESHOLD = 20000  # au-delà, une pièce composite est sélectionnée
     #   section par section (tree_search interne) au lieu d'être lue en entier (hiérarchie niv. 2)
-    MAP_CONCURRENCY = 3             # synthèses ciblées (map) concurrentes max (santé Ollama)
+    # Synthèses ciblées (map) concurrentes max (santé Ollama). Surchargeable par env :
+    # aligner sur OLLAMA_NUM_PARALLEL, ou pousser plus haut derrière vLLM (continuous batching).
+    MAP_CONCURRENCY = int(os.environ.get("MAP_CONCURRENCY", "3"))
 
     def _build_simple_answer_prompt(self, query, context, history_context, grounding,
                                     allowed_citations: str = "", user_consignes: str = ""):

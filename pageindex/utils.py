@@ -826,8 +826,11 @@ Directly return the sheet, do not include any other text."""
 # résumé du préambule de tête, souvent un en-tête pauvre).
 _PIECE_TITLE_RE = re.compile(r"^\s*(?:document|pi[eè]ce|annexe|rapport)\s", re.IGNORECASE)
 PIECE_SUMMARY_MAX_CHARS = 60000  # garde-fou : pièce énorme tronquée pour le résumé
-SUMMARY_CONCURRENCY = 3  # résumés de pièces concurrents max : au-delà, N connexions
-                         # simultanées saturent/gèlent Ollama (un seul gros modèle local)
+SUMMARY_CONCURRENCY = int(os.environ.get("SUMMARY_CONCURRENCY", "3"))
+                         # résumés de pièces concurrents max : au-delà, N connexions
+                         # simultanées saturent/gèlent Ollama (un seul gros modèle local).
+                         # Surchargeable par env : aligner sur OLLAMA_NUM_PARALLEL, ou
+                         # pousser plus haut derrière vLLM (vrai continuous batching).
 
 
 def _piece_subtree(node):

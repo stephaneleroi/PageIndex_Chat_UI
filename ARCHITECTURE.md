@@ -401,7 +401,8 @@ doit extraire* (inspiré du « per-search instructions » d'Open Notebook).
 (surchargeable par env `PAGEINDEX_CTX_BUDGET`), `SIMPLE_MAX_NODES = 10`,
 `CORPUS_SELECT_BUDGET = 48000`, `CORPUS_INVENTORY_BUDGET = 45000`,
 `CORPUS_MAX_PIECES_READ = 12`, `CORPUS_PIECE_DRILL_THRESHOLD = 20000`,
-`MAP_CONCURRENCY = 3`, `REFLECT_ACCEPT_THRESHOLD = 6`, `USE_PIECE_UNIT = True`.
+`MAP_CONCURRENCY = 3` (surchargeable par env `MAP_CONCURRENCY`),
+`REFLECT_ACCEPT_THRESHOLD = 6`, `USE_PIECE_UNIT = True`.
 
 ---
 
@@ -626,7 +627,8 @@ des `<physical_index_X>` ; (6) réparation du sommaire ; (7) timeout LLM 180 s ;
 (8) tokenizer avec repli `o200k_base` ; (9) **fusion des nœuds redondants** ;
 (10) **aucune température imposée** ; (11) **régime compilation vs document unique**
 (`is_compilation`) ; (12) **citations de page dans les fiches** (`(p. N)`) ;
-(13) **concurrence bornée des résumés** (`SUMMARY_CONCURRENCY = 3`).
+(13) **concurrence bornée des résumés** (`SUMMARY_CONCURRENCY = 3`, surchargeable
+par env du même nom — comme `MAP_CONCURRENCY` côté requête).
 
 ---
 
