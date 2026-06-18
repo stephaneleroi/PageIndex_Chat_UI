@@ -517,6 +517,50 @@ def list_focused_fiches(doc_id):
     return jsonify({'fiches': document_store.get_focused_fiches(doc_id)})
 
 
+@api_bp.route('/folders/<path:folder>/structure', methods=['GET'])
+def get_folder_structure(folder):
+    """Structure CONSOLIDÉE d'un répertoire. Conceptuellement, un dossier de N
+    pièces ≡ un document concaténant N pièces (c'est déjà ainsi qu'il est traité
+    au retrieval, cf. la voie corpus). On agrège ici, pour l'IHM, les pièces de
+    niveau 1 (détection canonique `piece_head_nodes`) de TOUS ses fichiers PRÊTS.
+    Lecture seule, aucun appel LLM, aucun impact indexation/retrieval."""
+    from pageindex.utils import piece_head_nodes
+
+    def _span(head):
+        starts, ends, stack = [], [], [head]
+        while stack:
+            n = stack.pop()
+            if n.get('start_index'):
+                starts.append(n['start_index'])
+            if n.get('end_index'):
+                ends.append(n['end_index'])
+            stack.extend(n.get('nodes') or [])
+        return (min(starts) if starts else None, max(ends) if ends else None)
+
+    docs = [d for d in document_store.get_all_documents() if (d.folder or '') == folder]
+    ready = [d for d in docs if d.status == 'ready']
+    pieces = []
+    for d in sorted(ready, key=lambda x: (x.filename or '').lower()):
+        tree = document_store.get_tree(d.doc_id)
+        if not tree:
+            continue
+        heads = piece_head_nodes(tree)
+        single = len(heads) <= 1
+        for h in heads:
+            start, end = _span(h)
+            pieces.append({
+                'doc_id': d.doc_id,
+                'filename': d.filename,
+                'node_id': h.get('node_id'),
+                'title': d.filename if single else ((h.get('title') or '').strip() or d.filename),
+                'summary': (h.get('summary') or '').strip(),
+                'start_index': start,
+                'end_index': end,
+            })
+    return jsonify({'folder': folder, 'total_docs': len(docs),
+                    'ready_docs': len(ready), 'pieces': pieces})
+
+
 @api_bp.route('/documents/<doc_id>/notes', methods=['GET'])
 def list_doc_notes(doc_id):
     """Notes utilisateur (annotations) du document, par node_id."""

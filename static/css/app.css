@@ -352,6 +352,21 @@ body {
 .folder-group summary i { color: var(--text-secondary); }
 .folder-docs { display: flex; flex-direction: column; gap: 10px; padding: 0 12px 12px; }
 
+/* Structure consolidée d'un dossier (un dossier de N pièces = un document de N pièces) */
+.folder-struct { margin: 0 12px 10px; border: 1px dashed var(--border); border-radius: 10px; background: var(--bg); }
+.folder-struct > summary { list-style: none; cursor: pointer; padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.folder-struct > summary::-webkit-details-marker { display: none; }
+.folder-struct > summary i { color: var(--accent, #4a7); }
+.folder-struct-hint { font-weight: 400; font-style: italic; opacity: .7; }
+.folder-struct-body { padding: 4px 12px 12px; }
+.folder-struct-loading, .folder-struct-empty, .folder-struct-note { font-size: 12px; color: var(--text-secondary); padding: 4px 0; }
+.folder-struct-head { font-size: 12px; color: var(--text-secondary); margin: 2px 0 8px; }
+.folder-piece { border-left: 2px solid var(--border); padding: 4px 0 4px 10px; margin-bottom: 8px; cursor: pointer; }
+.folder-piece:hover { border-left-color: var(--accent, #4a7); }
+.folder-piece-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.folder-piece-title { font-weight: 600; font-size: 13px; }
+.folder-piece-file { font-size: 11px; color: var(--text-secondary); opacity: .8; }
+
 /* Ligne de dossier dans la liste Q-R */
 .kb-folder-row {
     display: flex; align-items: center; gap: 8px;

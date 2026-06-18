@@ -401,13 +401,30 @@ function renderLibrary(allSessions = []) {
     let html = (byFolder.get('') || []).map(d => renderDocCard(d)).join('');
     [...byFolder.keys()].filter(f => f).sort().forEach(f => {
         const items = byFolder.get(f);
+        const readyN = items.filter(d => d.status === 'ready').length;
+        const structBlock = readyN ? `
+            <details class="folder-struct" data-folder="${esc(f)}">
+                <summary><i class="bi bi-diagram-3"></i> Structure consolidée du dossier
+                    <span class="folder-struct-hint">— un dossier de N pièces = un document de N pièces</span></summary>
+                <div class="folder-struct-body"></div>
+            </details>` : '';
         html += `<details class="folder-group" open>
             <summary><i class="bi bi-folder2"></i> ${esc(f)}
                 <span class="docs-count-badge">${items.length}</span></summary>
+            ${structBlock}
             <div class="folder-docs">${items.map(d => renderDocCard(d)).join('')}</div>
         </details>`;
     });
     grid.innerHTML = html;
+    // Aperçu « structure consolidée » du dossier : chargé à la première ouverture
+    // (lazy → pas de N requêtes au rendu de la bibliothèque).
+    grid.querySelectorAll('details.folder-struct').forEach(el => {
+        el.addEventListener('toggle', () => {
+            if (!el.open || el.dataset.loaded) return;
+            el.dataset.loaded = '1';
+            loadFolderStructure(el.dataset.folder, el.querySelector('.folder-struct-body'));
+        });
+    });
     grid.querySelectorAll('[data-action="chat"]').forEach(el => {
         el.addEventListener('click', e => {
             e.stopPropagation();
@@ -438,6 +455,42 @@ function renderLibrary(allSessions = []) {
             showDocPreview(el.dataset.docId);
         });
     });
+}
+
+// Charge et rend la structure consolidée d'un dossier (toutes les pièces de tous
+// ses fichiers prêts). Réutilise renderFiche() et showNodePreview() — présentation
+// seule, identité (doc, node) préservée.
+async function loadFolderStructure(folder, container) {
+    if (!container) return;
+    container.innerHTML = '<div class="folder-struct-loading">Chargement de la structure…</div>';
+    try {
+        const path = folder.split('/').map(encodeURIComponent).join('/');
+        const r = await fetch(`/api/folders/${path}/structure`).then(x => x.json());
+        const pieces = r.pieces || [];
+        if (!pieces.length) {
+            container.innerHTML = '<div class="folder-struct-empty">Aucune pièce prête pour l\'instant.</div>';
+            return;
+        }
+        const note = (r.ready_docs < r.total_docs)
+            ? `<div class="folder-struct-note">${r.ready_docs}/${r.total_docs} fichiers prêts (les autres s'ajouteront une fois indexés).</div>` : '';
+        const head = `<div class="folder-struct-head">${pieces.length} pièce(s) — vue consolidée</div>`;
+        container.innerHTML = note + head + pieces.map(renderFolderPiece).join('');
+        container.querySelectorAll('[data-piece]').forEach(el => {
+            el.addEventListener('click', () => showNodePreview(el.dataset.node, el.dataset.doc));
+        });
+    } catch (e) {
+        container.innerHTML = '<div class="folder-struct-empty">Erreur de chargement de la structure.</div>';
+    }
+}
+
+function renderFolderPiece(p) {
+    const pages = p.start_index
+        ? `<span class="sr-node-pages">p. ${p.start_index}${p.end_index && p.end_index !== p.start_index ? '–' + p.end_index : ''}</span>` : '';
+    const fiche = p.summary ? `<div class="sr-fiche sr-fiche-piece">${renderFiche(p.summary)}</div>` : '';
+    return `<div class="folder-piece" data-piece data-doc="${esc(p.doc_id)}" data-node="${esc(p.node_id || '')}" title="Ouvrir « ${esc(p.title)} » dans le document">
+        <div class="folder-piece-row"><span class="sr-piece-marker">◆</span><span class="folder-piece-title">${esc(p.title)}</span><span class="folder-piece-file">${esc(p.filename)}</span>${pages}</div>
+        ${fiche}
+    </div>`;
 }
 
 function renderDocCard(d) {
