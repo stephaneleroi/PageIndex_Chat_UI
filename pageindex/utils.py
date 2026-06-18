@@ -841,6 +841,131 @@ def _piece_subtree(node):
     return out
 
 
+def tree_from_bookmarks(doc, start, end):
+    """Construit l'arbre INTERNE d'une plage de pages [start, end] (1-indexé) à partir
+    des SIGNETS PDF (table des matières intégrée au fichier), au lieu de tree_parser
+    (qui est une cascade d'appels LLM). Gratuit, instantané, déterministe. Renvoie une
+    liste de nœuds {title, start_index, end_index, nodes} au MÊME format que tree_parser,
+    ou None si aucun signet exploitable dans la plage (→ repli tree_parser).
+
+    Les signets ne segmentent PAS en pièces (ils éclatent un rapport unique, cf. mesure
+    sur Synthèse) : ils décrivent la STRUCTURE interne. Convention end_index identique à
+    post_processing : à plat, un nœud s'étend jusqu'au signet SUIVANT − 1 (le parent ne
+    possède donc que son préambule, les enfants possèdent le reste) ; list_to_tree imbrique
+    ensuite selon les niveaux."""
+    if not isinstance(doc, str):
+        return None
+    try:
+        toc = pymupdf.open(doc).get_toc()
+    except Exception:
+        return None
+    entries = [(lvl, (title or '').strip(), page) for lvl, title, page in toc
+               if isinstance(page, int) and start <= page <= end]
+    if not entries:
+        return None
+    base = min(lvl for lvl, _, _ in entries)  # rebase les niveaux : min → 1
+
+    flat, counters = [], []
+    for lvl, title, page in entries:
+        level = lvl - base + 1
+        if level <= len(counters):
+            counters = counters[:level]
+            counters[level - 1] += 1
+        else:                       # descente : padder les parents implicites
+            while len(counters) < level - 1:
+                counters.append(1)
+            counters.append(1)
+        flat.append({'structure': '.'.join(map(str, counters)),
+                     'title': title or f'Section (p. {page})',
+                     'start_index': page})
+    for i, item in enumerate(flat):
+        item['end_index'] = (max(item['start_index'], flat[i + 1]['start_index'] - 1)
+                             if i < len(flat) - 1 else end)
+    return list_to_tree(flat)
+
+
+def _piece_starts_llm(page_list, opt):
+    """UN appel LLM : sur quelles pages commence un NOUVEAU document ? On n'envoie que
+    les premières lignes de chaque page. [] sur échec/doute."""
+    import json as _json
+    heads = []
+    for i in range(len(page_list)):
+        lines = [x.strip() for x in (page_list[i][0] or "").splitlines() if x.strip()]
+        heads.append(f"p{i+1}: " + " | ".join(lines[:5])[:200])
+    prompt = (
+        "Ce fichier PDF réunit peut-être PLUSIEURS documents distincts dans un seul "
+        "fichier (un « dossier » de pièces : notice, rapport, note, ordonnance, "
+        "certificat, audition, avis, requête, lexique, procès-verbal…).\n"
+        "Première(s) ligne(s) de chaque page :\n\n" + "\n".join(heads) + "\n\n"
+        "Si c'est UN SEUL document continu (un rapport avec des chapitres/sections), "
+        'réponds {"starts": [1]}.\n'
+        "Sinon, donne les pages où commence un NOUVEAU document. Une SOUS-SECTION "
+        "d'un même document (« Situation familiale », « Conclusions », "
+        "« Recommandations », « Chiffres clés »…) n'est PAS un nouveau document.\n"
+        'Réponds UNIQUEMENT en JSON : {"starts": [numéros de page de début]}'
+    )
+    try:
+        raw = ChatGPT_API(opt.model, prompt) or ""
+    except Exception as e:
+        logging.error(f"segment_pieces[LLM]: appel échoué ({e})")
+        return []
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        return _json.loads(m.group(0)).get("starts", [])
+    except Exception:
+        return []
+
+
+def segment_pieces(page_list, opt, doc=None):
+    """PRÉ-SEGMENTATION en PIÈCES d'un fichier composite (un « dossier » réunissant
+    PLUSIEURS documents distincts). UN appel LLM décide sur quelles pages commence un
+    NOUVEAU document. Renvoie [(start, end, title)] 1-indexé. CONSERVATEUR : doute /
+    échec / un seul document → 1 pièce.
+
+    NB : ni les signets ni la typographie ne servent à segmenter en pièces — mesuré sur
+    Synthèse, tous deux sur-découpent un rapport unique (signets → 7, typo → 15), seul le
+    LLM le voit comme 1 document. Les signets servent désormais à l'arbre INTERNE
+    (tree_from_bookmarks)."""
+    n = len(page_list)
+    one = [(1, n, None)]
+    if n <= SMALL_DOC_MAX_PAGES:
+        return one
+
+    def _first_line(i):
+        for ln in (page_list[i][0] or "").splitlines():
+            ln = ln.strip()
+            if ln:
+                return ln[:80]
+        return ""
+
+    starts = _piece_starts_llm(page_list, opt)
+    clean = sorted({int(s) for s in starts
+                    if str(s).strip().isdigit() and 1 <= int(s) <= n})
+    if 1 not in clean:
+        clean = [1] + clean
+    if len(clean) <= 1:
+        return one
+    bounds = [(s, (clean[k + 1] - 1) if k + 1 < len(clean) else n,
+               _first_line(s - 1) or None) for k, s in enumerate(clean)]
+    logging.info(f"segment_pieces: {len(bounds)} pièce(s) → {[(s, e) for s, e, _ in bounds]}")
+    return bounds
+
+
+def shift_node_indices(nodes, off):
+    """Recale les index d'un sous-arbre issu de tree_parser sur une SOUS-liste de
+    pages (coordonnées 1..len(sous-liste)) vers les pages GLOBALES du document."""
+    if isinstance(nodes, dict):
+        nodes = [nodes]
+    for node in nodes or []:
+        for k in ('start_index', 'end_index', 'physical_index'):
+            v = node.get(k)
+            if isinstance(v, int):
+                node[k] = v + off
+        shift_node_indices(node.get('nodes') or [], off)
+
+
 def piece_head_nodes(structure):
     """Têtes des pièces : liste de ≥2 racines → autant de pièces ; racine unique
     englobante → enfants du conteneur de pièces numérotées (Document/Pièce/
@@ -859,38 +984,30 @@ def piece_head_nodes(structure):
     return [root]
 
 
-def _fiche_field(summary, label):
-    m = re.search(rf"{label}\s*:\s*(.+)", summary or "")
-    return m.group(1).strip() if m else ""
-
-
 def is_compilation(structure, heads=None):
     """True = dossier de pièces INDÉPENDANTES → résumé ISOLÉ par pièce (anti-
-    contamination) ; False = document UNIQUE → résumé CUMULATIF des sections.
-    Détection ASYMÉTRIQUE : « document unique » seulement sur signal FORT de plan
-    cohérent ; compilation PAR DÉFAUT (le côté sûr — jamais de contamination)."""
+    contamination) ; False = document UNIQUE (plan cohérent) → résumé CUMULATIF.
+
+    Décidé sur les TITRES des têtes : c'est le SEUL signal disponible quand la fonction
+    est appelée — à l'indexation, AVANT que les résumés existent. (L'ancienne version
+    lisait des champs « Nature/Auteur/Date » des résumés : toujours vides à ce stade,
+    donc tout document à ≥2 têtes retombait à tort en compilation, y compris un vrai
+    rapport unique comme une synthèse à chapitres.) Détection ASYMÉTRIQUE : « document
+    unique » seulement sur signal FORT (la MAJORITÉ des têtes portent un mot de plan :
+    partie, chapitre, titre…) ; compilation PAR DÉFAUT (côté sûr, jamais de
+    contamination entre pièces indépendantes)."""
     heads = heads if heads is not None else piece_head_nodes(structure)
     if len(heads) <= 1:
         return False  # une seule pièce → document simple (pas une compilation)
-    if any(re.match(r"^\s*(?:document|pi[eè]ce|annexe)\s+\d",
-                    h.get("title") or "", re.IGNORECASE) for h in heads):
+    titles = [(h.get("title") or "") for h in heads]
+    if any(re.match(r"^\s*(?:document|pi[eè]ce|annexe)\s+\d", t, re.IGNORECASE)
+           for t in titles):
         return True  # pièces numérotées (Document/Pièce/Annexe N) → compilation
-    dates, authors, natures = set(), set(), []
-    for h in heads:
-        s = h.get("summary") or ""
-        d = _fiche_field(s, "Date et heure")
-        a = _fiche_field(s, "Auteur")
-        if d and d not in ("—", "-"):
-            dates.add(d.lower()[:30])
-        if a and a not in ("—", "-"):
-            authors.add(a.lower()[:30])
-        natures.append((_fiche_field(s, "Nature") or "").lower())
-    if len(dates) >= 2 or len(authors) >= 2:
-        return True  # dates / auteurs divergents entre pièces → compilation
     _PLAN = ("chapitre", "chapter", "partie", "part", "section", "titre",
              "livre", "préface", "preface", "introduction", "conclusion")
-    if any(any(p in n for p in _PLAN) for n in natures):
-        return False  # plan cohérent et aucune divergence → document unique
+    plan_like = sum(1 for t in titles if any(p in t.lower() for p in _PLAN))
+    if plan_like > len(heads) // 2:
+        return False  # la MAJORITÉ des têtes = plan cohérent → document unique
     return True  # défaut sûr : compilation
 
 

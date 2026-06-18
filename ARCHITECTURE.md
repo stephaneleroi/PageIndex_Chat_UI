@@ -160,7 +160,7 @@ fiche** ; ses sous-nœuds n'ont que leur **titre**. Le niveau 2 raisonne donc su
 
 ### 2.2 Où servent les fiches (récapitulatif)
 
-La fiche d'une pièce sert à **cinq endroits** — à garder en tête, car « fiche pauvre
+La fiche d'une pièce sert à **quatre endroits** — à garder en tête, car « fiche pauvre
 = pièce ratée » se répercute partout :
 
 | # | Où | Ce que la fiche y fait | Réf. |
@@ -168,8 +168,10 @@ La fiche d'une pièce sert à **cinq endroits** — à garder en tête, car « f
 | 1 | **Sélection** (`tree_search` niveau 1) | c'est **sur les fiches** que le LLM choisit les pièces (titres + fiches, **jamais** le texte) ; au niveau 2, la fiche de tête sert de contexte | §5 |
 | 2 | **Synthèse globale** (`overview`) | on **agrège les fiches** et on rédige dessus, **sans lire le texte** | §8.3 |
 | 3 | **Inventaire en appui** (voie corpus `detail`) | voir l'encadré ci-dessous | §8.4 |
-| 4 | **Indexation** (`is_compilation`) | les dates/auteurs lus dans les fiches décident du régime **cumulatif vs isolé** | §4.3 |
-| 5 | **Affichage IHM** | Vue Structure + structure consolidée de dossier (`renderFiche`) | §10–10.1 |
+| 4 | **Affichage IHM** | Vue Structure + structure consolidée de dossier (`renderFiche`) | §10–10.1 |
+
+*(Le **régime** cumulatif/isolé des fiches, lui, est décidé en amont sur les **titres**
+des têtes — pas sur les fiches : voir `is_compilation`, §4.3.)*
 
 > **Le « mode inventaire » (point 3) — à bien comprendre.** Dans la voie **corpus**
 > (`detail`, ≥ 2 pièces), `tree_search` ne retient que **quelques** pièces dont on
@@ -269,12 +271,22 @@ toute question) — par opposition aux fiches **« à chaud »** du map-reduce (
    indexation, le résultat y est **réécrit** (`{pdf_sha256, page_count, structure}`).
 3. **Construction de l'arbre** (`indexing_service.index_pdf()` →
    `pageindex.page_index_main()`) : extraction texte (PyMuPDF + suppression
-   en-têtes/pieds répétés ; OCR vision en repli pour pages scannées), détection du
-   sommaire (**20 premières pages**), table « titre → page », vérification LLM +
-   réparation (`fix_incorrect_toc_with_retries`, **3 tentatives**), hiérarchie,
-   `node_id` (`0000`, `0001`…), texte balisé `<page_N>`, **découpage des pages
-   partagées** entre deux pièces, **fusion des nœuds redondants**. Échec → statut
-   erreur (bouton « Relancer »).
+   en-têtes/pieds répétés ; OCR vision en repli pour pages scannées), puis :
+   - **Pré-segmentation en pièces** (`pageindex/utils.py — segment_pieces()`) : sur un
+     fichier **composite** (un « dossier » réunissant plusieurs documents), **un seul
+     appel LLM** décide les pages de début de chaque document. Conservateur : doute /
+     document unique → **1 pièce**. *(Ni les signets ni la typographie ne segmentent en
+     pièces : mesuré, tous deux sur-découpent un rapport unique — Synthèse → 7/15 alors
+     que c'est UN document.)*
+   - **Arbre interne** de chaque pièce — **signets PDF présents** (`tree_from_bookmarks()`)
+     → l'arbre est bâti depuis la table des matières intégrée (`get_toc()`), **gratuit,
+     instantané, déterministe** (Synthèse : ~16 min de `tree_parser` LLM → **2 ms**) ;
+     **sinon** (`tree_parser()`) → détection du sommaire (**20 premières pages**), table
+     « titre → page », vérification LLM + réparation (`fix_incorrect_toc_with_retries`,
+     **3 tentatives**), hiérarchie.
+   - Puis, dans tous les cas : `node_id` (`0000`, `0001`…), texte balisé `<page_N>`,
+     **découpage des pages partagées** entre deux nœuds, **fusion des nœuds redondants**.
+     Échec → statut erreur (bouton « Relancer »).
 4. **Résumé par pièce** (§4.3).
 5. **Préparation** (`rag_service.prepare_document()`) : rendu JPEG des pages,
    `node_map`, surlignages (bbox) ; statut `ready`. Tout est écrit dans
@@ -292,11 +304,15 @@ une fiche **complète** (pas le seul préambule de l'en-tête).
 
 | Cas | Détection (`pageindex/utils.py — is_compilation()`) | Traitement |
 |---|---|---|
-| **Compilation** (pièces indépendantes — **défaut sûr**) | pièces numérotées, **ou** dates/auteurs divergents | fiches **isolées**, en parallèle (`SUMMARY_CONCURRENCY = 3` — sinon N gros appels gèlent Ollama). Anti-contamination. |
-| **Document unique** (plan cohérent) | aucune pièce numérotée, dates/auteurs non divergents, **et** natures de plan (chapitre/partie/section/préface…) | fiches **cumulatives** : chaque section reçoit en contexte les fiches précédentes (continuité du fil) |
+| **Compilation** (pièces indépendantes — **défaut sûr**) | pièces **numérotées** (`Document/Pièce/Annexe N`), **ou** pas de majorité de mots de plan dans les titres | fiches **isolées**, en parallèle (`SUMMARY_CONCURRENCY = 3` — sinon N gros appels gèlent Ollama). Anti-contamination. |
+| **Document unique** (plan cohérent) | la **majorité** des **titres** de têtes portent un mot de plan (chapitre/partie/section/titre/préface…) | fiches **cumulatives** : chaque section reçoit en contexte les fiches précédentes (continuité du fil) |
 
-Mal classer une compilation en document unique **contaminerait** les fiches : le défaut
-penche toujours vers **compilation**.
+Décision sur les **titres** des têtes — c'est le **seul signal disponible à l'indexation**,
+**avant** que les fiches existent. *(L'ancienne version lisait dates/auteurs/natures dans
+les fiches : toujours vides à ce stade → tout document à ≥ 2 têtes basculait à tort en
+compilation, y compris un vrai rapport unique à chapitres comme Synthèse.)* Mal classer une
+compilation en document unique **contaminerait** les fiches : le défaut penche toujours vers
+**compilation**.
 
 ---
 
@@ -638,9 +654,12 @@ frontière** (anti-contamination) ; (4) **résumé identitaire par PIÈCE**
 des `<physical_index_X>` ; (6) réparation du sommaire ; (7) timeout LLM 180 s ;
 (8) tokenizer avec repli `o200k_base` ; (9) **fusion des nœuds redondants** ;
 (10) **aucune température imposée** ; (11) **régime compilation vs document unique**
-(`is_compilation`) ; (12) **citations de page dans les fiches** (`(p. N)`) ;
-(13) **concurrence bornée des résumés** (`SUMMARY_CONCURRENCY = 3`, surchargeable
-par env du même nom — comme `MAP_CONCURRENCY` côté requête).
+(`is_compilation`, décidé sur les **titres** des têtes — §4.3) ; (12) **citations de
+page dans les fiches** (`(p. N)`) ; (13) **concurrence bornée des résumés**
+(`SUMMARY_CONCURRENCY = 3`, surchargeable par env du même nom — comme `MAP_CONCURRENCY`
+côté requête) ; (14) **pré-segmentation en pièces** d'un fichier composite
+(`segment_pieces`, **1 appel LLM**, conservateur) ; (15) **arbre interne depuis les
+signets PDF** (`tree_from_bookmarks`, gratuit/déterministe, repli `tree_parser`).
 
 ---
 
@@ -652,9 +671,11 @@ par env du même nom — comme `MAP_CONCURRENCY` côté requête).
   modèle tend à **énumérer** les pièces plutôt qu'à les fondre.
 - **Sélection tributaire de la fiche** : une pièce est jugée sur sa fiche (§5.3) —
   fiche pauvre → pièce potentiellement ratée.
-- **Frontières de pièces posées par le LLM** à l'indexation ; les fichiers composites
-  mal bornés peuvent faire « déborder » une pièce sur sa voisine (atténué par les IDs
-  de citation autorisés, §9.2 ; pré-segmentation déterministe à l'étude).
+- **Frontières de pièces posées par le LLM** (`segment_pieces`, 1 appel) à l'indexation
+  — **non déterministes** sur une frontière subtile ; un fichier composite mal borné peut
+  faire « déborder » une pièce sur sa voisine (atténué par les IDs de citation autorisés,
+  §9.2). *(L'arbre **interne** d'une pièce, lui, est **déterministe** quand des signets
+  PDF existent — `tree_from_bookmarks`, §4.1.)*
 - Pages sans couche texte **transcrites par le modèle vision** (sinon page vide).
 - Détection de sommaire limitée aux **20 premières pages**.
 - Indexation et réponses **non déterministes** (LLM, température Modelfile) → évaluer
