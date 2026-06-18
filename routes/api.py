@@ -511,24 +511,10 @@ def update_tree_node(doc_id, node_id):
 
 
 @api_bp.route('/documents/<doc_id>/focused-fiches', methods=['GET'])
-def get_focused_fiches(doc_id):
-    """Fiches à chaud (map-reduce) générées par les requêtes, regroupées par
-    pièce (head node). En MÉMOIRE (cache de l'agent) → perdues au redémarrage."""
-    cache = getattr(rag_service.agent, '_focused_cache', {}) or {}
-    by_piece = {}
-    for key, fiche in cache.items():
-        # Clé du cache map-reduce : (doc_id, head_id, query[, instructions]).
-        # Le 4e élément « instructions » (per-search, Open Notebook) est ignoré ici.
-        if not (isinstance(key, tuple) and len(key) >= 3) or not fiche:
-            continue
-        cdoc, head_id, query = key[0], key[1], key[2]
-        if cdoc != doc_id:
-            continue
-        by_piece.setdefault(head_id, []).append({
-            'query': query, 'text': fiche.get('text', ''),
-            'nid': fiche.get('nid', head_id),
-        })
-    return jsonify({'fiches': by_piece})
+def list_focused_fiches(doc_id):
+    """Fiches à chaud (map-reduce), persistées comme les notes
+    (focused_fiches.json à côté de la structure), regroupées par pièce (head node)."""
+    return jsonify({'fiches': document_store.get_focused_fiches(doc_id)})
 
 
 @api_bp.route('/documents/<doc_id>/notes', methods=['GET'])

@@ -419,6 +419,41 @@ class DocumentStore:
         self._save_notes(doc, notes)
         return True
 
+    # ---- Fiches à chaud du map-reduce (persistées, homogène avec les notes) ----
+    # Même principe que les notes : un JSON à côté de structure.json, sans altérer
+    # l'arbre PageIndex. Forme : { head_id: [{query, text, nid, ts}] }. Générées
+    # automatiquement par le map-reduce (une fiche ciblée par pièce), elles
+    # survivent au redémarrage du serveur (≠ ancien cache mémoire).
+    def _focused_path(self, doc) -> str:
+        return os.path.join(os.path.dirname(doc.structure_path), 'focused_fiches.json')
+
+    def get_focused_fiches(self, doc_id: str) -> dict:
+        doc = self.get_document(doc_id)
+        if not doc:
+            return {}
+        path = self._focused_path(doc)
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def save_focused_fiche(self, doc_id: str, head_id: str, query: str,
+                           text: str, nid: str) -> None:
+        """Persiste une fiche ciblée du map-reduce, dédupliquée par (pièce, question)."""
+        doc = self.get_document(doc_id)
+        if not doc or not text:
+            return
+        fiches = self.get_focused_fiches(doc_id)
+        lst = [f for f in (fiches.get(head_id) or []) if f.get('query') != query]
+        lst.append({'query': query, 'text': text, 'nid': nid or head_id,
+                    'ts': time.strftime('%Y-%m-%d %H:%M')})
+        fiches[head_id] = lst
+        with open(self._focused_path(doc), 'w', encoding='utf-8') as f:
+            json.dump(fiches, f, indent=2, ensure_ascii=False)
+
     def cache_node_map(self, doc_id: str, node_map: dict):
         self.node_map_cache[doc_id] = node_map
 

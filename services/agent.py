@@ -876,7 +876,11 @@ Provide a clear, comprehensive answer in French."""
                     fiche = await self._focused_summary(
                         title, doc_id, head_id, text, query, model_type,
                         instructions=instructions)
-                self._focused_cache[ckey] = fiche         # mémorise (même None)
+                self._focused_cache[ckey] = fiche         # cache mémoire (anti-recalcul)
+                if fiche:                                 # persiste sur disque (homogène avec les notes)
+                    self.store.save_focused_fiche(
+                        doc_id, head_id, query,
+                        fiche.get("text", ""), fiche.get("nid", head_id))
                 return fiche
 
             tasks = []
