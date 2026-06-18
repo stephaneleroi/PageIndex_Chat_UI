@@ -461,8 +461,9 @@ fichier composite.
 
 **REST** (`routes/api.py`) : `documents` (CRUD, upload, retry, status, tree,
 node-info, analysis, text-highlights, **`notes`** GET/POST/DELETE,
-**`focused-fiches`** GET, édition titre/résumé d'un nœud), `sessions` (CRUD, truncate,
-messages, verify), `config/models`, `skills`.
+**`focused-fiches`** GET, édition titre/résumé d'un nœud),
+**`folders/<folder>/structure`** GET (structure consolidée d'un répertoire, §10.1),
+`sessions` (CRUD, truncate, messages, verify), `config/models`, `skills`.
 **Socket.IO** (`routes/socket_handlers.py`) — entrée : `agent_chat`, `get_history`,
 `stop_generating` ; sortie : `status` / `nodes` / `chunk` / `agent_step` /
 `agent_reflect` / `answer_done` / `done` / `stopped` / `error`.
@@ -493,6 +494,20 @@ La **Vue Structure** elle-même est une vue deux panneaux (arbre des pièces per
 à gauche, lecture du PDF + fiches + notes à droite), en plus des 3 pages
 (Bibliothèque · conversation mono-document · questions-réponses KB). Sessions
 persistées et **isolées par mode** (`single` / `kb`).
+
+### 10.1 Structure consolidée d'un répertoire (Bibliothèque)
+
+Conceptuellement, **un dossier de N pièces ≡ un document concaténant N pièces** —
+c'est déjà ainsi que la voie corpus le traite (arbre synthétique « Dossier », §8.4).
+La Bibliothèque le **reflète** : chaque groupe-dossier (« Mes documents ») offre un
+aperçu dépliable **« Structure consolidée du dossier »** qui liste **les pièces de
+niveau 1 de TOUS ses fichiers prêts** (titre + fiche + pages), cliquables vers la
+pièce source (`app.js — loadFolderStructure` / `renderFolderPiece`, **chargé en
+lazy** à l'ouverture). Données fournies par `GET /api/folders/<folder>/structure`,
+qui agrège via la **détection canonique** `pageindex.piece_head_nodes` (lecture
+seule, **0 appel LLM**). Un fichier lui-même composite y voit **toutes** ses pièces
+remonter (ex. dossier de 25 fichiers → 30 pièces). **100 % présentation** — aucun
+impact indexation/retrieval/citations ; les cartes par fichier restent.
 
 ---
 
