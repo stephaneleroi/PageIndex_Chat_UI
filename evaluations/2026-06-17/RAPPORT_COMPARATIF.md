@@ -19,7 +19,7 @@ artefact de données / 🔵 limite connue).
 | Cas | Question | `main` | `Etude_Open_Notebook` |
 |---|---|---|---|
 | T1 | note CHAUVIN (1 pièce désignée) | 15 | **18** |
-| T2 | dossier pénal composite (synthèse+faits+versions) | **16,5** | 12,5 |
+| T2 | dossier pénal composite (synthèse+faits+versions) | 16,5 · 16,0 · 13,5 *(3 tirages, voir §T2)* | 12,5 · 13,5 *(2 tirages)* |
 | T3 | les différents rapports (4 pièces) | 12 | **16,5** |
 | T4 | résumé d'un gros document (overview) | 17 | **18** |
 | T5 | recommandations+chiffres (budget forcé 2000) | 15,5 | 15 |
@@ -56,12 +56,27 @@ artefact de données / 🔵 limite connue).
    l'évite. Le map-reduce **fonctionne** (citations à la page préservées), mais la
    troncature forcée réduit la couverture (attendu).
 
-## Différences possiblement liées au bruit (à confirmer en multi-tirages)
+## §T2 — multi-tirages (l'écart apparent était surtout de la variance)
 
-3. **T2 (composite) — avantage apparent `main` (16,5 vs 12,5).** Sur ce tirage,
-   `Etude_Open_Notebook` a inventé une heure de début de GAV (08 h 58) et **interverti
-   des horaires** de la chronologie (facette `overview`). `main` était plus propre sur
-   la chronologie. À rejouer : peut être un tirage défavorable plutôt qu'une régression.
+Le 1er tirage donnait `main` 16,5 vs `Etude_Open_Notebook` 12,5 — apparemment un net
+avantage `main`. **Rejoué plusieurs fois, l'écart se dissout en grande partie :**
+
+| Branche | Tirages | Moyenne | Plage |
+|---|---|---|---|
+| `main` | **16,5 · 16,0 · 13,5** | ~15,3 | [13,5 ; 16,5] |
+| `Etude_Open_Notebook` | **12,5 · 13,5** | ~13,0 | [12,5 ; 13,5] |
+
+- Les **plages se chevauchent** : le **pire tirage `main` (13,5)** rejoint le meilleur
+  d'Etude_Open_Notebook. T2 est un cas à **forte variance** (rédaction à température ≠ 0).
+- Le défaut de **qualification des circonstances aggravantes** (réduire les 2 — « par
+  plusieurs personnes » + « menace d'arme par destination » — à une seule, ou « usage »
+  au lieu de « menace ») apparaît **sur les deux branches selon le tirage**
+  (Etude_ON tirages 1-2 ; `main` tirage 3) → **faiblesse commune**, pas une régression
+  de branche.
+- `main` a, en moyenne, des tirages un peu meilleurs, mais l'écart **n'est pas
+  statistiquement séparé** sur 2-3 tirages. Conclusion : **pas de supériorité de branche
+  fiable sur T2** ; c'est un cas instable à faiblesse commune. *(Leçon de méthode : ne
+  jamais conclure une différence de branche sur un seul tirage — cf. principe 6.)*
 
 ## Défauts communs aux deux branches (indépendants de la branche)
 
@@ -94,10 +109,19 @@ artefact de données / 🔵 limite connue).
 
 ## Bilan
 
-À ce tirage, `Etude_Open_Notebook` est **devant en moyenne (16,0 vs 15,2)**, porté
-par un **avantage structurel net sur l'anti-contamination** des fichiers composites
-(T1, T3) — vraisemblablement le verrou « IDs autorisés ». `main` reste devant sur
-T2 (à reconfirmer). Les défauts de fond (faux verbatims, exhaustivité en map-reduce,
-contamination de chiffres en overview, bornes d'index) sont **communs** et
-constituent la feuille de route. Détail par cas : `*/EVAL_T*.md` ; captures et
+Le seul écart **structurel et fiable** est en faveur d'`Etude_Open_Notebook` :
+l'**anti-contamination** des fichiers composites (T1, T3) — vraisemblablement le verrou
+« IDs autorisés » — où `main` laisse fuir le contenu d'une pièce mal bornée et
+Etude_Open_Notebook re-ventile proprement. L'avantage apparent de `main` sur **T2 s'est
+révélé être surtout de la variance** (multi-tirages : plages qui se chevauchent,
+faiblesse commune sur la qualification pénale — voir §T2). Le routage **T5** diffère
+(map-reduce sur Etude_ON, lecture directe sur `main`, budget égal). Les défauts de fond
+(faux verbatims, exhaustivité en map-reduce, contamination de chiffres en overview,
+bornes d'index) sont **communs** et constituent la feuille de route.
+
+> ⚠️ Comparaison à **2-3 tirages par cellule** : seul T1/T3 (anti-contamination) est
+> un écart franc et répété. Pour T2/T4/T5, prévoir plus de tirages avant toute
+> conclusion ferme de branche.
+
+Détail par cas : `*/EVAL_T*.md` (T2 : `*/EVAL_T2_procedure*.md`) ; captures et
 traces : `*/audits/T*.md`.
