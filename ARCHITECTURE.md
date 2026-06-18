@@ -3,9 +3,10 @@
 > Application de **questions-réponses documentaires sourcées**, 100 % locale
 > (Ollama), construite au-dessus de la bibliothèque [PageIndex](https://github.com/VectifyAI/PageIndex).
 > Document de référence sur le fonctionnement interne. Plan :
-> 1. Idée & paradigme · 2. **Vocabulaire** (à lire en premier) · 3. Couches &
-> fichiers · 4. **Indexation** (à froid) · 5. **Traitement d'une question** ·
-> 6. Citations & IHM · 7. Modèles & config · 8. Modifications locales · 9. Limites.
+> 1. Idée & paradigme · 2. **Vocabulaire** (à lire en premier) · 3. Couches,
+> fichiers & **prompts externalisés** · 4. **Indexation** (à froid) ·
+> 5. **Traitement d'une question** · 6. Citations, **notes** & IHM ·
+> 7. Modèles & config · 8. Modifications locales · 9. Limites.
 
 ---
 
@@ -219,9 +220,11 @@ PageIndex_Chat_UI/
 │   ├── agent.py                #   DocumentAgent : routing + voies de réponse (§5)
 │   ├── rag_service.py          #   PageIndexService (tree_search, LLM/VLM) + RAGService
 │   ├── indexing_service.py     #   index_pdf : pilote page_index_main + étapes
-│   └── skill_manager.py        #   skills Markdown injectables dans les prompts
+│   ├── skill_manager.py        #   skills Markdown injectables dans les prompts
+│   ├── prompt_templates.py     #   render_prompt(name, **kw) → gabarits Jinja
+│   └── prompts/*.jinja         #   prompts ITÉRÉS/ÉVALUÉS (grounding ×3, map, décompose)
 ├── models/
-│   ├── document.py             #   Document / DocumentStore (arbre, node_map, images)
+│   ├── document.py             #   Document / DocumentStore (arbre, node_map, images, notes, fiches à chaud)
 │   └── session.py              #   ChatSession / Message / SessionStore
 ├── routes/
 │   ├── api.py                  #   API REST (documents, sessions, config, skills)
@@ -229,12 +232,27 @@ PageIndex_Chat_UI/
 ├── skills/                     # 3 compétences Markdown
 ├── templates/index.html · static/{js,css}   # SPA
 ├── uploads/  (gitignored)      # PDF téléversés
-└── results/  (gitignored)      # documents/<id>/structure.json, images, sessions
+└── results/  (gitignored)      # documents/<id>/{structure.json, images, notes.json, focused_fiches.json}, sessions
 ```
 
 Le retrieval **ne passe plus** par un registre d'outils ni une boucle ReAct
 (supprimés) : les voies appellent directement `tree_search` et la lecture des
 nœuds.
+
+### 3.1 Prompts externalisés (gabarits Jinja)
+
+Les prompts qu'on **itère et qu'on évalue** vivent dans `services/prompts/*.jinja`,
+chargés par `prompt_templates.render_prompt(name, **kw)` — on édite **le gabarit**,
+pas une chaîne inline (diff lisible, A/B simple pour le skill d'évaluation) :
+
+| Gabarit | Rôle |
+|---|---|
+| `grounding_kb.jinja` · `grounding_single.jinja` · `grounding_summary.jinja` | règles d'ancrage des 3 voies : citer `(doc, node, page)`, ne pas inverser de rôle, **ne pas affirmer l'exhaustivité/absence**, **guillemets = verbatim exact** |
+| `decompose.jinja` | décomposition + classement d'intention + `instructions` par (sous-)question (§5.5) |
+| `focused_summary.jinja` | *map* du map-reduce : fiche à chaud orientée par la question, pages `(p. N)` conservées |
+
+Les builders à flot de contrôle (`_build_answer_prompt`…) restent en Python et
+**interpolent** ces gabarits.
 
 ---
 
@@ -399,11 +417,14 @@ Le dossier est vu comme **un seul arbre** dont les enfants sont les pièces.
 
 **Map-reduce ciblé (fiches à CHAUD)** — *pourquoi* : le texte intégral de
 beaucoup d'auditions ne tient pas dans un contexte unique. *Comment* : on résume
-chaque **pièce** retenue *sous l'angle de la question*, dans **son propre** appel
-(`_focused_summary`, **pages `(p. N)` conservées** → citations préservées),
-concurrence bornée (`MAP_CONCURRENCY = 3`), résultats mis en **cache**
-(`_focused_cache` — réutilisés sur retry/reformulation). Puis on rédige sur ces
-fiches.
+chaque **pièce** retenue *sous l'angle de la question* (et selon une consigne
+d'**`instructions`** émise par `decompose_query` — ce que le *map* doit EXTRAIRE,
+§5.5), dans **son propre** appel (`_focused_summary`, **pages `(p. N)` conservées**
+→ citations préservées), concurrence bornée (`MAP_CONCURRENCY = 3`). Les fiches à
+chaud sont mises en **cache mémoire** (`_focused_cache`, anti-recalcul
+intra-session) **et persistées sur disque** (`focused_fiches.json`, §6.1) : elles
+**survivent au redémarrage** et s'affichent par pièce dans la Vue Structure. Puis
+on rédige sur ces fiches.
 
 ```
    fiches à froid (toutes les pièces)
@@ -434,6 +455,14 @@ fiches.
   versions) est scindée ; chaque sous-question suit la voie de **son** intention,
   les réponses sont assemblées en **sections `##`** sous un seul cycle. **Pas** de
   boucle ReAct (supprimée) : décomposition + N voies normales + assemblage.
+  `decompose_query` émet aussi, par (sous-)question, une **`instructions`** (ce que
+  le rédacteur / le *map* doit EXTRAIRE — inspiré du « per-search instructions »
+  d'Open Notebook, `ETUDE-OPEN-NOTEBOOK.md`).
+- **IDs de citation autorisés** (`_build_allowed_citations`) : la rédaction reçoit
+  la **liste explicite des `node_id` mobilisés** et ne peut citer **que ceux-là**,
+  verbatim — verrou anti-id-inventé et **anti-contamination**. L'évaluation A/B a
+  montré que ce verrou réduit nettement la fuite de contenu entre pièces mal bornées
+  d'un fichier composite (`evaluations/`, `RAPPORT_COMPARATIF.md`).
   ⚠️ Une demande **mono-nature portant sur plusieurs pièces** (« détaille chaque
   rapport ») n'est **pas** décomposée — sinon le LLM devine un nombre de
   sous-questions et risque de **sous-couvrir** (cas observé : 2 rapports sur 4).
@@ -453,13 +482,37 @@ fiches.
 
 L'IHM a **3 pages** : Bibliothèque (import, statut, structure, aperçu),
 conversation mono-document, questions-réponses KB (sélection de documents/dossiers).
-Sessions persistées et **isolées par mode** (`single` / `kb`).
+Sessions persistées et **isolées par mode** (`single` / `kb`). La **Vue Structure**
+(deux panneaux : arbre des pièces persistant à gauche, lecture du PDF à droite)
+affiche, **par pièce**, ses **fiches à chaud** (🔥, map-reduce) et les **notes
+utilisateur** (§6.1).
 
 **API REST** (`routes/api.py`) : `documents` (CRUD, upload, retry, status, tree,
-node-info, analysis, text-highlights), `sessions` (CRUD, truncate, messages,
-verify), `config/models`, `skills`. **Socket.IO** : entrée `agent_chat`,
+node-info, analysis, text-highlights, **`notes`** GET/POST/DELETE,
+**`focused-fiches`** GET), `sessions` (CRUD, truncate, messages, verify),
+`config/models`, `skills`. **Socket.IO** : entrée `agent_chat`,
 `get_history`, `stop_generating` ; sortie `status` / `nodes` / `chunk` /
 `agent_step` / `agent_reflect` / `answer_done` / `done` / `error`.
+
+### 6.1 Notes & annotations (persistées, sans toucher l'arbre)
+
+Deux familles de **notes par pièce**, stockées **à part** de l'arbre PageIndex
+(qui reste l'index de recherche **intact**), selon **le même motif** (un JSON à
+côté de `structure.json`, géré par `DocumentStore`) :
+
+| | Notes **utilisateur** | **Fiches à chaud** (map-reduce) |
+|---|---|---|
+| Origine | saisies (« Ajouter une note ») | générées par le *map* (§5.4) |
+| Fichier | `notes.json` | `focused_fiches.json` |
+| Store | `add_note` / `get_notes` / `delete_note` | `save_focused_fiche` / `get_focused_fiches` |
+| Forme | `{node_id: [{id, text, ts}]}` | `{head_id: [{query, text, nid, ts}]}` |
+| Route | `/documents/<id>/notes` | `/documents/<id>/focused-fiches` |
+| Durée | disque — survit au redémarrage | disque — survit au redémarrage |
+
+Les deux sont rendues par pièce dans la **Vue Structure** (`srExtrasHtml`). Les
+fiches à chaud sont **dédupliquées par (pièce, question)** ; le cache mémoire
+`_focused_cache` ne sert qu'à éviter de **recalculer** un *map* dans la même
+session — la **source d'affichage est le disque**.
 
 ---
 
@@ -476,7 +529,9 @@ verify), `config/models`, `skills`. **Socket.IO** : entrée `agent_chat`,
   = `FROM gpt-oss:120b` + `PARAMETER num_ctx 65536`, dimensionnée sur le pic des
   budgets (~31k tokens, marge ~1,6×), ~76 Go VRAM. **Toute hausse des budgets
   doit rester sous 65536**, sinon Ollama tronque silencieusement (citations
-  faussées).
+  faussées). Le seuil de bascule map-reduce `SIMPLE_CONTEXT_BUDGET` (défaut 60000)
+  est **surchargeable par variable d'environnement** `PAGEINDEX_CTX_BUDGET` — sert à
+  **forcer le map-reduce en test** (budget bas) sans modifier le code.
 - **Aucune température imposée** (réglages du Modelfile ; `gpt-oss:120b` fixe
   `temperature 1`). Forcer temp 0 dégradait les modèles à raisonnement
   (`DIAGNOSTIC-UEMO.md`) ; en contrepartie les réponses ne sont pas reproductibles
@@ -529,5 +584,9 @@ Ajustements locaux :
 ---
 
 *Études liées : `ETUDE-SEGMENTATION-PIECES.md` (pré-segmentation déterministe),
-`ETUDE-MAP-REDUCE-CIBLE.md` (fiches à chaud, implémenté), `DIAGNOSTIC-UEMO.md`
-(dégradation du modèle par les enrobages), `ETUDE-RAGFLOW.md` (comparatif).*
+`ETUDE-MAP-REDUCE-CIBLE.md` (fiches à chaud, implémenté), `ETUDE-OPEN-NOTEBOOK.md`
+(instructions par recherche, prompts externalisés, IDs de citation autorisés),
+`DIAGNOSTIC-UEMO.md` (dégradation du modèle par les enrobages), `ETUDE-RAGFLOW.md`
+(comparatif). Évaluation : `FONCTIONNEMENT-PAR-TESTS.md` (les voies par 4 cas réels)
+et le skill `.claude/skills/evaluer-reponse-sourcee/` (audit sourcé + chaîne
+« lancer un test → évaluer » ; résultats dans `evaluations/`).*
