@@ -981,38 +981,30 @@ def piece_head_nodes(structure):
     return [root]
 
 
-def _fiche_field(summary, label):
-    m = re.search(rf"{label}\s*:\s*(.+)", summary or "")
-    return m.group(1).strip() if m else ""
-
-
 def is_compilation(structure, heads=None):
     """True = dossier de pièces INDÉPENDANTES → résumé ISOLÉ par pièce (anti-
-    contamination) ; False = document UNIQUE → résumé CUMULATIF des sections.
-    Détection ASYMÉTRIQUE : « document unique » seulement sur signal FORT de plan
-    cohérent ; compilation PAR DÉFAUT (le côté sûr — jamais de contamination)."""
+    contamination) ; False = document UNIQUE (plan cohérent) → résumé CUMULATIF.
+
+    Décidé sur les TITRES des têtes : c'est le SEUL signal disponible quand la fonction
+    est appelée — à l'indexation, AVANT que les résumés existent. (L'ancienne version
+    lisait des champs « Nature/Auteur/Date » des résumés : toujours vides à ce stade,
+    donc tout document à ≥2 têtes retombait à tort en compilation, y compris un vrai
+    rapport unique comme une synthèse à chapitres.) Détection ASYMÉTRIQUE : « document
+    unique » seulement sur signal FORT (la MAJORITÉ des têtes portent un mot de plan :
+    partie, chapitre, titre…) ; compilation PAR DÉFAUT (côté sûr, jamais de
+    contamination entre pièces indépendantes)."""
     heads = heads if heads is not None else piece_head_nodes(structure)
     if len(heads) <= 1:
         return False  # une seule pièce → document simple (pas une compilation)
-    if any(re.match(r"^\s*(?:document|pi[eè]ce|annexe)\s+\d",
-                    h.get("title") or "", re.IGNORECASE) for h in heads):
+    titles = [(h.get("title") or "") for h in heads]
+    if any(re.match(r"^\s*(?:document|pi[eè]ce|annexe)\s+\d", t, re.IGNORECASE)
+           for t in titles):
         return True  # pièces numérotées (Document/Pièce/Annexe N) → compilation
-    dates, authors, natures = set(), set(), []
-    for h in heads:
-        s = h.get("summary") or ""
-        d = _fiche_field(s, "Date et heure")
-        a = _fiche_field(s, "Auteur")
-        if d and d not in ("—", "-"):
-            dates.add(d.lower()[:30])
-        if a and a not in ("—", "-"):
-            authors.add(a.lower()[:30])
-        natures.append((_fiche_field(s, "Nature") or "").lower())
-    if len(dates) >= 2 or len(authors) >= 2:
-        return True  # dates / auteurs divergents entre pièces → compilation
     _PLAN = ("chapitre", "chapter", "partie", "part", "section", "titre",
              "livre", "préface", "preface", "introduction", "conclusion")
-    if any(any(p in n for p in _PLAN) for n in natures):
-        return False  # plan cohérent et aucune divergence → document unique
+    plan_like = sum(1 for t in titles if any(p in t.lower() for p in _PLAN))
+    if plan_like > len(heads) // 2:
+        return False  # la MAJORITÉ des têtes = plan cohérent → document unique
     return True  # défaut sûr : compilation
 
 
