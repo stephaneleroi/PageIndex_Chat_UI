@@ -117,6 +117,36 @@ fiche** ; ses sous-nœuds n'ont que leur **titre**. Le niveau 2 raisonne donc su
 **titres de sections** (+ la fiche de tête en contexte). Petites pièces (≤
 `SMALL_DOC_MAX_PAGES = 4`) = un seul nœud, pas de profondeur.
 
+### 2.2 Où servent les fiches (récapitulatif)
+
+La fiche d'une pièce sert à **cinq endroits** — à garder en tête, car « fiche pauvre
+= pièce ratée » se répercute partout :
+
+| # | Où | Ce que la fiche y fait | Réf. |
+|---|---|---|---|
+| 1 | **Sélection** (`tree_search` niveau 1) | c'est **sur les fiches** que le LLM choisit les pièces (titres + fiches, **jamais** le texte) ; au niveau 2, la fiche de tête sert de contexte | §5 |
+| 2 | **Synthèse globale** (`overview`) | on **agrège les fiches** et on rédige dessus, **sans lire le texte** | §8.3 |
+| 3 | **Inventaire en appui** (voie corpus `detail`) | voir l'encadré ci-dessous | §8.4 |
+| 4 | **Indexation** (`is_compilation`) | les dates/auteurs lus dans les fiches décident du régime **cumulatif vs isolé** | §4.3 |
+| 5 | **Affichage IHM** | Vue Structure + structure consolidée de dossier (`renderFiche`) | §10–10.1 |
+
+> **Le « mode inventaire » (point 3) — à bien comprendre.** Dans la voie **corpus**
+> (`detail`, ≥ 2 pièces), `tree_search` ne retient que **quelques** pièces dont on
+> lit le **texte**. Mais **en plus** de ce texte, on **joint au contexte de
+> rédaction la fiche de TOUTES les pièces du dossier** (`_build_corpus_inventory`,
+> budget `CORPUS_INVENTORY_BUDGET`). *Pourquoi :* qu'une pièce **non lue** reste
+> **citable** et que le rédacteur garde la vue d'ensemble. Cet inventaire est joint
+> dans **les deux sous-cas** de la voie corpus — **lecture directe** ET
+> **map-reduce**. C'est donc un usage des fiches **distinct** de la synthèse globale
+> (§8.3) : là on n'a *que* les fiches ; ici on lit du **texte** ET on a les fiches
+> **en appui**.
+
+> **Ne pas confondre avec le résumé *par document*.** Le **routing**
+> (`decompose_query`) et le léger `docs_overview` des prompts s'appuient sur le
+> **résumé global du document** (`analysis.json`, via `_build_docs_overview`),
+> **pas** sur les fiches de pièces — deux sources de résumé distinctes (niveau
+> document vs niveau pièce).
+
 ---
 
 ## 3. PageIndex (amont) **vs notre couche** — qui fait quoi
