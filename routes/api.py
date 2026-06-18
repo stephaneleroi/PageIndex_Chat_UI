@@ -517,9 +517,11 @@ def get_focused_fiches(doc_id):
     cache = getattr(rag_service.agent, '_focused_cache', {}) or {}
     by_piece = {}
     for key, fiche in cache.items():
-        if not (isinstance(key, tuple) and len(key) == 3) or not fiche:
+        # Clé du cache map-reduce : (doc_id, head_id, query[, instructions]).
+        # Le 4e élément « instructions » (per-search, Open Notebook) est ignoré ici.
+        if not (isinstance(key, tuple) and len(key) >= 3) or not fiche:
             continue
-        cdoc, head_id, query = key
+        cdoc, head_id, query = key[0], key[1], key[2]
         if cdoc != doc_id:
             continue
         by_piece.setdefault(head_id, []).append({
