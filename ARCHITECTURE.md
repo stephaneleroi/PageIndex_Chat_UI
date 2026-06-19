@@ -270,27 +270,118 @@ toute question) — par opposition aux fiches **« à chaud »** du map-reduce (
    PDF **et** une `structure` → arbre **restauré sans aucun appel LLM**. Sinon, après
    indexation, le résultat y est **réécrit** (`{pdf_sha256, page_count, structure}`).
 3. **Construction de l'arbre** (`indexing_service.index_pdf()` →
-   `pageindex.page_index_main()`) : extraction texte (PyMuPDF + suppression
-   en-têtes/pieds répétés ; OCR vision en repli pour pages scannées), puis :
-   - **Pré-segmentation en pièces** (`pageindex/utils.py — segment_pieces()`) : sur un
-     fichier **composite** (un « dossier » réunissant plusieurs documents), **un seul
-     appel LLM** décide les pages de début de chaque document. Conservateur : doute /
-     document unique → **1 pièce**. *(Ni les signets ni la typographie ne segmentent en
-     pièces : mesuré, tous deux sur-découpent un rapport unique — Synthèse → 7/15 alors
-     que c'est UN document.)*
-   - **Arbre interne** de chaque pièce — **signets PDF présents** (`tree_from_bookmarks()`)
-     → l'arbre est bâti depuis la table des matières intégrée (`get_toc()`), **gratuit,
-     instantané, déterministe** (Synthèse : ~16 min de `tree_parser` LLM → **2 ms**) ;
-     **sinon** (`tree_parser()`) → détection du sommaire (**20 premières pages**), table
-     « titre → page », vérification LLM + réparation (`fix_incorrect_toc_with_retries`,
-     **3 tentatives**), hiérarchie.
-   - Puis, dans tous les cas : `node_id` (`0000`, `0001`…), texte balisé `<page_N>`,
-     **découpage des pages partagées** entre deux nœuds, **fusion des nœuds redondants**.
-     Échec → statut erreur (bouton « Relancer »).
-4. **Résumé par pièce** (§4.3).
+   `pageindex.page_index_main()`, code dans `pageindex/page_index.py —
+   page_index_builder()`). C'est l'étape la plus riche : elle **mêle des passes
+   déterministes** (extraction, signets, balisage, fusion) **et des appels LLM** (un
+   pour la segmentation, parfois une cascade pour le sommaire, N pour les fiches). Le
+   détail des étapes — **et de ce qui est reproductible ou non** — est en **§4.1.1**.
+4. **Résumé par pièce** (§4.3) — fait partie de la construction, détaillé à part car
+   c'est lui qui porte la valeur du retrieval.
 5. **Préparation** (`rag_service.prepare_document()`) : rendu JPEG des pages,
    `node_map`, surlignages (bbox) ; statut `ready`. Tout est écrit dans
    `results/documents/<id>/structure.json`.
+
+### 4.1.1 La construction de l'arbre, étape par étape (déterministe vs non)
+
+Tout se joue dans `page_index_builder()`. Lire ce schéma de haut en bas = lire le
+code dans l'ordre. **`◆ déterministe`** = même PDF → même résultat, aucun LLM ;
+**`◇ LLM`** = appel au modèle, donc **non reproductible** (température Modelfile).
+
+```
+PDF
+ │
+ ▼  ÉTAPE A — Extraction du texte des pages      get_page_tokens()        ◆ (+◇ si scan)
+ │     · PyMuPDF page.get_text() page par page                            ◆
+ │     · strip_repeated_page_furniture() : retire en-têtes/pieds RÉPÉTÉS  ◆
+ │       (même ligne, chiffres normalisés, dans ≥60 % des pages)
+ │     · page scannée (< 20 car., ou image + texte squelettique < 200) :
+ │       OCR de SECOURS par le modèle vision                              ◇  ← seul LLM de l'étape
+ │   ⇒ page_list = [(texte, nb_tokens)] par page
+ │
+ ▼  ÉTAPE B — Pré-segmentation en PIÈCES          segment_pieces()        ◇  UN appel LLM
+ │     · « ce PDF réunit-il plusieurs documents ? sur quelles pages
+ │       commence un NOUVEAU document ? » (on n'envoie que les premières
+ │       lignes de chaque page, pas le texte intégral)
+ │     · CONSERVATEUR : doute / échec / un seul document → 1 pièce
+ │   ⇒ frontières [(start, end, titre)]  (1 seule ⇒ document simple)
+ │
+ ▼  ÉTAPE C — Arbre INTERNE de CHAQUE pièce       (3 cas mutuellement exclusifs)
+ │     ├─ pièce ≤ SMALL_DOC_MAX_PAGES (=4)  → 1 seul nœud, AUCUNE détection ◆
+ │     ├─ signets PDF présents (get_toc())  → tree_from_bookmarks()        ◆  gratuit, ~2 ms
+ │     │     l'arbre EST la table des matières intégrée au PDF
+ │     └─ sinon                              → tree_parser()               ◇  cascade LLM
+ │           1. check_toc : y a-t-il un sommaire ? (20 PREMIÈRES pages)    ◇
+ │           2. table « titre → page physique »                           ◇
+ │           3. vérification + réparation  fix_incorrect_toc_with_retries ◇  (3 tentatives)
+ │           4. hiérarchie (post_processing, list_to_tree)                ◆
+ │   ⇒ structure : liste de nœuds {title, start_index, end_index, nodes}
+ │
+ ▼  ÉTAPE D — Finition commune (TOUS les cas ci-dessus)                    ◆  tout déterministe
+ │     · write_node_id        → node_id 0000, 0001…
+ │     · add_node_text_with_labels → texte des pages balisé <page_N>…</page_N>
+ │     · split_shared_boundary_pages → une page partagée par 2 nœuds est
+ │       DÉCOUPÉE (le texte d'un nœud ne contient que SA pièce — anti-contamination)
+ │     · merge_redundant_children → un enfant au texte identique au parent est fusionné
+ │
+ ▼  ÉTAPE E — Résumé (FICHE) par pièce            generate_summaries_…()  ◇  N appels LLM
+ │     · régime compilation/doc-unique décidé par is_compilation()        ◆  (sur les TITRES)
+ │     · une fiche par pièce, concurrence bornée SUMMARY_CONCURRENCY=3     ◇
+ │   ⇒ détaillé en §4.2-4.3
+ ▼
+structure.json
+```
+
+**Récapitulatif — qu'est-ce qui est reproductible ?**
+
+| Étape | Rôle | Reproductible ? |
+|---|---|---|
+| A — extraction texte | pages → texte propre | **◆ oui** (◇ OCR vision **seulement** sur pages scannées) |
+| B — pré-segmentation en pièces | frontières de niveau 1 | **◇ non** (1 appel LLM ; conservateur → souvent « 1 pièce ») |
+| C — arbre interne (≤ 4 p.) | 1 nœud | **◆ oui** (aucune détection) |
+| C — arbre interne (signets) | TdM intégrée → arbre | **◆ oui** (`get_toc()`, gratuit) |
+| C — arbre interne (`tree_parser`) | sommaire reconstruit | **◇ non** (cascade LLM) |
+| D — finition | ids, `<page_N>`, découpage, fusion | **◆ oui** |
+| E — fiches | un résumé par pièce | **◇ non** (N appels LLM) |
+
+Conséquence pratique (cf. §13, et `tests/tree_gate_theo.py`) : **deux indexations du
+même PDF peuvent ne pas donner exactement le même arbre** — sauf si la pièce est
+courte **ou** porte des signets PDF (cas C déterministes), où l'arbre est stable au
+ms près. Le **cache SHA-256** (§4.1, étape 2) gèle de toute façon le premier arbre
+obtenu :
+réimporter ne rejoue aucun LLM, donc plus aucune variation.
+
+> **Pourquoi pas de hiérarchie typographique (tailles de police) pour rendre l'étape C
+> déterministe ?** Approche étudiée — c'est exactement ce que fait le pipeline
+> `ocr_v2_src/src` (voir ci-dessous). Mesuré et **rejeté** : sur des PV de police, les
+> intitulés de rubriques (« AFFAIRE : », « OBJET : », « SUR LES FAITS ») sont à la
+> **même taille que le corps** — aucun signal typographique ne les distingue, donc la
+> détection par seuils en rate l'essentiel. La sémantique « ceci est une rubrique »
+> n'est accessible qu'au LLM (`ETUDE-PARSING-LAYOUT.md`).
+
+### 4.1.2 Ce qui vient (ou non) de `ocr_v2_src/src`
+
+`/Users/stephaneleroi/Dev/demo_pageindex/ocr_v2_src/src/legal_evidence` est le
+pipeline d'un collègue sur le **même domaine** (pièces judiciaires, citations
+auditables, tout en local). Il a été **lu intégralement et étudié avant toute
+implémentation** (`ETUDE-PARSING-LAYOUT.md`, 12/06/2026). **Aucun code n'en a été
+copié** : c'est un système RAG à **embeddings + BM25** (`retrieval.py`,
+`layout.py` : chunks de taille fixe, hiérarchie par **seuils typographiques**), à
+l'opposé du paradigme PageIndex pur (vectorless, arbre par raisonnement). Reprendre
+son retrieval ou son chunking est exclu par décision structurante.
+
+Ce que l'étude a **retenu comme idées** (réimplémentées à notre façon, pas reprises
+telles quelles), et où elles atterrissent dans la construction de l'arbre :
+
+| Idée venue de l'étude `ocr_v2_src` | Chez nous | Étape |
+|---|---|---|
+| Suppression des en-têtes/pieds répétés | `strip_repeated_page_furniture()` — **générique** (répétition inter-pages), pas le filtre **en dur** du collègue (« synthèses du rapport public annuel ») | A |
+| OCR de secours sur pages scannées | LLM **vision** (notre `_ocr_page_with_vision`), là où lui utilise **Tesseract** ; seuils de déclenchement différents | A |
+| Hiérarchie par typographie | **rejetée** comme décideuse (mesure §4.1.1) ; envisagée seulement comme *indice* pour le LLM (non implémenté) | C |
+| bbox calculée à l'indexation | **non reprise** : notre surlignage est réattribué a posteriori (jugée caduque depuis la règle « un nœud par petite pièce », post-scriptum de l'étude) | préparation §4.1 (5) |
+
+*En clair : de `ocr_v2_src` on a hérité de **problèmes bien posés** (furniture, OCR,
+traçabilité) et de **contre-exemples utiles** (la typographie ne suffit pas sur ce
+corpus), pas de lignes de code.*
 
 ### 4.2 Pourquoi un résumé **par pièce** (pas par nœud)
 
