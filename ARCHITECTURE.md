@@ -250,6 +250,11 @@ A/B simple) :
 Les builders à flot de contrôle (`agent.py — _build_answer_prompt`, `_build_allowed_citations`…)
 restent en Python et **interpolent** ces gabarits.
 
+Les **trois gabarits grounding** portent une règle commune ajoutée après le test T8 :
+**réfuter les présupposés faux** — ne pas désigner une entité/un rôle/une date *présupposé(e)
+par la question* mais **non établi(e)** par les pièces (ex. « le mineur » alors que toutes les
+personnes sont « Majeur ») ; l'expliciter au lieu d'en inventer un (cf. §9.3).
+
 ---
 
 ## 4. Indexation — la phase « à FROID »
@@ -629,10 +634,23 @@ fichier composite.
 - **Note de qualité** (`_estimate_quality`, **déterministe, sans LLM**) : citations
   présentes, `node_id` cités ∈ sources, pages ∈ plages réelles, pénalités des
   citations dégénérées. Affichée « Auto-vérification n/10 ».
-- **Réflexion conditionnelle** (`reflect`, LLM) : **sautée** si la réponse est saine
-  (> 400 car., ≥ 2 citations, pas de fuite de raisonnement) ; sinon, si score
-  < `REFLECT_ACCEPT_THRESHOLD = 6` → **une** recherche complémentaire + réécriture
-  (jamais de boucle).
+- **Réflexion conditionnelle** (`reflect`, LLM — **méthode d'instance** ; ne jamais la
+  remettre `@staticmethod`, sinon `self` capte la question, `self.pageindex` lève et
+  l'auto-éval renvoie toujours le défaut `accept/7` = morte) : **sautée** si la réponse
+  est saine (> 400 car., ≥ 2 citations, pas de fuite de raisonnement) — **SAUF** si la
+  question présuppose une entité/un rôle défini (`_question_presupposes`), car une
+  confabulation de présupposé **paraît saine**. Sinon, si `action: retry` et score
+  < `REFLECT_ACCEPT_THRESHOLD = 6` → **re-rédaction ciblée** (voies **mono-pièce ET
+  corpus**), défauts signalés passés en consigne (jamais de boucle).
+- **Réfutation des présupposés faux** (garde-fou ajouté après T8) : `reflect` vérifie en
+  plus que la réponse n'affirme pas une entité/un rôle/une date **présupposé(e) par la
+  question mais non établi(e)** par les pièces (« le mineur » alors que tous sont
+  « Majeur ») → score ≤ 3 + re-rédaction qui doit l'expliciter. Règle aussi posée en
+  amont dans les 3 gabarits grounding (§3.2). *Mesuré (T8b, 5 tirages) : **0/5 avant**
+  (`reflect` mort) → **3/5 après**. `reflect` réparé **rattrape** certains cas en re-rédaction
+  (tirage à score 4), mais il reste lui-même **non déterministe** (peut ne pas se déclencher,
+  ou ne pas flagger) : amélioration réelle, **pas une garantie** — évaluer sur plusieurs
+  tirages.*
 - **Vérification à la demande** : bouton « Vérifier la réponse » (juge LLM,
   `POST /sessions/<id>/messages/<i>/verify`, verdict persisté).
 
