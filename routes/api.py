@@ -458,39 +458,51 @@ def verify_message(session_id, index):
     #   approfondi  → vérificateur sur TOUTE réponse (5 votes) + reflect.
     # Aux niveaux normal/approfondi, si un présupposé faux / défaut est détecté, on
     # propose en plus une RÉPONSE CORRIGÉE (re-rédaction).
-    level = (request.json or {}).get('verification_level', 'normal')
+    data = request.json or {}
+    level = data.get('verification_level', 'normal')
+    # Scope ciblé (pré-détecté ou choisi). Vide → scope « par défaut » selon le niveau.
+    scope = data.get('scope') or (['presupposition'] if level != 'rapide' else [])
+    det_score = msg.quality.get('score') if isinstance(msg.quality, dict) else msg.quality
     agent = rag_service.agent
     import asyncio
     import time as _time
 
     async def _verify():
+        issues = []
+        # --- Vérificateurs DÉTERMINISTES (tous niveaux, sans LLM) ---
+        if 'verbatim' in scope:
+            for s in agent._verbatim_issues(msg.content, context):
+                issues.append(f"Citation entre guillemets introuvable dans les sources : « {s} »")
+        if 'citations' in scope and isinstance(msg.quality, dict):
+            issues += [f"Forme : {p}" for p in (msg.quality.get('problems') or [])]
+        det_issues = list(issues)
         if level == 'rapide':
-            return {'score': msg.quality, 'issues': [], 'missing_info': [],
-                    'note': 'Contrôle déterministe (citations valides, pages réelles) — '
-                            'pas de relecture par le modèle.', 'corrected': None}
+            return {'score': det_score, 'issues': issues, 'missing_info': [],
+                    'note': "Contrôles déterministes (citations/pages, verbatim) — pas de "
+                            "relecture par le modèle.", 'corrected': None}
+        # --- Vérificateurs LLM (normal/approfondi) ---
         votes = 5 if level == 'approfondi' else 3
-        always = (level == 'approfondi')
         corr = None
-        if always or agent._question_presupposes(question):
+        if level == 'approfondi' or 'presupposition' in scope or agent._question_presupposes(question):
             corr = await agent._presupposition_violation(question, msg.content, context, 'text', votes=votes)
         reflection = await agent.reflect(question, msg.content, context, 'text', False)
-        issues = list(reflection.get('issues') or [])
         if corr:
             issues = [f"Présupposé non établi par les pièces : {corr}"] + issues
+        issues += list(reflection.get('issues') or [])
         corrected = None
-        needs_fix = bool(corr) or (reflection.get('action') == 'retry'
-                                   and (reflection.get('score') or 10) < 6)
+        needs_fix = bool(corr) or bool(det_issues) or (reflection.get('action') == 'retry'
+                                                       and (reflection.get('score') or 10) < 6)
         if needs_fix:
             fix = corr or "; ".join(str(i) for i in issues) or "Corriger les défauts signalés."
             rewrite = (
                 "Corrige la réponse ci-dessous en te fondant UNIQUEMENT sur les sources, "
-                f"sans rien inventer. Problème à corriger : {fix}\n\n"
+                f"sans rien inventer. Problème(s) à corriger : {fix}\n\n"
                 f"Question : {question}\n\nSources :\n{context[:30000]}\n\n"
                 f"Réponse à corriger :\n{msg.content}\n\n"
                 "Réécris la réponse en français en intégrant la correction (dis explicitement "
-                "si une entité présupposée n'est pas établie par les pièces), en conservant les "
-                "faits corrects et les citations (doc / node / page). Renvoie UNIQUEMENT la "
-                "réponse réécrite."
+                "si une entité présupposée n'est pas établie par les pièces ; supprime toute "
+                "citation entre guillemets absente des sources), en conservant les faits "
+                "corrects et les citations (doc / node / page). Renvoie UNIQUEMENT la réponse réécrite."
             )
             corrected = await agent.pageindex.call_llm(rewrite, 'text')
         return {'score': reflection.get('score'), 'issues': issues,

@@ -272,7 +272,71 @@ class DocumentAgent:
         if broken:
             score -= 2
             checks.append(f"{broken} citation(s) mal formée(s) (placeholder « source » ou 【】)")
-        return {"score": max(0, min(10, score)), "checks": checks}
+        # `problems` = anomalies seules (on retire les items positifs : nombre de
+        # citations, renvois cohérents). Sert à la pré-détection (besoin de vérif).
+        problems = [c for c in checks
+                    if not (re.fullmatch(r'\d+ citation\(s\)', c)
+                            or c == 'renvois nœud/page cohérents')]
+        return {"score": max(0, min(10, score)), "checks": checks, "problems": problems}
+
+    # Mots/régex de pré-détection (déterministe, sans LLM).
+    _EXHAUSTIVITY_RE = re.compile(
+        r"(aucun(e)?\s+autre|rien\s+d['e]autre|c['e]est\s+tout|"
+        r"il\s+n['e]y\s+a\s+pas\s+d['e]autre|aucun(e)?\s+\w+\s+suppl)", re.IGNORECASE)
+    _REFUTES_RE = re.compile(
+        r"(aucun(e)?\s+\w+\s+n['e]est|pas\s+de\s+\w+|n['e]existe\s+pas|"
+        r"non\s+établi|tous?\s+(deux\s+)?majeurs?|sont\s+majeurs?|"
+        r"n['e]y\s+a\s+pas\s+de)", re.IGNORECASE)
+
+    def _predetect(self, query: str, answer: str, refs: list, tool_context: dict,
+                   partial_context: bool = False) -> Optional[dict]:
+        """Pré-détection DÉTERMINISTE (sans LLM) du BESOIN, du SCOPE et du NIVEAU de
+        vérification. Enrichit la note de qualité ; stockée sur le message → l'IHM
+        propose une vérification déjà cadrée. Aucune vérification LLM n'est lancée ici."""
+        q = self._estimate_quality(answer, refs, tool_context)
+        if q is None:
+            return None
+        text = answer or ""
+        flags, scope = [], []
+
+        # 1) Citations (déterministe) — anomalies de forme déjà calculées.
+        if q.get("problems"):
+            scope.append("citations")
+            flags.append({"scope": "citations",
+                          "label": "; ".join(q["problems"])})
+        # 2) Présupposé : la question présuppose une entité ET la réponse ne la réfute pas.
+        if self._question_presupposes(query) and not self._REFUTES_RE.search(text):
+            scope.append("presupposition")
+            flags.append({"scope": "presupposition",
+                          "label": "la question présuppose une entité ; vérifier qu'elle est bien établie"})
+        # 3) Verbatim : présence de guillemets → à confronter au texte source.
+        if re.search(r"[«»“”]|\"[^\"]{8,}\"", text):
+            scope.append("verbatim")
+            flags.append({"scope": "verbatim",
+                          "label": "citations entre guillemets à confronter au texte source"})
+        # 4) Exhaustivité : affirmation d'absence/exhaustivité (risque grounding).
+        if self._EXHAUSTIVITY_RE.search(text):
+            scope.append("exhaustivity")
+            flags.append({"scope": "exhaustivity",
+                          "label": "affirmation d'exhaustivité/absence — le contexte peut être partiel"})
+        # 5) Contexte partiel (map-reduce / décomposition).
+        if partial_context:
+            scope.append("completeness")
+            flags.append({"scope": "completeness",
+                          "label": "réponse issue d'un contexte partiel (map-reduce/décomposition)"})
+
+        # Niveau recommandé : dérivé de la nature/du nombre de flags.
+        sem = {"presupposition", "exhaustivity", "completeness"} & set(scope)
+        if not scope:
+            level = "rapide"
+        elif partial_context or len(scope) >= 3:
+            level = "approfondi"
+        elif sem:
+            level = "normal"
+        else:
+            level = "rapide"
+        q.update({"need": bool(scope), "scope": scope, "level": level, "flags": flags})
+        return q
 
     # ============================================================ #
     #  Direction 4: Self-reflection
@@ -595,7 +659,7 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking=(f"Step 1 [tree_search]: {thinking}" if thinking else ""),
-            quality=self._estimate_quality(full_answer, refs, tool_context),
+            quality=self._predetect(query, full_answer, refs, tool_context),
         ))
 
         # Vérification : À LA DEMANDE uniquement (bouton « Vérifier », curseur de
@@ -1018,7 +1082,7 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking=(f"Sélection corpus [tree_search]: {thinking}" if thinking else ""),
-            quality=self._estimate_quality(full_answer, refs, tool_context),
+            quality=self._predetect(query, full_answer, refs, tool_context, partial_context=use_map_reduce),
         ))
 
         # Vérification : À LA DEMANDE uniquement (bouton « Vérifier », curseur de
@@ -1039,6 +1103,20 @@ Provide a clear, comprehensive answer in French."""
             r"(mineur|majeur|victime|m[ée]decin|suspect|mis\s+en\s+cause|auteur|"
             r"t[ée]moin|pr[ée]venu|accus[ée]|plaignant|requ[ée]rant|d[ée]funt|"
             r"signataire|destinataire|condamn[ée]|coupable)\b", q))
+
+    @staticmethod
+    def _verbatim_issues(answer: str, context: str) -> list:
+        """Vérificateur VERBATIM DÉTERMINISTE : toute phrase entre guillemets de la
+        réponse doit apparaître mot pour mot dans les sources (tolérance espaces).
+        Renvoie la liste des citations entre guillemets INTROUVABLES dans le contexte."""
+        norm = lambda s: re.sub(r"\s+", " ", (s or "")).strip().lower()
+        ctx = norm(context)
+        issues = []
+        for m in re.findall(r"[«\"“]([^«»\"”]{12,200})[»\"”]", answer or ""):
+            n = norm(m)
+            if n and n not in ctx:
+                issues.append(m.strip()[:90])
+        return issues
 
     @staticmethod
     def _is_global_summary(query: str) -> bool:
@@ -1131,7 +1209,7 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking="Synthèse globale (agrégation des fiches de toutes les pièces)",
-            quality=self._estimate_quality(full_answer, refs, tool_context)))
+            quality=self._predetect(query, full_answer, refs, tool_context)))
 
         healthy = (
             len(full_answer) > 400
@@ -1271,7 +1349,7 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full, nodes=all_refs,
             thinking="Décomposition en sous-questions",
-            quality=self._estimate_quality(full, all_refs, tool_context)))
+            quality=self._predetect(query, full, all_refs, tool_context, partial_context=True)))
 
         # Vérification : à la demande uniquement (voir /verify) — pas de garde-fou
         # automatique sur la réponse assemblée.

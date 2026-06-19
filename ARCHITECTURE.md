@@ -638,17 +638,39 @@ génération — la réponse est rendue directement (rapide). Restent toujours a
 réfutent déjà souvent un présupposé faux dès la rédaction). La vérification LLM ne tourne
 **que sur clic** (« Vérifier la réponse »), à la **profondeur** choisie par un curseur (IHM).
 
-- **Note de qualité** (`_estimate_quality`, **déterministe, sans LLM**, toujours affichée) :
-  citations présentes, `node_id` cités ∈ sources, pages ∈ plages réelles, pénalités. Badge
-  « Qualité estimée n/10 ».
-- **Vérification à la demande** (`POST /sessions/<id>/messages/<i>/verify`, champ
+- **Note de qualité** (`_estimate_quality`, **déterministe, sans LLM**, calculée pour
+  toute réponse sourcée) — mesure la **FORME vérifiable**, **pas** la véracité du fond.
+  Part de **10/10** et applique des pénalités : réponse < 200 car. (−3) ; fuite de syntaxe
+  technique `"thought"`/appel d'outil (−5) ; aucune citation (−4) ; citation vers un nœud
+  **hors des sources lues** (−2) ; **page hors de la plage** du nœud (`node_map`) (−2) ;
+  citation **ambiguë** sans document en multi-pièces (−2) ; citation **mal formée**
+  (placeholder « source » ou `【】`) (−2) ; bornée à [0,10]. Le détail des contrôles est
+  renvoyé dans `checks`. ⚠️ Ce contrôle ne mesure que la **forme**, jamais la véracité du
+  fond. **Pour éviter une fausse réassurance, l'IHM n'affiche PAS le score** : elle lève
+  des **alertes** quand des anomalies de forme existent (liste : page hors plage, citation
+  hors sources lues, mal formée…), sinon « **Forme cohérente — fond non vérifié** ». Dans
+  les deux cas, cela **incite** à lancer la vérification LLM (la seule à juger le fond).
+- **Pré-détection (déterministe, sans LLM) — `_predetect`** : calculée **à chaque réponse**
+  (stockée sur le message), elle décide **besoin · scope · niveau** et **propose** une
+  vérification **déjà cadrée** (« Vérification recommandée — présupposé + citations · niveau
+  normal », 1 clic). Détecteurs : **citations** (`_estimate_quality`), **présupposé**
+  (`_question_presupposes` ET la réponse ne réfute pas — `_REFUTES_RE`), **verbatim**
+  (présence de guillemets), **exhaustivité** (« aucun autre / rien d'autre »…), **complétude**
+  (map-reduce / décomposition). Le **niveau** est dérivé : 1 flag déterministe léger → rapide ;
+  flag sémantique (présupposé/exhaustivité) → normal ; ≥ 3 flags ou contexte partiel →
+  approfondi. Le **curseur** reste en **override** manuel ; 0 flag → « fond non vérifié ».
+- **Vérification à la demande** (`POST /sessions/<id>/messages/<i>/verify`, champs `scope` +
   `verification_level`) — 3 crans, chacun branché sur de **vrais mécanismes** :
 
   | Cran | Mécanismes | Coût |
   |---|---|---|
-  | **Rapide** | contrôle **déterministe** seul (citations/pages) | aucun appel LLM |
-  | **Normal** *(défaut)* | `reflect` (juge) + **vérificateur de présupposé** (`_presupposition_violation`, **3 votes**, sur questions présupposantes via `_question_presupposes`) | quelques appels |
+  | **Rapide** | contrôles **déterministes** seuls (citations/pages + **verbatim**, `_verbatim_issues`) | aucun appel LLM |
+  | **Normal** *(défaut)* | déterministes + **vérificateur de présupposé** (`_presupposition_violation`, **3 votes**) + `reflect` (juge) | quelques appels |
   | **Approfondi** | vérificateur sur **toute** réponse (**5 votes**) + `reflect` | le plus lourd |
+
+  Les vérificateurs lancés sont **ciblés par le `scope`** (pré-détecté ou choisi) : `citations`
+  et `verbatim` → **déterministes** ; `presupposition` → `_presupposition_violation` ;
+  `exhaustivity`/divers → `reflect`. On ne lance que ce qui est pertinent.
 
 - **Signaler + corriger** : aux crans Normal/Approfondi, si un **présupposé faux**
   (vérificateur) ou un défaut (`reflect` `action:retry`, score < `REFLECT_ACCEPT_THRESHOLD = 6`)
