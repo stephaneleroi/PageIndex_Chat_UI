@@ -547,7 +547,8 @@ Si l'intention est `overview` → délègue à la synthèse globale (§8.3). Sin
    section préfixée de son `node_<id>` réel) ;
 3. **rédaction citée** (`grounding_single`, `_build_allowed_citations`) ; en mode
    Vision → images des nœuds + VLM ;
-4. **auto-évaluation** (§9.3).
+4. **pas de vérification automatique** — badge de qualité déterministe seul ; la
+   vérification LLM est **à la demande** (§9.3).
 
 ### 8.3 Synthèse globale (`_run_global_summary`) — `overview`
 
@@ -578,7 +579,7 @@ Le dossier est vu comme **un seul arbre** dont les enfants sont les pièces.
 4. **Rédaction** (`grounding_kb`) avec l'**inventaire complet** des fiches en appui
    (`_build_corpus_inventory`, `CORPUS_INVENTORY_BUDGET = 45000` — toute pièce reste
    citable même non lue) + `_build_allowed_citations`.
-5. **Auto-évaluation** (§9.3).
+5. **Pas de vérification automatique** ; vérification LLM **à la demande** (§9.3).
 
 **Map-reduce ciblé (fiches à CHAUD)** — *pourquoi* : le texte intégral de beaucoup de
 pièces ne tient pas dans un contexte unique. *Comment* :
@@ -629,30 +630,41 @@ anti-contamination**. L'évaluation A/B (`evaluations/RAPPORT_COMPARATIF.md`) a 
 que ce verrou réduit nettement la fuite de contenu entre pièces mal bornées d'un
 fichier composite.
 
-### 9.3 Auto-évaluation
+### 9.3 Vérification — À LA DEMANDE, profondeur réglable
 
-- **Note de qualité** (`_estimate_quality`, **déterministe, sans LLM**) : citations
-  présentes, `node_id` cités ∈ sources, pages ∈ plages réelles, pénalités des
-  citations dégénérées. Affichée « Auto-vérification n/10 ».
-- **Réflexion conditionnelle** (`reflect`, LLM — **méthode d'instance** ; ne jamais la
-  remettre `@staticmethod`, sinon `self` capte la question, `self.pageindex` lève et
-  l'auto-éval renvoie toujours le défaut `accept/7` = morte) : **sautée** si la réponse
-  est saine (> 400 car., ≥ 2 citations, pas de fuite de raisonnement) — **SAUF** si la
-  question présuppose une entité/un rôle défini (`_question_presupposes`), car une
-  confabulation de présupposé **paraît saine**. Sinon, si `action: retry` et score
-  < `REFLECT_ACCEPT_THRESHOLD = 6` → **re-rédaction ciblée** (voies **mono-pièce ET
-  corpus**), défauts signalés passés en consigne (jamais de boucle).
-- **Réfutation des présupposés faux** (garde-fou ajouté après T8) : `reflect` vérifie en
-  plus que la réponse n'affirme pas une entité/un rôle/une date **présupposé(e) par la
-  question mais non établi(e)** par les pièces (« le mineur » alors que tous sont
-  « Majeur ») → score ≤ 3 + re-rédaction qui doit l'expliciter. Règle aussi posée en
-  amont dans les 3 gabarits grounding (§3.2). *Mesuré (T8b, 5 tirages) : **0/5 avant**
-  (`reflect` mort) → **3/5 après**. `reflect` réparé **rattrape** certains cas en re-rédaction
-  (tirage à score 4), mais il reste lui-même **non déterministe** (peut ne pas se déclencher,
-  ou ne pas flagger) : amélioration réelle, **pas une garantie** — évaluer sur plusieurs
-  tirages.*
-- **Vérification à la demande** : bouton « Vérifier la réponse » (juge LLM,
-  `POST /sessions/<id>/messages/<i>/verify`, verdict persisté).
+**Principe (décision produit)** : **aucune vérification LLM automatique** pendant la
+génération — la réponse est rendue directement (rapide). Restent toujours actifs : la
+**note de qualité déterministe** et les **règles grounding** (dans le prompt, qui
+réfutent déjà souvent un présupposé faux dès la rédaction). La vérification LLM ne tourne
+**que sur clic** (« Vérifier la réponse »), à la **profondeur** choisie par un curseur (IHM).
+
+- **Note de qualité** (`_estimate_quality`, **déterministe, sans LLM**, toujours affichée) :
+  citations présentes, `node_id` cités ∈ sources, pages ∈ plages réelles, pénalités. Badge
+  « Qualité estimée n/10 ».
+- **Vérification à la demande** (`POST /sessions/<id>/messages/<i>/verify`, champ
+  `verification_level`) — 3 crans, chacun branché sur de **vrais mécanismes** :
+
+  | Cran | Mécanismes | Coût |
+  |---|---|---|
+  | **Rapide** | contrôle **déterministe** seul (citations/pages) | aucun appel LLM |
+  | **Normal** *(défaut)* | `reflect` (juge) + **vérificateur de présupposé** (`_presupposition_violation`, **3 votes**, sur questions présupposantes via `_question_presupposes`) | quelques appels |
+  | **Approfondi** | vérificateur sur **toute** réponse (**5 votes**) + `reflect` | le plus lourd |
+
+- **Signaler + corriger** : aux crans Normal/Approfondi, si un **présupposé faux**
+  (vérificateur) ou un défaut (`reflect` `action:retry`, score < `REFLECT_ACCEPT_THRESHOLD = 6`)
+  est détecté → une **réponse corrigée** (re-rédaction) est proposée **sous** la réponse
+  d'origine (badge + bulle d'explication du curseur dans l'IHM).
+- **Vérificateur de présupposé** (`_presupposition_violation`) : appel LLM **étroit,
+  multi-vote à la MAJORITÉ** (3 ou 5) — « la réponse désigne-t-elle une entité/rôle/date que
+  les pièces n'établissent pas ? ». Plus fiable que le `reflect` omnibus (qui peut, lui,
+  manquer le présupposé — non déterminisme).
+- **Contexte de vérification** : nœuds **cités d'abord**, puis les autres pièces de la
+  session (borné 60k) — sinon le juge prend un fait issu d'une pièce **non citée** pour une
+  hallucination (faux positif).
+- **`reflect`** : **méthode d'instance** (utilise `self.pageindex`) — ne JAMAIS la remettre
+  `@staticmethod`, sinon `self` capte la question et l'éval renvoie toujours `accept/7`
+  (morte). *Historique : ce bug a rendu l'auto-éval inopérante longtemps ; corrigé, puis
+  l'ensemble est passé « à la demande ».*
 
 ### 9.4 API & Socket.IO
 

@@ -344,6 +344,46 @@ Output JSON only:
             logger.warning(f"Reflection parse failed: {e}")
             return {"score": 7, "issues": [], "missing_info": [], "action": "accept"}
 
+    async def _presupposition_violation(self, query: str, answer: str,
+                                        context: str, model_type: str = "text",
+                                        votes: int = 3):
+        """Vérificateur DÉDIÉ et ÉTROIT (≠ reflect omnibus) : la réponse désigne-t-elle
+        une entité / un rôle / un statut / une date PRÉSUPPOSÉ(E) par la question, mais
+        que les sources n'ÉTABLISSENT pas (ou contredisent) ? Multi-vote à la MAJORITÉ
+        (plus fiable que le jugement unique de reflect). Renvoie une consigne de
+        correction (str) si violation majoritaire, sinon None."""
+        prompt = (
+            "Tu vérifies UN SEUL point, rien d'autre.\n"
+            f"QUESTION posée : {query}\n\n"
+            f"RÉPONSE produite :\n{(answer or '')[:2500]}\n\n"
+            f"EXTRAIT DES SOURCES (seule vérité admise) :\n{(context or '')[:12000]}\n\n"
+            "La RÉPONSE désigne-t-elle une entité, un rôle, un statut ou une date que la "
+            "QUESTION PRÉSUPPOSE, mais que les SOURCES n'ÉTABLISSENT PAS (ou contredisent) ? "
+            "Exemple : la question demande « le mineur » et la réponse nomme quelqu'un comme "
+            "mineur, alors que les sources décrivent toutes les personnes comme majeures ou "
+            "n'établissent aucun mineur. Le libellé de la question ne prouve RIEN ; l'absence "
+            "d'établissement par les sources suffit à constituer une violation.\n"
+            "IMPORTANT : si la RÉPONSE indique DÉJÀ que l'entité présupposée est absente / non "
+            "établie (réfutation correcte du présupposé), alors il n'y a PAS de violation "
+            "(violation:false).\n"
+            'Réponds UNIQUEMENT en JSON : {"violation": true|false, "correction": '
+            '"<ce que la réponse devrait dire à la place, une phrase>"}'
+        )
+
+        async def _one():
+            try:
+                raw = await self.pageindex.call_llm(prompt, 'text')
+                return json.loads(self._extract_json_str(raw))
+            except Exception:
+                return None
+
+        results = await asyncio.gather(*[_one() for _ in range(max(1, votes))])
+        viol = [r for r in results if r and r.get("violation")]
+        if len(viol) * 2 <= max(1, votes):       # pas de majorité stricte → OK
+            return None
+        return next((v.get("correction") for v in viol if v.get("correction")), "") \
+            or "L'entité présupposée par la question n'est pas établie par les pièces ; le dire explicitement."
+
     # ============================================================ #
     #  Direction 5: Proactive document analysis
     # ============================================================ #
@@ -558,68 +598,11 @@ Provide a clear, comprehensive answer in French."""
             quality=self._estimate_quality(full_answer, refs, tool_context),
         ))
 
-        # ---- 4. Auto-évaluation CONDITIONNELLE ----
-        # La réflexion est un garde-fou, pas un péage : une réponse saine
-        # (substantielle, citée, sans fuite de syntaxe d'outil) rend la main
-        # immédiatement. Elle ne tourne que sur signe de faiblesse.
-        healthy = (
-            len(full_answer) > 400
-            and len(re.findall(r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*\w+\s*,\s*pages?', full_answer)) >= 2
-            and '"thought"' not in full_answer
-        )
-        # On NE saute PAS la vérification quand la question présuppose une entité :
-        # une confabulation de présupposé paraît « saine » (longue + citée).
-        if not node_list or (healthy and not self._question_presupposes(query)):
-            logger.info(f"voie simple: auto-évaluation sautée (réponse saine={healthy})")
-            return
-        yield "[REFLECTING]\n"
-        reflection = await self.reflect(
-            query, full_answer, context, model_type, is_vision,
-            docs_overview=context_overview,
-        )
-        yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
-        self.sessions.update_last_message(session_id, "assistant", verification={
-            "score": reflection.get("score"), "issues": reflection.get("issues") or [],
-            "missing_info": reflection.get("missing_info") or [], "auto": True,
-        })
-        if not (reflection.get("action") == "retry"
-                and reflection.get("score", 10) < REFLECT_ACCEPT_THRESHOLD):
-            return
-
-        # ---- 5. Une expansion bornée, puis réécriture (pas de boucle) ----
-        yield "[AGENT_RETRY]\n"
-        missing = "; ".join(reflection.get("missing_info") or []) or query
-        extra, thinking2 = await _search(missing, set(node_list))
-        if extra:
-            yield self._step_marker(
-                0, 1, thinking2, "tree_search", {"query": missing},
-                f"[doc={doc_id}] {len(extra)} nœud(s) complémentaire(s) : {', '.join(extra)}",
-            )
-            node_list = node_list + extra
-            context, _ = _assemble(node_list)
-            refs = [f"{doc_id}::{n}" for n in node_list]
-            yield f"\n[NODES]{json.dumps(refs)}\n"
-
-        yield "[RETRY_ANSWERING]\n"
-        issues = reflection.get("issues") or []
-        issues_note = ""
-        if issues:
-            issues_note = ("\nA first draft was judged insufficient for these reasons — fix them:\n- "
-                           + "\n- ".join(str(i) for i in issues) + "\n")
-        retry_prompt = self._build_simple_answer_prompt(
-            query, context, history_context + issues_note, GROUNDING_INSTRUCTION_SINGLE,
-            allowed_citations=self._build_allowed_citations(refs, tool_context))
-        full_answer = ""
-        async for chunk in self.pageindex.call_llm_stream(retry_prompt, model_type):
-            full_answer += chunk
-            yield chunk
-        yield "[ANSWER_DONE]\n"
-        self.sessions.add_message(session_id, Message(
-            role="assistant", content=full_answer, nodes=refs,
-            thinking=(f"Step 1 [tree_search]: {thinking2}" if thinking2 else ""),
-            quality=self._estimate_quality(full_answer, refs, tool_context),
-        ))
-        self.sessions.mark_superseded_before_last(session_id, role="assistant")
+        # Vérification : À LA DEMANDE uniquement (bouton « Vérifier », curseur de
+        # profondeur). Aucune vérification LLM automatique ici → réponse rapide. Voir
+        # POST /sessions/<id>/messages/<i>/verify (reflect + vérificateur de présupposé
+        # + re-rédaction selon le niveau). Le badge déterministe (`_estimate_quality`)
+        # reste calculé ci-dessus.
 
     # Unité de travail = la PIÈCE (un sous-arbre de premier niveau), pas le
     # fichier : un répertoire de N fichiers et un fichier de N pièces donnent
@@ -1038,57 +1021,9 @@ Provide a clear, comprehensive answer in French."""
             quality=self._estimate_quality(full_answer, refs, tool_context),
         ))
 
-        # ---- 6. Auto-évaluation conditionnelle (garde-fou) ----
-        healthy = (
-            len(full_answer) > 400
-            and len(re.findall(r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*\w+\s*,\s*pages?', full_answer)) >= 2
-            and '"thought"' not in full_answer
-        )
-        # On NE saute PAS la vérification quand la question présuppose une entité
-        # (confabulation de présupposé = paraît saine).
-        if not refs or (healthy and not self._question_presupposes(query)):
-            logger.info(f"voie corpus: auto-évaluation sautée (réponse saine={healthy})")
-            return
-        yield "[REFLECTING]\n"
-        reflection = await self.reflect(
-            query, full_answer, context, model_type, is_vision,
-            docs_overview=context_overview,
-        )
-        yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
-        self.sessions.update_last_message(session_id, "assistant", verification={
-            "score": reflection.get("score"), "issues": reflection.get("issues") or [],
-            "missing_info": reflection.get("missing_info") or [], "auto": True,
-        })
-        # Re-rédaction ciblée si la vérification rejette (ex. présupposé faux) :
-        # le problème est la rédaction, pas le contexte → pas de nouvelle recherche.
-        if not (reflection.get("action") == "retry"
-                and reflection.get("score", 10) < REFLECT_ACCEPT_THRESHOLD):
-            return
-        yield "[AGENT_RETRY]\n"
-        issues = reflection.get("issues") or []
-        issues_note = ""
-        if issues:
-            issues_note = ("\nA first draft was judged insufficient for these reasons — fix them:\n- "
-                           + "\n- ".join(str(i) for i in issues) + "\n")
-        yield "[RETRY_ANSWERING]\n"
-        retry_prompt = self._build_answer_prompt(
-            query, [query], context, history_context + issues_note, "aggregate",
-            grounding=GROUNDING_INSTRUCTION_KB, mode="kb",
-            docs_overview=context_overview,
-            allowed_citations=self._build_allowed_citations(refs, tool_context),
-            user_consignes=self._build_user_consignes(refs, tool_context),
-        )
-        full_answer = ""
-        async for chunk in self.pageindex.call_llm_stream(retry_prompt, model_type):
-            full_answer += chunk
-            yield chunk
-        yield "[ANSWER_DONE]\n"
-        self.sessions.add_message(session_id, Message(
-            role="assistant", content=full_answer, nodes=refs,
-            thinking="Re-rédaction après vérification (présupposé / défaut signalé)",
-            quality=self._estimate_quality(full_answer, refs, tool_context),
-        ))
-        self.sessions.mark_superseded_before_last(session_id, role="assistant")
+        # Vérification : À LA DEMANDE uniquement (bouton « Vérifier », curseur de
+        # profondeur) — aucune vérification LLM automatique ici. Voir
+        # POST /sessions/<id>/messages/<i>/verify. Badge déterministe conservé ci-dessus.
 
     @staticmethod
     def _question_presupposes(query: str) -> bool:
@@ -1337,6 +1272,9 @@ Provide a clear, comprehensive answer in French."""
             role="assistant", content=full, nodes=all_refs,
             thinking="Décomposition en sous-questions",
             quality=self._estimate_quality(full, all_refs, tool_context)))
+
+        # Vérification : à la demande uniquement (voir /verify) — pas de garde-fou
+        # automatique sur la réponse assemblée.
 
     async def run_session(self, session_id: str, query: str,
                           model_type: str = "text",

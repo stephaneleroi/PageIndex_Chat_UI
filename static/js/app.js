@@ -2116,11 +2116,40 @@ function appendHistoryMessage(msgs, m, ctx) {
         const q = m.quality;
         if (v && typeof v.score === 'number') {
             const cls = v.score >= 8 ? 'good' : v.score >= 6 ? 'medium' : 'poor';
-            const issues = (v.issues || []).join(' • ');
-            verifyHtml = `<div class="verify-line">
-                <span class="verify-badge ${cls}"><i class="bi bi-shield-check"></i>
-                    Vérifiée ${v.score}/10${v.auto ? ' (auto)' : ''}</span>
-                ${issues ? `<span class="verify-issues">${esc(issues)}</span>` : ''}
+            const lvlTxt = v.level ? ` · ${esc(v.level)}` : '';
+            const issuesList = v.issues || [];
+            const missingList = v.missing_info || [];
+            const li = arr => arr.map(x => `<li>${esc(x)}</li>`).join('');
+            // Chaque problème adressé est présenté distinctement (liste), + infos
+            // manquantes, + « aucun problème » le cas échéant.
+            let report = '';
+            if (issuesList.length) {
+                report += `<div class="verify-block">
+                    <div class="verify-block-title problems"><i class="bi bi-exclamation-triangle"></i> Problèmes relevés (${issuesList.length})</div>
+                    <ul class="verify-list">${li(issuesList)}</ul></div>`;
+            }
+            if (missingList.length) {
+                report += `<div class="verify-block">
+                    <div class="verify-block-title"><i class="bi bi-info-circle"></i> Informations manquantes</div>
+                    <ul class="verify-list">${li(missingList)}</ul></div>`;
+            }
+            if (!issuesList.length && !missingList.length) {
+                report += `<div class="verify-block"><div class="verify-block-title ok"><i class="bi bi-check-circle"></i> Aucun problème relevé</div></div>`;
+            }
+            if (v.note) report += `<div class="verify-note">${esc(v.note)}</div>`;
+            // Réponse corrigée proposée par la vérification (niveaux normal/approfondi).
+            const corrected = v.corrected
+                ? `<div class="verify-corrected">
+                       <div class="verify-corrected-title"><i class="bi bi-pencil-square"></i> Réponse corrigée par la vérification</div>
+                       <div class="message-content">${renderMarkdown(v.corrected)}</div>
+                   </div>`
+                : '';
+            verifyHtml = `<div class="verify-report ${cls}">
+                <div class="verify-line">
+                    <span class="verify-badge ${cls}"><i class="bi bi-shield-check"></i>
+                        Vérifiée ${v.score}/10${v.auto ? ' (auto)' : ''}${lvlTxt}</span>
+                </div>
+                ${report}${corrected}
             </div>`;
         } else {
             // Note estimée (déterministe) : guide la décision de lancer la
@@ -2131,8 +2160,18 @@ function appendHistoryMessage(msgs, m, ctx) {
                        <i class="bi bi-speedometer2"></i> Qualité estimée ${q.score}/10</span>`
                 : `<span class="verify-badge none"><i class="bi bi-shield"></i> Non évaluée</span>`;
             const qChecks = (q && q.checks) ? `<span class="verify-issues">${esc(q.checks.join(' • '))}</span>` : '';
+            const lvl = localStorage.getItem('verificationLevel') || 'normal';
+            const opt = (val, label) => `<option value="${val}"${lvl === val ? ' selected' : ''}>${label}</option>`;
+            // Curseur de profondeur (la bulle `title` explique chaque cran).
+            const levelTip = "Profondeur de la vérification (au clic) :\n"
+                + "• Rapide : contrôles déterministes seuls (citations valides, pages réelles), aucune relecture par le modèle → le plus rapide.\n"
+                + "• Normal : relecture ciblée — détecte les présupposés faux (ex. « le mineur » alors qu'aucun n'existe dans les pièces), propose une correction ; auto-évaluation par le juge.\n"
+                + "• Approfondi : relecture systématique et renforcée (toutes les réponses, plus de votes) → plus lent, plus sûr.";
             verifyHtml = `<div class="verify-line">
                 ${qBadge}
+                <select class="verify-level" title="${esc(levelTip)}" onchange="localStorage.setItem('verificationLevel', this.value)">
+                    ${opt('rapide', 'Rapide')}${opt('normal', 'Normal')}${opt('approfondi', 'Approfondi')}
+                </select>
                 <button class="verify-btn" onclick="verifyMessage(${ctx.index}, this)">
                     <i class="bi bi-shield-check"></i> Vérifier la réponse</button>
                 ${qChecks}
@@ -2238,11 +2277,14 @@ async function verifyMessage(index, btn) {
         ? State.docChat.activeSessionId : State.kbChat.activeSessionId;
     if (State.isStreaming) { showNotification('Patientez : une réponse est en cours de génération', 'error'); return; }
     if (!sessionId) { showNotification('Aucune conversation active', 'error'); return; }
+    const level = localStorage.getItem('verificationLevel') || 'normal';
     btn.disabled = true;
     btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Vérification en cours…';
-    showNotification('Vérification lancée — le juge relit la réponse avec ses sources (≈ 1 min)');
+    showNotification(`Vérification « ${level} » lancée — relecture de la réponse avec ses sources`);
     try {
-        const r = await fetch(`/api/sessions/${sessionId}/messages/${index}/verify`, { method: 'POST' });
+        const r = await fetch(`/api/sessions/${sessionId}/messages/${index}/verify`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ verification_level: level }) });
         const d = await r.json();
         if (!d.success) throw new Error(d.error || 'échec');
         State.socket.emit('get_history', { session_id: sessionId });

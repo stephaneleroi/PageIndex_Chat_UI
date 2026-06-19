@@ -417,42 +417,92 @@ def verify_message(session_id, index):
     question = next((m.content for m in reversed(session.messages[:index])
                      if m.role == 'user'), '')
 
-    # Pièces : le texte des nœuds sources du message (refs "doc_id::node_id").
-    parts = []
+    # Contexte de vérification : les nœuds CITÉS d'abord (preuve directe), puis le
+    # texte des AUTRES pièces de la session pour combler (borné). Sans cela, le juge
+    # prend un fait venant d'une pièce NON citée pour une hallucination (faux positif).
+    cited = set()
     for ref in (msg.nodes or []):
-        doc_id, _, node_id = ref.partition('::')
-        if not node_id:
-            doc_id, node_id = (session.doc_ids[0] if session.doc_ids else ''), ref
+        d, _, n = ref.partition('::')
+        cited.add((d or (session.doc_ids[0] if session.doc_ids else ''), n or ref))
+
+    def _walk(doc_id):
         tree = document_store.get_tree(doc_id)
-        if not tree:
-            continue
-        stack = [tree]
+        out, stack = [], ([tree] if tree else [])
         while stack:
             n = stack.pop()
             if isinstance(n, list):
                 stack.extend(n)
                 continue
-            if n.get('node_id') == node_id and n.get('text'):
-                parts.append(f"=== Section node_{node_id} ===\n{n['text']}")
+            if n.get('text'):
+                out.append((doc_id, n.get('node_id'), n['text']))
             stack.extend(n.get('nodes', []))
-    context = "\n\n".join(parts)[:60000]
+        return out
 
+    all_nodes = []
+    for did in (session.doc_ids or []):
+        all_nodes.extend(_walk(did))
+    ordered = ([x for x in all_nodes if (x[0], x[1]) in cited]
+               + [x for x in all_nodes if (x[0], x[1]) not in cited])
+    parts, total = [], 0
+    for did, nid, txt in ordered:
+        block = f"=== {did} node_{nid} ===\n{txt}"
+        if total + len(block) > 60000:
+            break
+        parts.append(block)
+        total += len(block)
+    context = "\n\n".join(parts)
+
+    # Profondeur de vérification choisie par l'utilisateur (curseur IHM) :
+    #   rapide      → contrôle déterministe seul (aucun appel LLM) ;
+    #   normal      → reflect (juge) + vérificateur de présupposé (3 votes, ciblé) ;
+    #   approfondi  → vérificateur sur TOUTE réponse (5 votes) + reflect.
+    # Aux niveaux normal/approfondi, si un présupposé faux / défaut est détecté, on
+    # propose en plus une RÉPONSE CORRIGÉE (re-rédaction).
+    level = (request.json or {}).get('verification_level', 'normal')
+    agent = rag_service.agent
     import asyncio
     import time as _time
+
+    async def _verify():
+        if level == 'rapide':
+            return {'score': msg.quality, 'issues': [], 'missing_info': [],
+                    'note': 'Contrôle déterministe (citations valides, pages réelles) — '
+                            'pas de relecture par le modèle.', 'corrected': None}
+        votes = 5 if level == 'approfondi' else 3
+        always = (level == 'approfondi')
+        corr = None
+        if always or agent._question_presupposes(question):
+            corr = await agent._presupposition_violation(question, msg.content, context, 'text', votes=votes)
+        reflection = await agent.reflect(question, msg.content, context, 'text', False)
+        issues = list(reflection.get('issues') or [])
+        if corr:
+            issues = [f"Présupposé non établi par les pièces : {corr}"] + issues
+        corrected = None
+        needs_fix = bool(corr) or (reflection.get('action') == 'retry'
+                                   and (reflection.get('score') or 10) < 6)
+        if needs_fix:
+            fix = corr or "; ".join(str(i) for i in issues) or "Corriger les défauts signalés."
+            rewrite = (
+                "Corrige la réponse ci-dessous en te fondant UNIQUEMENT sur les sources, "
+                f"sans rien inventer. Problème à corriger : {fix}\n\n"
+                f"Question : {question}\n\nSources :\n{context[:30000]}\n\n"
+                f"Réponse à corriger :\n{msg.content}\n\n"
+                "Réécris la réponse en français en intégrant la correction (dis explicitement "
+                "si une entité présupposée n'est pas établie par les pièces), en conservant les "
+                "faits corrects et les citations (doc / node / page). Renvoie UNIQUEMENT la "
+                "réponse réécrite."
+            )
+            corrected = await agent.pageindex.call_llm(rewrite, 'text')
+        return {'score': reflection.get('score'), 'issues': issues,
+                'missing_info': reflection.get('missing_info') or [], 'corrected': corrected}
+
     try:
-        reflection = asyncio.run(rag_service.agent.reflect(
-            question, msg.content, context, 'text', False))
+        result = asyncio.run(_verify())
     except Exception as e:
         logger.error(f"Vérification à la demande échouée: {e}")
         return jsonify({'error': str(e)}), 500
 
-    verification = {
-        'score': reflection.get('score'),
-        'issues': reflection.get('issues') or [],
-        'missing_info': reflection.get('missing_info') or [],
-        'auto': False,
-        'verified_at': _time.time(),
-    }
+    verification = {**result, 'level': level, 'auto': False, 'verified_at': _time.time()}
     session_store.update_message_at(session_id, index, verification=verification)
     return jsonify({'success': True, 'verification': verification})
 
