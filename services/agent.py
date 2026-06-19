@@ -274,10 +274,13 @@ class DocumentAgent:
             checks.append(f"{broken} citation(s) mal formée(s) (placeholder « source » ou 【】)")
         return {"score": max(0, min(10, score)), "checks": checks}
 
-    @staticmethod
     # ============================================================ #
     #  Direction 4: Self-reflection
     # ============================================================ #
+    # NB : méthode d'INSTANCE (utilise self.pageindex) et appelée self.reflect(...).
+    # Surtout PAS @staticmethod — sinon `self` capte le 1er argument (la question),
+    # `self.pageindex` lève une AttributeError, et l'except renvoyait toujours le
+    # défaut {score:7, action:accept} → l'auto-évaluation ne s'exécutait jamais.
     async def reflect(self, query: str, answer: str,
                       context_summary: str,
                       model_type: str = "text",
@@ -317,6 +320,7 @@ Check:
 2. Is the answer supported by the context OR by the Available-documents metadata above? (For vision mode, image data is also valid.)
 3. Are there factual inconsistencies between the answer and the context/metadata?
 4. Is important information missing?
+5. FALSE PRESUPPOSITION: does the answer affirm an entity, role, status, date or fact that the question merely PRESUPPOSED, but that the context does NOT establish (or that it contradicts)? Example: the question asks for "le mineur mis en cause" and the answer names someone as the minor, while the context describes every person as "Majeur" / never establishes any minor. The wording of the question is NOT evidence that the thing exists. If the answer designates such a non-established entity instead of stating it is absent, this is a serious defect: set "score" <= 3 and "action": "retry", and put the discrepancy in "issues" (e.g. "Aucun mineur n'est établi par les pièces : ne pas en désigner un ; indiquer que les personnes citées sont toutes majeures.").
 
 Note: If the question is a meta-question about the document set itself
 (e.g. how many documents, document names, page counts), the Available-documents
@@ -563,7 +567,9 @@ Provide a clear, comprehensive answer in French."""
             and len(re.findall(r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*\w+\s*,\s*pages?', full_answer)) >= 2
             and '"thought"' not in full_answer
         )
-        if not node_list or healthy:
+        # On NE saute PAS la vérification quand la question présuppose une entité :
+        # une confabulation de présupposé paraît « saine » (longue + citée).
+        if not node_list or (healthy and not self._question_presupposes(query)):
             logger.info(f"voie simple: auto-évaluation sautée (réponse saine={healthy})")
             return
         yield "[REFLECTING]\n"
@@ -1038,7 +1044,9 @@ Provide a clear, comprehensive answer in French."""
             and len(re.findall(r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*\w+\s*,\s*pages?', full_answer)) >= 2
             and '"thought"' not in full_answer
         )
-        if not refs or healthy:
+        # On NE saute PAS la vérification quand la question présuppose une entité
+        # (confabulation de présupposé = paraît saine).
+        if not refs or (healthy and not self._question_presupposes(query)):
             logger.info(f"voie corpus: auto-évaluation sautée (réponse saine={healthy})")
             return
         yield "[REFLECTING]\n"
@@ -1051,6 +1059,51 @@ Provide a clear, comprehensive answer in French."""
             "score": reflection.get("score"), "issues": reflection.get("issues") or [],
             "missing_info": reflection.get("missing_info") or [], "auto": True,
         })
+        # Re-rédaction ciblée si la vérification rejette (ex. présupposé faux) :
+        # le problème est la rédaction, pas le contexte → pas de nouvelle recherche.
+        if not (reflection.get("action") == "retry"
+                and reflection.get("score", 10) < REFLECT_ACCEPT_THRESHOLD):
+            return
+        yield "[AGENT_RETRY]\n"
+        issues = reflection.get("issues") or []
+        issues_note = ""
+        if issues:
+            issues_note = ("\nA first draft was judged insufficient for these reasons — fix them:\n- "
+                           + "\n- ".join(str(i) for i in issues) + "\n")
+        yield "[RETRY_ANSWERING]\n"
+        retry_prompt = self._build_answer_prompt(
+            query, [query], context, history_context + issues_note, "aggregate",
+            grounding=GROUNDING_INSTRUCTION_KB, mode="kb",
+            docs_overview=context_overview,
+            allowed_citations=self._build_allowed_citations(refs, tool_context),
+            user_consignes=self._build_user_consignes(refs, tool_context),
+        )
+        full_answer = ""
+        async for chunk in self.pageindex.call_llm_stream(retry_prompt, model_type):
+            full_answer += chunk
+            yield chunk
+        yield "[ANSWER_DONE]\n"
+        self.sessions.add_message(session_id, Message(
+            role="assistant", content=full_answer, nodes=refs,
+            thinking="Re-rédaction après vérification (présupposé / défaut signalé)",
+            quality=self._estimate_quality(full_answer, refs, tool_context),
+        ))
+        self.sessions.mark_superseded_before_last(session_id, role="assistant")
+
+    @staticmethod
+    def _question_presupposes(query: str) -> bool:
+        """Heuristique (sans LLM) : la question demande-t-elle d'identifier une
+        ENTITÉ / un RÔLE défini(e) qui pourrait ne pas exister (présupposé) ?
+        Sert à NE PAS sauter la vérification sur une réponse « saine » : une
+        confabulation de présupposé paraît saine (longue + citée). Conservateur."""
+        q = (query or "").lower()
+        if re.search(r"\bqui\s+(est|sont|était|étaient|serait|seraient)\b", q):
+            return True
+        return bool(re.search(
+            r"\b(le|la|l['’]|les|du|de la|son|sa|leur)\s+"
+            r"(mineur|majeur|victime|m[ée]decin|suspect|mis\s+en\s+cause|auteur|"
+            r"t[ée]moin|pr[ée]venu|accus[ée]|plaignant|requ[ée]rant|d[ée]funt|"
+            r"signataire|destinataire|condamn[ée]|coupable)\b", q))
 
     @staticmethod
     def _is_global_summary(query: str) -> bool:
