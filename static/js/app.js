@@ -2825,6 +2825,32 @@ function renderStructureTree(node, depth = 0, ctx = {}) {
         ? `<div class="sr-fiche${isPiece ? ' sr-fiche-piece' : ''}">${isPiece ? renderFiche(node.summary) : esc(node.summary)}</div>`
         : '';
     const kids = hasKids ? `<div class="sr-children">${renderStructureTree(children, depth + 1, ctx)}</div>` : '';
+
+    // LECTURE SEULE (panneau de la visionneuse) : table des matières navigable.
+    //  1° la FICHE d'une pièce est derrière une ICÔNE « résumé » (repliée) au lieu
+    //     d'être déversée en entier ;
+    //  2° la STRUCTURE DES SOUS-NŒUDS est montrée (sous-arbre déplié par défaut).
+    if (ctx.readonly) {
+        const ficheBtn = (isPiece && node.summary)
+            ? `<button class="sr-fiche-btn" title="Afficher / masquer le résumé de la pièce"><i class="bi bi-card-text"></i></button>`
+            : '';
+        const fichePop = (isPiece && node.summary)
+            ? `<div class="sr-fiche sr-fiche-piece sr-fiche-pop">${renderFiche(node.summary)}</div>`
+            : '';
+        const roToggle = hasKids
+            ? `<button class="sr-toggle" title="Déplier / replier les sous-éléments"><i class="bi bi-caret-down-fill"></i></button>`
+            : `<span class="sr-toggle-spacer"></span>`;
+        const roBody = hasKids ? `<div class="sr-node-body">${kids}</div>` : '';
+        return `
+        <div class="sr-node${isPiece ? ' sr-piece' : ''}" data-depth="${depth}" data-node-id="${esc(node.node_id || '')}">
+            <div class="sr-node-row" ${node.node_id ? `data-node-id="${esc(node.node_id)}"` : ''} title="Aller à la page de début">
+                ${roToggle}${isPiece ? '<span class="sr-piece-marker">◆</span>' : ''}<span class="sr-node-title">${esc(node.title)}</span>${pages}${ficheBtn}
+            </div>
+            ${fichePop}
+            ${roBody}
+        </div>`;
+    }
+
     // Sur une PIÈCE (niveau 0) : fiches à chaud du map-reduce (2°) + notes user (3°).
     const extras = (isPiece && !ctx.readonly) ? srExtrasHtml(node.node_id, ctx) : '';
     // Le corps (fiche + extras + sous-nœuds) est repliable ; replié PAR DÉFAUT →
@@ -3061,8 +3087,10 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
                 </div>
             </div>
             <div class="node-info-card" id="nodeInfoCard"></div>
-            <div class="page-preview-structure" id="ppsStructure"></div>
-            <div class="page-preview-body"><div class="page-preview-images"></div></div>
+            <div class="page-preview-main">
+                <div class="page-preview-structure" id="ppsStructure"></div>
+                <div class="page-preview-body"><div class="page-preview-images"></div></div>
+            </div>
             <div class="page-preview-footer"><div class="page-preview-nav">
                 <button class="page-nav-btn" id="prevPageBtn"><i class="bi bi-chevron-left"></i> Page précédente</button>
                 <span class="page-indicator" id="pageIndicator"></span>
@@ -3326,6 +3354,13 @@ async function togglePreviewStructure() {
         b.addEventListener('click', e => { e.stopPropagation(); b.closest('.sr-node')?.classList.toggle('collapsed'); }));
     panel.querySelectorAll('.sr-node-row[data-node-id]').forEach(row =>
         row.addEventListener('click', () => previewFocusNode(row.dataset.nodeId, row)));
+    // Icône « résumé » : affiche/masque la fiche de la pièce (sans naviguer).
+    panel.querySelectorAll('.sr-fiche-btn').forEach(b =>
+        b.addEventListener('click', e => {
+            e.stopPropagation();
+            b.classList.toggle('active');
+            b.closest('.sr-node')?.querySelector(':scope > .sr-fiche-pop')?.classList.toggle('open');
+        }));
     panel.dataset.loaded = '1';
 }
 
