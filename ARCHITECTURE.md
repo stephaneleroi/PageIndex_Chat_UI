@@ -789,7 +789,7 @@ un JSON à côté de `structure.json`) :
 | Origine | saisies (« Ajouter une note ») | générées par le *map* (§8.4) |
 | Fichier | `notes.json` | `focused_fiches.json` |
 | Méthodes | `add_note` / `get_notes` / `delete_note` | `save_focused_fiche` / `get_focused_fiches` |
-| Forme | `{node_id: [{id, text, ts}]}` | `{head_id: [{query, text, nid, ts}]}` |
+| Forme | `{node_id: [{id, text, kind, ts}]}` (`kind` ∈ `desc`/`consigne`) | `{head_id: [{query, text, nid, ts}]}` |
 | Route | `/documents/<id>/notes` | `/documents/<id>/focused-fiches` |
 | Persistance | disque (survit au redémarrage) | disque (survit au redémarrage) |
 
@@ -817,22 +817,39 @@ seule, **0 appel LLM**). Un fichier lui-même composite y voit **toutes** ses pi
 remonter (ex. dossier de 25 fichiers → 30 pièces). **100 % présentation** — aucun
 impact indexation/retrieval/citations ; les cartes par fichier restent.
 
-### 11.2 Les notes comme **consignes** (orientation + épinglage)
+### 11.2 Les notes : **descriptives** (sélection) ou **consignes** (rédaction)
 
-Une note utilisateur **n'est ni une source ni une pièce** : c'est une **consigne /
-pré-rédaction** de l'utilisateur. Elle est donc réinjectée dans le pipeline à deux
-endroits (`agent.py`) — **jamais** comme contexte sourcé ni citable :
+Une note utilisateur **n'est ni une source ni une pièce** : c'est un apport humain
+réinjecté dans le pipeline (`agent.py`) — **jamais** comme contexte sourcé ni
+citable. À la saisie (Vue Structure), l'utilisateur choisit son **type** (`kind`),
+qui détermine **où** la note agit :
 
-- **Rédaction (orientation)** — `_build_user_consignes(refs, tool_context)` construit
-  un bloc « Consignes de l'utilisateur (ses notes) » joint aux prompts des trois
-  voies (`_build_simple_answer_prompt`, `_build_answer_prompt`), **distinct** du
-  contexte sourcé. Il oriente le **cadrage et la mise en avant** ; règle explicite :
-  *ne jamais citer une note, ne pas la traiter comme une preuve ; si une consigne
+| `kind` | Sens | Où elle agit |
+|---|---|---|
+| **`desc`** (descriptive) | *décrit* le contenu de la pièce (« cette pièce traite de X ») | **Sélection** (voie corpus) : fiche de niveau 1 **+** épinglage |
+| **`consigne`** | *comment* répondre (« réponds en 3 points », « insiste sur les dates ») | **Rédaction** : orientation du rédacteur |
+
+- **Sélection — notes `desc`** (voie corpus, niveau 1). Deux leviers **complémentaires** :
+  - **Fiche de niveau 1** : les notes `desc` d'une pièce sont **injectées dans son
+    `summary` de sélection** (`_piece_fiche` → `_piece_descr_notes`, sous-budget
+    `PIECE_NOTES_BUDGET = 800`, ajouté **après** la troncature de la fiche → un signal
+    humain n'est jamais évincé par une fiche longue). `tree_search` **raisonne donc
+    dessus** : une pièce à fiche pauvre redevient *trouvable* sur le bon sujet. C'est
+    le levier fondateur (§1) — *on enrichit l'arbre, on ne contourne pas le retrieval*.
+  - **Épinglage (filet de sécurité)** : une pièce portant une note `desc` est
+    **priorisée** (`_piece_has_notes`) même si `tree_search` ne l'a pas retenue.
+- **Rédaction — notes `consigne`** : `_build_user_consignes(refs, tool_context)`
+  (filtré sur `kind='consigne'`) construit un bloc « Consignes de l'utilisateur »
+  joint aux prompts des trois voies (`_build_simple_answer_prompt`,
+  `_build_answer_prompt`), **distinct** du contexte sourcé. Règle explicite : *ne
+  jamais citer une consigne, ne pas la traiter comme une preuve ; si une consigne
   contredit le source, suivre le SOURCE*.
-- **Sélection (épinglage)** — dans la voie corpus, une pièce **annotée** est
-  **priorisée** (`_piece_has_notes`) même si `tree_search` ne l'a pas retenue (signal
-  humain « cette pièce compte »). La note n'entre pas dans la fiche de sélection
-  (elle ne *décrit* pas la pièce) : c'est un *pin*.
+
+*Pourquoi cette séparation :* une consigne de forme n'a rien à faire dans le
+raisonnement de sélection (elle ne décrit pas la pièce) ; une note descriptive ne
+doit pas dicter le style. Le **niveau 1** n'existe qu'en **voie corpus** (sélection
+*entre* pièces) — la mono-pièce et la synthèse globale n'ont pas de `tree_search`
+niveau 1, donc l'injection en fiche ne les concerne pas.
 
 Les **fiches à chaud** (map-reduce), elles, sont du **contenu sourcé** (cité à la
 page) — leur réinjection éventuelle relèverait du contexte/inventaire, pas des

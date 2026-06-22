@@ -529,6 +529,7 @@ Output JSON only:
     # ---- Voie corpus (le dossier EST un arbre PageIndex) ----
     # Un seul tree_search sur les fiches de toutes les pièces.
     CORPUS_SELECT_BUDGET = 48000    # budget total des fiches dans l'arbre de sélection
+    PIECE_NOTES_BUDGET = 800        # sous-budget des notes descriptives ajoutées à une fiche de sélection
     CORPUS_INVENTORY_BUDGET = 45000  # budget total de l'inventaire joint au rédacteur
     CORPUS_MAX_PIECES_READ = 12     # pièces lues en intégral (le reste : citable via l'inventaire)
     CORPUS_PIECE_DRILL_THRESHOLD = 20000  # au-delà, une pièce composite est sélectionnée
@@ -729,9 +730,14 @@ Provide a clear, comprehensive answer in French."""
                 })
         return pieces
 
-    def _piece_fiche(self, piece: dict, tool_context: dict, budget: int) -> str:
+    def _piece_fiche(self, piece: dict, tool_context: dict, budget: int,
+                     notes_by_doc: Optional[dict] = None) -> str:
         """Fiche de sélection d'une pièce : résumé de son nœud de tête + titres
-        de ses sous-sections (pour que le tree_search « voie » le contenu)."""
+        de ses sous-sections + NOTES DESCRIPTIVES de l'utilisateur (pour que le
+        tree_search « voie » le contenu — y compris ce que l'humain signale).
+        Les notes descriptives portent un sous-budget propre, AJOUTÉ après la
+        troncature de la fiche : un signal humain n'est jamais évincé par une
+        fiche longue."""
         nm = (tool_context.get("docs") or {}).get(piece["doc_id"], {}).get("node_map") or {}
         head = nm.get(piece["head_id"]) or {}
         hnode = head.get("node", head)
@@ -744,7 +750,15 @@ Provide a clear, comprehensive answer in French."""
                 titres.append(f"- {t}")
         if titres:
             fiche = (fiche + "\nSections :\n" + "\n".join(titres)).strip()
-        return (fiche[:budget] + "…") if len(fiche) > budget else (fiche or "(pas de fiche)")
+        if len(fiche) > budget:
+            fiche = fiche[:budget] + "…"
+        notes = self._piece_descr_notes(piece, notes_by_doc)
+        if notes:
+            body = "\n".join(f"- {t}" for t in notes)
+            if len(body) > self.PIECE_NOTES_BUDGET:
+                body = body[:self.PIECE_NOTES_BUDGET] + "…"
+            fiche = (fiche + "\nNotes de l'utilisateur sur cette pièce :\n" + body).strip()
+        return fiche or "(pas de fiche)"
 
     def _selection_fiche(self, dctx: dict, budget: int) -> str:
         """Fiche de sélection (niveau 1) d'une pièce : résumé du nœud racine, +
@@ -770,9 +784,11 @@ Provide a clear, comprehensive answer in French."""
         return (fiche[:budget] + "…") if len(fiche) > budget else (fiche or "(pas de fiche)")
 
     def _build_user_consignes(self, refs, tool_context, budget: int = 6000) -> str:
-        """Bloc de CONSIGNES utilisateur (ses notes) pour la rédaction. Une note
-        n'est NI une source NI une pièce : c'est une consigne / pré-rédaction qui
-        ORIENTE la réponse — jamais citée, jamais traitée comme une preuve."""
+        """Bloc de CONSIGNES utilisateur (notes kind='consigne') pour la
+        rédaction. Une consigne n'est NI une source NI une pièce : elle ORIENTE
+        la réponse (comment répondre) — jamais citée, jamais traitée comme une
+        preuve. Les notes 'desc' (qui décrivent la pièce) en sont exclues :
+        elles servent la SÉLECTION (fiche niveau 1 / épinglage), pas la rédaction."""
         docs_ctx = tool_context.get("docs") or {}
         doc_ids, lines = [], []
         for r in refs or []:
@@ -789,6 +805,8 @@ Provide a clear, comprehensive answer in French."""
                 node = (nm.get(node_id) or {}).get("node", {})
                 title = (node.get("title") if isinstance(node, dict) else "") or node_id
                 for n in (lst or []):
+                    if n.get("kind", "desc") != "consigne":
+                        continue
                     t = (n.get("text") or "").strip()
                     if t:
                         lines.append(f"- [{title}] {t}")
@@ -805,10 +823,24 @@ Provide a clear, comprehensive answer in French."""
             "contredit le contexte sourcé, suis le SOURCE.\n" + body + "\n"
         )
 
+    def _piece_descr_notes(self, pc, notes_by_doc: Optional[dict]) -> list:
+        """Textes des notes DESCRIPTIVES (kind='desc') de la pièce — celles qui
+        décrivent son contenu. Servent à la fois à la fiche de sélection
+        (_piece_fiche) et à l'épinglage (_piece_has_notes). Les notes 'consigne'
+        (comment répondre) en sont exclues : elles ne décrivent pas la pièce."""
+        notes = (notes_by_doc or {}).get(pc["doc_id"], {})
+        out = []
+        for nid in pc.get("node_ids", []):
+            for n in (notes.get(nid) or []):
+                if n.get("kind", "desc") == "desc":
+                    t = (n.get("text") or "").strip()
+                    if t:
+                        out.append(t)
+        return out
+
     def _piece_has_notes(self, pc, notes_by_doc: dict) -> bool:
-        """Vrai si l'utilisateur a annoté un nœud de cette pièce (→ épinglage)."""
-        notes = notes_by_doc.get(pc["doc_id"], {})
-        return any(notes.get(nid) for nid in pc.get("node_ids", []))
+        """Vrai si une note DESCRIPTIVE annote cette pièce (→ épinglage)."""
+        return bool(self._piece_descr_notes(pc, notes_by_doc))
 
     def _build_corpus_inventory(self, tool_context: dict) -> str:
         """Inventaire des fiches identitaires de TOUTES les pièces — source
@@ -887,12 +919,23 @@ Provide a clear, comprehensive answer in French."""
             return
 
         # ---- 1. Arbre de sélection : une entrée par PIÈCE (alias court) ----
+        # Notes utilisateur chargées une fois : les notes DESCRIPTIVES enrichissent
+        # la fiche de sélection (tree_search les « voit ») ; réutilisées plus bas
+        # pour l'épinglage (filet de sécurité). Les notes 'consigne' n'entrent pas ici.
         pieces = self._extract_pieces(tool_context)
+        notes_by_doc = {}
+        for pc in pieces:
+            did = pc["doc_id"]
+            if did not in notes_by_doc:
+                try:
+                    notes_by_doc[did] = self.store.get_notes(did) or {}
+                except Exception:
+                    notes_by_doc[did] = {}
         per_fiche = max(300, self.CORPUS_SELECT_BUDGET // max(1, len(pieces)))
         children = []
         for i, pc in enumerate(pieces):
             children.append({"node_id": f"p{i}", "title": pc["title"],
-                             "summary": self._piece_fiche(pc, tool_context, per_fiche)})
+                             "summary": self._piece_fiche(pc, tool_context, per_fiche, notes_by_doc)})
         corpus_tree = {"node_id": "root", "title": "Dossier",
                        "summary": "Racine du dossier ; chaque enfant est une pièce.",
                        "nodes": children}
@@ -907,17 +950,9 @@ Provide a clear, comprehensive answer in French."""
             if j.isdigit() and 0 <= int(j) < len(pieces):
                 picked_idx.append(int(j))
         picked = [pieces[j] for j in dict.fromkeys(picked_idx)][:self.CORPUS_MAX_PIECES_READ]
-        # Épinglage : une pièce ANNOTÉE par l'utilisateur (signal humain « ça compte »)
-        # est priorisée, même si tree_search ne l'a pas retenue. La note reste une
-        # consigne (cf. _build_user_consignes), pas un contenu de sélection.
-        notes_by_doc = {}
-        for pc in pieces:
-            did = pc["doc_id"]
-            if did not in notes_by_doc:
-                try:
-                    notes_by_doc[did] = self.store.get_notes(did) or {}
-                except Exception:
-                    notes_by_doc[did] = {}
+        # Épinglage (filet de sécurité) : une pièce portant une note DESCRIPTIVE
+        # (signal humain « ça compte ») est priorisée même si tree_search ne l'a
+        # pas retenue — en complément de son injection dans la fiche de sélection.
         pinned = [pc for pc in pieces if pc not in picked and self._piece_has_notes(pc, notes_by_doc)]
         if pinned:
             picked = (picked + pinned)[:self.CORPUS_MAX_PIECES_READ]

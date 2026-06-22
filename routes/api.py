@@ -623,10 +623,12 @@ def list_doc_notes(doc_id):
 
 @api_bp.route('/documents/<doc_id>/nodes/<node_id>/notes', methods=['POST'])
 def add_doc_note(doc_id, node_id):
-    text = ((request.json or {}).get('text') or '').strip()
+    data = request.json or {}
+    text = (data.get('text') or '').strip()
     if not text:
         return jsonify({'error': 'text requis'}), 400
-    note = document_store.add_note(doc_id, node_id, text)
+    kind = data.get('kind') or 'desc'
+    note = document_store.add_note(doc_id, node_id, text, kind)
     if note is None:
         return jsonify({'error': 'Document introuvable'}), 404
     return jsonify({'success': True, 'note': note})

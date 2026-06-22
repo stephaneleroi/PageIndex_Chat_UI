@@ -371,7 +371,12 @@ class DocumentStore:
     # ---- Notes utilisateur (annotations sur les pièces) ----
     # Prises de notes libres, persistées À PART (notes.json à côté de
     # structure.json) : elles N'ALTÈRENT PAS l'arbre PageIndex (l'index de
-    # recherche reste intact). Forme : { node_id: [{id, text, ts}] }.
+    # recherche reste intact). Forme : { node_id: [{id, text, kind, ts}] }.
+    # `kind` ∈ {'desc', 'consigne'} :
+    #   - 'desc'     : DÉCRIT la pièce → injectée dans la fiche de sélection
+    #                  niveau 1 (tree_search la « voit ») + épingle la pièce ;
+    #   - 'consigne' : COMMENT répondre → oriente la rédaction (jamais la
+    #                  sélection, jamais citée). Cf. agent.py.
     def _notes_path(self, doc) -> str:
         return os.path.join(os.path.dirname(doc.structure_path), 'notes.json')
 
@@ -392,12 +397,14 @@ class DocumentStore:
         with open(self._notes_path(doc), 'w', encoding='utf-8') as f:
             json.dump(notes, f, indent=2, ensure_ascii=False)
 
-    def add_note(self, doc_id: str, node_id: str, text: str) -> Optional[dict]:
+    def add_note(self, doc_id: str, node_id: str, text: str,
+                 kind: str = 'desc') -> Optional[dict]:
         doc = self.get_document(doc_id)
         if not doc:
             return None
+        kind = kind if kind in ('desc', 'consigne') else 'desc'
         notes = self.get_notes(doc_id)
-        note = {'id': uuid.uuid4().hex[:10], 'text': text.strip(),
+        note = {'id': uuid.uuid4().hex[:10], 'text': text.strip(), 'kind': kind,
                 'ts': time.strftime('%Y-%m-%d %H:%M')}
         notes.setdefault(node_id, []).append(note)
         self._save_notes(doc, notes)

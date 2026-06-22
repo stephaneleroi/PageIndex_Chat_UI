@@ -2846,7 +2846,11 @@ function srExtrasHtml(nodeId, ctx) {
 }
 
 function srNoteHtml(n) {
-    return `<div class="sr-note" data-note-id="${esc(n.id)}"><span class="sr-note-text">${esc(n.text)}</span>`
+    const consigne = n.kind === 'consigne';
+    const badge = consigne
+        ? `<span class="sr-note-kind-badge consigne" title="Consigne : oriente la rédaction (jamais citée)">consigne</span>`
+        : `<span class="sr-note-kind-badge desc" title="Descriptive : aide à retrouver et prioriser la pièce (sélection)">décrit</span>`;
+    return `<div class="sr-note" data-note-id="${esc(n.id)}">${badge}<span class="sr-note-text">${esc(n.text)}</span>`
         + `<span class="sr-note-ts">${esc(n.ts || '')}</span>`
         + `<button class="sr-note-del" type="button" title="Supprimer">×</button></div>`;
 }
@@ -2865,6 +2869,10 @@ async function srNoteAction(e) {
         const form = document.createElement('div');
         form.className = 'sr-note-form';
         form.innerHTML = `<textarea class="sr-note-input" rows="2" placeholder="Votre note sur cette pièce…"></textarea>`
+            + `<select class="sr-note-kind" title="« Décrit » entre dans la fiche de sélection (aide à retrouver/prioriser la pièce) ; « Consigne » oriente la rédaction.">`
+            + `<option value="desc">Décrit la pièce (aide à la retrouver)</option>`
+            + `<option value="consigne">Consigne de réponse (comment répondre)</option>`
+            + `</select>`
             + `<div class="sr-note-actions"><button class="sr-note-cancel" type="button">Annuler</button>`
             + `<button class="sr-note-save" type="button">Enregistrer</button></div>`;
         add.before(form);
@@ -2881,11 +2889,12 @@ async function srNoteAction(e) {
         const form = save.closest('.sr-note-form');
         const text = form.querySelector('.sr-note-input').value.trim();
         if (!text) return;
+        const kind = form.querySelector('.sr-note-kind').value;
         save.disabled = true;
         try {
             const r = await fetch(`/api/documents/${docId}/nodes/${encodeURIComponent(box.dataset.nodeId)}/notes`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text }),
+                body: JSON.stringify({ text, kind }),
             });
             const d = await r.json();
             if (!d.success) throw new Error(d.error || 'échec');

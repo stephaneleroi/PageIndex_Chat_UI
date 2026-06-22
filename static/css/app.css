@@ -1080,6 +1080,11 @@ body {
 .sr-note-form { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
 .sr-note-input { width: 100%; border: 1px solid var(--border-strong); border-radius: 7px; padding: 6px 9px; font-size: 12.5px; font-family: inherit; resize: vertical; }
 .sr-note-input:focus { outline: none; border-color: var(--text-secondary); }
+.sr-note-kind { border: 1px solid var(--border-strong); border-radius: 7px; padding: 5px 8px; font-size: 12px; font-family: inherit; background: white; cursor: pointer; }
+.sr-note-kind:focus { outline: none; border-color: var(--text-secondary); }
+.sr-note-kind-badge { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; padding: 1px 6px; border-radius: 999px; white-space: nowrap; align-self: center; }
+.sr-note-kind-badge.desc { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
+.sr-note-kind-badge.consigne { color: #92400e; background: #fffbeb; border: 1px solid #fde68a; }
 .sr-note-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .sr-note-actions button { border-radius: 7px; padding: 4px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
 .sr-note-cancel { background: white; border: 1px solid var(--border); color: var(--text-secondary); }
