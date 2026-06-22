@@ -234,31 +234,46 @@ def upload_document():
     folder = '/'.join(seg for seg in folder.split('/') if seg and seg != '..')[:120]
 
     try:
-        now = datetime.now()
-        datetime_prefix = now.strftime("%Y%m%d_%H%M%S")
-        doc_id = f"{datetime_prefix}_{str(uuid.uuid4())[:4]}"
-
         filename = secure_filename(file.filename)
         os.makedirs(UPLOADS_DIR, exist_ok=True)
-        file_path = os.path.join(UPLOADS_DIR, f"{doc_id}_{filename}")
-        file.save(file_path)
+
+        # Sauvegarde TEMPORAIRE d'abord : le doc_id est DÉRIVÉ de l'empreinte
+        # SHA-256 du contenu (pas d'un horodatage aléatoire). Conséquence clé :
+        # réimporter le MÊME PDF redonne le MÊME doc_id → les conversations qui le
+        # citent (doc_id::node) ne deviennent jamais orphelines après un
+        # supprimer/réimporter.
+        tmp_path = os.path.join(UPLOADS_DIR, f"_tmp_{uuid.uuid4().hex}_{filename}")
+        file.save(tmp_path)
 
         if lower.endswith('.docx'):
             try:
-                pdf_path = _convert_to_pdf_with_libreoffice(file_path)
+                pdf_path = _convert_to_pdf_with_libreoffice(tmp_path)
             except Exception as e:
-                os.remove(file_path)
+                os.remove(tmp_path)
                 logger.error(f"Conversion .docx échouée: {e}")
                 return jsonify({'error': f'Conversion du .docx en PDF échouée : {e}'}), 500
-            os.remove(file_path)
-            file_path = pdf_path
+            os.remove(tmp_path)
+            tmp_path = pdf_path
             filename = os.path.splitext(filename)[0] + '.pdf'
             logger.info(f"Document .docx converti en PDF : {filename}")
-        
+
+        doc_id = _sha256_file(tmp_path)[:16]   # empreinte du CONTENU → identifiant stable
+
+        # Réimport idempotent : même contenu déjà présent → on réutilise (ni
+        # doublon, ni réindexation), on jette le fichier temporaire.
+        existing = document_store.get_document(doc_id)
+        if existing:
+            os.remove(tmp_path)
+            return jsonify({'success': True, 'document': existing.to_dict(),
+                            'message': 'Document déjà importé (même contenu)'})
+
+        file_path = os.path.join(UPLOADS_DIR, f"{doc_id}_{filename}")
+        os.replace(tmp_path, file_path)
+
         doc = Document(doc_id=doc_id, filename=filename, file_path=file_path, folder=folder, status='pending')
         document_store.add_document(doc)
         document_store.set_stage(doc_id, 'queued', 'En file d\'attente d\'indexation...')
-        
+
         _launch_indexing(doc_id, file_path, filename)
 
         return jsonify({
