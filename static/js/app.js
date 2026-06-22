@@ -2605,8 +2605,32 @@ async function showNodePreview(nodeId, docId, focusPage = null) {
         if (bare in map) nodeId = bare;
         else if (/^\d+$/.test(bare) && bare.padStart(4, '0') in map) nodeId = bare.padStart(4, '0');
     }
-    const info = map[nodeId];
+    let info = map[nodeId];
     if (!info) { showNotification('Informations du nœud introuvables', 'error'); return; }
+    // Robustesse aux citations incohérentes : si la page citée est HORS de la
+    // plage du nœud cité (le modèle a écrit le mauvais node_id à côté de pages
+    // correctes), on se fie à la PAGE — on associe le nœud qui possède réellement
+    // cette page (le plus spécifique), comme une citation « page seule ». Ainsi
+    // navigation, surlignage ET prise de note pointent le bon nœud.
+    if (focusPage) {
+        const s = info.start_index || 1, e = info.end_index || s;
+        if (focusPage < s || focusPage > e) {
+            const owners = Object.keys(map).filter(id => {
+                const a = map[id].start_index || 0, b = map[id].end_index || a;
+                return focusPage >= a && focusPage <= b;
+            });
+            if (owners.length) {
+                const span = id => (map[id].end_index || map[id].start_index || 0) - (map[id].start_index || 0);
+                owners.sort((x, y) => span(x) - span(y));   // le plus spécifique (plus petite plage)
+                nodeId = owners[0];
+                info = map[nodeId];
+            } else {
+                // Aucun nœud ne couvre cette page → simple feuilletage à la page.
+                showPagePreviewModal(docId, null, { start_index: focusPage }, State.allPagesCache[docId], false, focusPage);
+                return;
+            }
+        }
+    }
     showPagePreviewModal(docId, nodeId, info, State.allPagesCache[docId], true, focusPage);
 }
 

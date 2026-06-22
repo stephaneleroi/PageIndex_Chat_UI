@@ -234,6 +234,30 @@ class DocumentAgent:
                 if sans_doc:
                     score -= 2
                     checks.append(f"{sans_doc} renvoi(s) sans indication du document (ambigu en multi-pièces)")
+            # Plage VALIDE d'un nœud cité = celle de TOUT son sous-arbre. Une pièce
+            # est citée par sa TÊTE (ex. node_0006 « PREMIÈRE PARTIE ») mais ses
+            # faits sont aux pages de ses sous-sections (p. 19-47), hors de la
+            # plage étroite de la tête (15-18) : valider sur la seule tête lèverait
+            # de fausses alertes (synthèse globale). Les feuilles gardent leur
+            # plage propre → les vrais renvois hors-pièce restent détectés.
+            def _span(info):
+                node = info.get("node", info) if isinstance(info, dict) else {}
+                s = info.get("start_index") or 1
+                e = info.get("end_index") or s
+
+                def walk(n):
+                    nonlocal s, e
+                    if isinstance(n, dict):
+                        ss, ee = n.get("start_index"), n.get("end_index")
+                        if isinstance(ss, int):
+                            s = min(s, ss)
+                        if isinstance(ee, int):
+                            e = max(e, ee)
+                        for c in (n.get("nodes") or []):
+                            walk(c)
+                walk(node)
+                return s, e
+
             bad_node = bad_page = 0
             for _, nid, page_s in cites:
                 pad = nid.zfill(4) if nid.isdigit() else nid
@@ -247,8 +271,7 @@ class DocumentAgent:
                         info = nm[pad]
                         break
                 if info:
-                    s_ = info.get("start_index") or 1
-                    e_ = info.get("end_index") or s_
+                    s_, e_ = _span(info)
                     if not (s_ <= int(page_s) <= e_):
                         bad_page += 1
             if bad_node:
