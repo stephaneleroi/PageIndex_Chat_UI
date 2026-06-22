@@ -1336,6 +1336,11 @@ body.preview-resizing .page-preview-resizer::after { background: var(--primary, 
     display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3;
     -webkit-box-orient: vertical;
 }
+/* Panneau STRUCTURE (table des matières) dans la visionneuse, repliable */
+.page-preview-structure { display: none; flex: none; max-height: 45%; overflow-y: auto;
+    border-bottom: 1px solid var(--border); background: white; padding: 8px 10px 10px; }
+.page-preview-structure.open { display: block; }
+.page-preview-structure .pps-empty { color: var(--text-secondary); font-size: 12.5px; padding: 12px; text-align: center; }
 .page-preview-body { flex: 1; overflow-y: auto; padding: 16px; background: var(--bg-subtle); }
 .page-preview-images {
     display: flex; flex-direction: column; gap: 16px; align-items: center;

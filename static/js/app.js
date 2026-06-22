@@ -2815,7 +2815,10 @@ function renderStructureTree(node, depth = 0, ctx = {}) {
     const pages = node.start_index
         ? `<span class="sr-node-pages">p. ${node.start_index}${node.end_index && node.end_index !== node.start_index ? '–' + node.end_index : ''}</span>`
         : '';
-    const editBtn = node.node_id
+    // En lecture seule (visionneuse) : pas d'édition de nœud ni d'extras notes —
+    // l'arbre y sert de table des matières navigable (la saisie de notes a sa
+    // propre place dans la visionneuse).
+    const editBtn = (node.node_id && !ctx.readonly)
         ? `<button class="sr-node-edit" data-node-id="${esc(node.node_id)}" title="Corriger le titre / résumé (améliore la recherche)"><i class="bi bi-pencil"></i></button>`
         : '';
     const fiche = node.summary
@@ -2823,7 +2826,7 @@ function renderStructureTree(node, depth = 0, ctx = {}) {
         : '';
     const kids = hasKids ? `<div class="sr-children">${renderStructureTree(children, depth + 1, ctx)}</div>` : '';
     // Sur une PIÈCE (niveau 0) : fiches à chaud du map-reduce (2°) + notes user (3°).
-    const extras = isPiece ? srExtrasHtml(node.node_id, ctx) : '';
+    const extras = (isPiece && !ctx.readonly) ? srExtrasHtml(node.node_id, ctx) : '';
     // Le corps (fiche + extras + sous-nœuds) est repliable ; replié PAR DÉFAUT →
     // l'arbre se lit d'abord comme une table des matières, on déplie pour voir.
     const hasBody = hasKids || !!fiche || !!extras;
@@ -3052,11 +3055,13 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
             <div class="page-preview-header">
                 <h5 class="page-preview-title"></h5>
                 <div class="page-preview-header-actions">
+                    <button class="highlight-toggle-btn" id="structureToggleBtn" title="Afficher / masquer la structure du document"><i class="bi bi-diagram-3"></i></button>
                     <button class="highlight-toggle-btn" id="highlightToggleBtn" title="Cliquez sur une étiquette de nœud pour la surligner"><i class="bi bi-highlighter"></i></button>
                     <button class="page-preview-close"><i class="bi bi-x-lg"></i></button>
                 </div>
             </div>
             <div class="node-info-card" id="nodeInfoCard"></div>
+            <div class="page-preview-structure" id="ppsStructure"></div>
             <div class="page-preview-body"><div class="page-preview-images"></div></div>
             <div class="page-preview-footer"><div class="page-preview-nav">
                 <button class="page-nav-btn" id="prevPageBtn"><i class="bi bi-chevron-left"></i> Page précédente</button>
@@ -3068,6 +3073,7 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
         modal.querySelector('#prevPageBtn').addEventListener('click', () => navPage(-1));
         modal.querySelector('#nextPageBtn').addEventListener('click', () => navPage(1));
         modal.querySelector('#highlightToggleBtn').addEventListener('click', () => toggleHighlights());
+        modal.querySelector('#structureToggleBtn').addEventListener('click', () => togglePreviewStructure());
         modal.addEventListener('click', viewerNoteAction);  // saisie de notes par page / par pièce
         modal.querySelector('.page-preview-resizer').addEventListener('mousedown', startPreviewResize);
         // Restaure la largeur choisie précédemment (persistée).
@@ -3078,6 +3084,10 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     State.activeHighlightNodeId = null;
     modal.dataset.docId = docId;
     modal.dataset.activeNodeId = nodeId || '';
+    // Panneau structure : rechargé à la demande pour CE document (reset si réutilisé).
+    const ppsReset = modal.querySelector('.page-preview-structure');
+    if (ppsReset) { ppsReset.classList.remove('open'); ppsReset.removeAttribute('data-loaded'); ppsReset.innerHTML = ''; }
+    modal.querySelector('#structureToggleBtn')?.classList.remove('active');
     updateHighlightToggleBtn();
 
     const nMap = State.nodeMapCache[docId] || {};
@@ -3285,6 +3295,72 @@ function startPreviewResize(e) {
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
+}
+
+// Panneau STRUCTURE dans la visionneuse : table des matières navigable, réutilise
+// renderStructureTree (Vue Structure) en lecture seule. Chargé à la demande.
+async function togglePreviewStructure() {
+    const modal = document.getElementById('pagePreviewModal');
+    if (!modal) return;
+    const panel = modal.querySelector('.page-preview-structure');
+    const willOpen = !panel.classList.contains('open');
+    panel.classList.toggle('open', willOpen);
+    modal.querySelector('#structureToggleBtn')?.classList.toggle('active', willOpen);
+    if (!willOpen || panel.dataset.loaded) return;
+
+    const docId = modal.dataset.docId;
+    panel.innerHTML = '<div class="pps-empty">Chargement de la structure…</div>';
+    State.previewTreeCache = State.previewTreeCache || {};
+    let tree = State.previewTreeCache[docId];
+    if (!tree) {
+        try {
+            const r = await fetch(`/api/documents/${docId}/tree`);
+            const d = await r.json();
+            tree = d.tree;
+            State.previewTreeCache[docId] = tree;
+        } catch { /* réseau */ }
+    }
+    if (!tree) { panel.innerHTML = '<div class="pps-empty">Structure indisponible</div>'; return; }
+    panel.innerHTML = renderStructureTree(tree, 0, { readonly: true });
+    panel.querySelectorAll('.sr-toggle').forEach(b =>
+        b.addEventListener('click', e => { e.stopPropagation(); b.closest('.sr-node')?.classList.toggle('collapsed'); }));
+    panel.querySelectorAll('.sr-node-row[data-node-id]').forEach(row =>
+        row.addEventListener('click', () => previewFocusNode(row.dataset.nodeId, row)));
+    panel.dataset.loaded = '1';
+}
+
+// Clic sur un nœud de la structure : défile la visionneuse jusqu'à sa 1re page et
+// le surligne (analogue à srFocusNode de la Vue Structure).
+function previewFocusNode(nodeId, rowEl) {
+    const modal = document.getElementById('pagePreviewModal');
+    if (!modal) return;
+    const docId = modal.dataset.docId;
+    const nMap = State.nodeMapCache[docId] || {};
+    let nid = nodeId;
+    if (!(nid in nMap)) {
+        const bare = nid.replace(/^node[_\s]*/i, '');
+        if (bare in nMap) nid = bare;
+        else if (/^\d+$/.test(bare) && bare.padStart(4, '0') in nMap) nid = bare.padStart(4, '0');
+    }
+    const info = nMap[nid];
+    if (!info) { showNotification('Informations du nœud introuvables', 'error'); return; }
+    // Nœud actif dans l'arbre
+    modal.querySelectorAll('.page-preview-structure .sr-node-row.active').forEach(r => r.classList.remove('active'));
+    const row = rowEl || modal.querySelector(`.page-preview-structure .sr-node-row[data-node-id="${CSS.escape(nodeId)}"]`);
+    row?.classList.add('active');
+    row?.closest('.sr-node')?.classList.remove('collapsed');
+    // Surlignage du nœud (réutilise l'infra de la visionneuse)
+    State.activeHighlightNodeId = nid;
+    redrawAllHighlights(modal, State.highlightsCache[docId], nMap, nid);
+    updateHighlightToggleBtn();
+    updateActiveNodeTags();
+    // Défile jusqu'à la 1re page du nœud
+    const allPages = JSON.parse(modal.dataset.pages || '[]');
+    const start = info.start_index || 1;
+    const idx = allPages.findIndex(p => p.page === start);
+    const scrollParent = modal.querySelector('.page-preview-body');
+    const target = idx >= 0 ? modal.querySelectorAll('.page-image-container')[idx] : null;
+    if (target && scrollParent) scrollParent.scrollTop = target.offsetTop - scrollParent.offsetTop;
 }
 
 function closePagePreviewModal() {
