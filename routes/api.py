@@ -452,38 +452,30 @@ def verify_message(session_id, index):
         total += len(block)
     context = "\n\n".join(parts)
 
-    # Profondeur de vérification choisie par l'utilisateur (curseur IHM) :
-    #   rapide      → contrôle déterministe seul (aucun appel LLM) ;
-    #   normal      → reflect (juge) + vérificateur de présupposé (3 votes, ciblé) ;
-    #   approfondi  → vérificateur sur TOUTE réponse (5 votes) + reflect.
-    # Aux niveaux normal/approfondi, si un présupposé faux / défaut est détecté, on
-    # propose en plus une RÉPONSE CORRIGÉE (re-rédaction).
+    # Vérification CIBLÉE PAR SCOPE. La pré-détection a déjà tranché le déterministe
+    # (citations/verbatim, affichés en alertes) ; ici on exécute les vérificateurs LLM
+    # du `scope` recommandé. `complete` = tout vérifier (présupposé sur toute la réponse)
+    # avec plus de votes (sinon ciblé). Les contrôles déterministes sont rejoués pour
+    # alimenter la réponse corrigée.
     data = request.json or {}
-    level = data.get('verification_level', 'normal')
-    # Scope ciblé (pré-détecté ou choisi). Vide → scope « par défaut » selon le niveau.
-    scope = data.get('scope') or (['presupposition'] if level != 'rapide' else [])
-    det_score = msg.quality.get('score') if isinstance(msg.quality, dict) else msg.quality
+    scope = data.get('scope') or []
+    complete = bool(data.get('complete'))
     agent = rag_service.agent
     import asyncio
     import time as _time
 
     async def _verify():
         issues = []
-        # --- Vérificateurs DÉTERMINISTES (tous niveaux, sans LLM) ---
-        if 'verbatim' in scope:
-            for s in agent._verbatim_issues(msg.content, context):
-                issues.append(f"Citation entre guillemets introuvable dans les sources : « {s} »")
-        if 'citations' in scope and isinstance(msg.quality, dict):
-            issues += [f"Forme : {p}" for p in (msg.quality.get('problems') or [])]
+        # --- Contrôles DÉTERMINISTES (toujours, gratuits) ---
+        for s in agent._verbatim_issues(msg.content, context):
+            issues.append(f"Citation entre guillemets introuvable dans les sources : « {s} »")
+        if isinstance(msg.quality, dict):
+            issues += [f"Citation : {p}" for p in (msg.quality.get('problems') or [])]
         det_issues = list(issues)
-        if level == 'rapide':
-            return {'score': det_score, 'issues': issues, 'missing_info': [],
-                    'note': "Contrôles déterministes (citations/pages, verbatim) — pas de "
-                            "relecture par le modèle.", 'corrected': None}
-        # --- Vérificateurs LLM (normal/approfondi) ---
-        votes = 5 if level == 'approfondi' else 3
+        # --- Vérificateurs LLM (ciblés par scope, ou tout si `complete`) ---
+        votes = 5 if complete else 3
         corr = None
-        if level == 'approfondi' or 'presupposition' in scope or agent._question_presupposes(question):
+        if complete or 'presupposition' in scope or agent._question_presupposes(question):
             corr = await agent._presupposition_violation(question, msg.content, context, 'text', votes=votes)
         reflection = await agent.reflect(question, msg.content, context, 'text', False)
         if corr:
@@ -514,7 +506,7 @@ def verify_message(session_id, index):
         logger.error(f"Vérification à la demande échouée: {e}")
         return jsonify({'error': str(e)}), 500
 
-    verification = {**result, 'level': level, 'auto': False, 'verified_at': _time.time()}
+    verification = {**result, 'scope': scope, 'complete': complete, 'auto': False, 'verified_at': _time.time()}
     session_store.update_message_at(session_id, index, verification=verification)
     return jsonify({'success': True, 'verification': verification})
 

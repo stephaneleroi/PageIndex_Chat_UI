@@ -8,8 +8,8 @@
 **Plan.** 1. Modèle mental · 2. Vocabulaire · 3. **PageIndex vs notre couche** ·
 4. Indexation (à froid) · 5. **La sélection : `tree_search`** · 6. Les briques de
 réponse · 7. Routing & matrice voie×brique · 8. Les voies en détail · 9. Citations,
-visionneuse, garde-fous · 10. Notes & annotations · 11. Modèles & config ·
-12. Fork `pageindex/` · 13. Limites & études.
+visionneuse, garde-fous · 10. **Vérification des réponses** · 11. Notes & annotations ·
+12. Modèles & config · 13. Fork `pageindex/` · 14. Limites & études.
 
 ---
 
@@ -168,7 +168,7 @@ La fiche d'une pièce sert à **quatre endroits** — à garder en tête, car «
 | 1 | **Sélection** (`tree_search` niveau 1) | c'est **sur les fiches** que le LLM choisit les pièces (titres + fiches, **jamais** le texte) ; au niveau 2, la fiche de tête sert de contexte | §5 |
 | 2 | **Synthèse globale** (`overview`) | on **agrège les fiches** et on rédige dessus, **sans lire le texte** | §8.3 |
 | 3 | **Inventaire en appui** (voie corpus `detail`) | voir l'encadré ci-dessous | §8.4 |
-| 4 | **Affichage IHM** | Vue Structure + structure consolidée de dossier (`renderFiche`) | §10–10.1 |
+| 4 | **Affichage IHM** | Vue Structure + structure consolidée de dossier (`renderFiche`) | §11–11.1 |
 
 *(Le **régime** cumulatif/isolé des fiches, lui, est décidé en amont sur les **titres**
 des têtes — pas sur les fiches : voir `is_compilation`, §4.3.)*
@@ -200,7 +200,7 @@ la page, notes** — est **notre couche** par-dessus (`services/`, `models/`, IH
 
 | Brique | PageIndex (`pageindex/`) | Notre couche |
 |---|---|---|
-| PDF → arbre de nœuds (sommaire, hiérarchie, `node_id`) | **✅ cœur** | retouches d'extraction (§12) |
+| PDF → arbre de nœuds (sommaire, hiérarchie, `node_id`) | **✅ cœur** | retouches d'extraction (§13) |
 | Résumé d'un **nœud** | ✅ prompt canonique… | …**remplacé par une FICHE par PIÈCE** (`generate_summaries_for_structure`) |
 | Notion de **pièce** (unité de travail) | ✘ (ne connaît que des nœuds) | **✅** `piece_head_nodes`, régime compilation/doc unique |
 | **`tree_search`** (choisir des nœuds sur résumés/titres) | **✅ prompt du cookbook** | on **l'appelle** (niveau 1 sur fiches / niveau 2 sur sections) |
@@ -209,7 +209,7 @@ la page, notes** — est **notre couche** par-dessus (`services/`, `models/`, IH
 | **Routing** (`decompose_query` : intention + `instructions`) | ✘ | **✅** |
 | **Les 4 voies** (libre / mono-pièce / synthèse globale / corpus) | ✘ | **✅** `DocumentAgent` |
 | **Map-reduce ciblé** + **fiches à chaud** persistées | ✘ | **✅** `_focused_summary` |
-| **IDs de citation autorisés**, auto-éval déterministe, **notes** | ✘ | **✅** |
+| **IDs de citation autorisés**, **pré-détection + vérification ciblée** (§10), **notes** | ✘ | **✅** |
 
 ### 3.1 Couches & fichiers
 
@@ -253,7 +253,7 @@ restent en Python et **interpolent** ces gabarits.
 Les **trois gabarits grounding** portent une règle commune ajoutée après le test T8 :
 **réfuter les présupposés faux** — ne pas désigner une entité/un rôle/une date *présupposé(e)
 par la question* mais **non établi(e)** par les pièces (ex. « le mineur » alors que toutes les
-personnes sont « Majeur ») ; l'expliciter au lieu d'en inventer un (cf. §9.3).
+personnes sont « Majeur ») ; l'expliciter au lieu d'en inventer un (cf. §10).
 
 ---
 
@@ -348,7 +348,7 @@ structure.json
 | D — finition | ids, `<page_N>`, découpage, fusion | **◆ oui** |
 | E — fiches | un résumé par pièce | **◇ non** (N appels LLM) |
 
-Conséquence pratique (cf. §13, et `tests/tree_gate_theo.py`) : **deux indexations du
+Conséquence pratique (cf. §14, et `tests/tree_gate_theo.py`) : **deux indexations du
 même PDF peuvent ne pas donner exactement le même arbre** — sauf si la pièce est
 courte **ou** porte des signets PDF (cas C déterministes), où l'arbre est stable au
 ms près. Le **cache SHA-256** (§4.1, étape 2) gèle de toute façon le premier arbre
@@ -548,7 +548,7 @@ Si l'intention est `overview` → délègue à la synthèse globale (§8.3). Sin
 3. **rédaction citée** (`grounding_single`, `_build_allowed_citations`) ; en mode
    Vision → images des nœuds + VLM ;
 4. **pas de vérification automatique** — badge de qualité déterministe seul ; la
-   vérification LLM est **à la demande** (§9.3).
+   vérification LLM est **à la demande** (§10).
 
 ### 8.3 Synthèse globale (`_run_global_summary`) — `overview`
 
@@ -579,7 +579,7 @@ Le dossier est vu comme **un seul arbre** dont les enfants sont les pièces.
 4. **Rédaction** (`grounding_kb`) avec l'**inventaire complet** des fiches en appui
    (`_build_corpus_inventory`, `CORPUS_INVENTORY_BUDGET = 45000` — toute pièce reste
    citable même non lue) + `_build_allowed_citations`.
-5. **Pas de vérification automatique** ; vérification LLM **à la demande** (§9.3).
+5. **Pas de vérification automatique** ; vérification LLM **à la demande** (§10).
 
 **Map-reduce ciblé (fiches à CHAUD)** — *pourquoi* : le texte intégral de beaucoup de
 pièces ne tient pas dans un contexte unique. *Comment* :
@@ -599,7 +599,7 @@ pièces ne tient pas dans un contexte unique. *Comment* :
 - **Cache mémoire** `_focused_cache` (clé `(doc_id, head_id, query, instructions)`) :
   anti-recalcul intra-session.
 - **Persistance disque** : chaque fiche est écrite via `store.save_focused_fiche()`
-  (`focused_fiches.json`, §10) — elle **survit au redémarrage** et s'affiche dans la
+  (`focused_fiches.json`, §11) — elle **survit au redémarrage** et s'affiche dans la
   Vue Structure.
 
 ### 8.5 Décomposition (`_run_decomposed` / `_relay_subquery`)
@@ -630,65 +630,7 @@ anti-contamination**. L'évaluation A/B (`evaluations/RAPPORT_COMPARATIF.md`) a 
 que ce verrou réduit nettement la fuite de contenu entre pièces mal bornées d'un
 fichier composite.
 
-### 9.3 Vérification — À LA DEMANDE, profondeur réglable
-
-**Principe (décision produit)** : **aucune vérification LLM automatique** pendant la
-génération — la réponse est rendue directement (rapide). Restent toujours actifs : la
-**note de qualité déterministe** et les **règles grounding** (dans le prompt, qui
-réfutent déjà souvent un présupposé faux dès la rédaction). La vérification LLM ne tourne
-**que sur clic** (« Vérifier la réponse »), à la **profondeur** choisie par un curseur (IHM).
-
-- **Note de qualité** (`_estimate_quality`, **déterministe, sans LLM**, calculée pour
-  toute réponse sourcée) — mesure la **FORME vérifiable**, **pas** la véracité du fond.
-  Part de **10/10** et applique des pénalités : réponse < 200 car. (−3) ; fuite de syntaxe
-  technique `"thought"`/appel d'outil (−5) ; aucune citation (−4) ; citation vers un nœud
-  **hors des sources lues** (−2) ; **page hors de la plage** du nœud (`node_map`) (−2) ;
-  citation **ambiguë** sans document en multi-pièces (−2) ; citation **mal formée**
-  (placeholder « source » ou `【】`) (−2) ; bornée à [0,10]. Le détail des contrôles est
-  renvoyé dans `checks`. ⚠️ Ce contrôle ne mesure que la **forme**, jamais la véracité du
-  fond. **Pour éviter une fausse réassurance, l'IHM n'affiche PAS le score** : elle lève
-  des **alertes** quand des anomalies de forme existent (liste : page hors plage, citation
-  hors sources lues, mal formée…), sinon « **Forme cohérente — fond non vérifié** ». Dans
-  les deux cas, cela **incite** à lancer la vérification LLM (la seule à juger le fond).
-- **Pré-détection (déterministe, sans LLM) — `_predetect`** : calculée **à chaque réponse**
-  (stockée sur le message), elle décide **besoin · scope · niveau** et **propose** une
-  vérification **déjà cadrée** (« Vérification recommandée — présupposé + citations · niveau
-  normal », 1 clic). Détecteurs : **citations** (`_estimate_quality`), **présupposé**
-  (`_question_presupposes` ET la réponse ne réfute pas — `_REFUTES_RE`), **verbatim**
-  (présence de guillemets), **exhaustivité** (« aucun autre / rien d'autre »…), **complétude**
-  (map-reduce / décomposition). Le **niveau** est dérivé : 1 flag déterministe léger → rapide ;
-  flag sémantique (présupposé/exhaustivité) → normal ; ≥ 3 flags ou contexte partiel →
-  approfondi. Le **curseur** reste en **override** manuel ; 0 flag → « fond non vérifié ».
-- **Vérification à la demande** (`POST /sessions/<id>/messages/<i>/verify`, champs `scope` +
-  `verification_level`) — 3 crans, chacun branché sur de **vrais mécanismes** :
-
-  | Cran | Mécanismes | Coût |
-  |---|---|---|
-  | **Rapide** | contrôles **déterministes** seuls (citations/pages + **verbatim**, `_verbatim_issues`) | aucun appel LLM |
-  | **Normal** *(défaut)* | déterministes + **vérificateur de présupposé** (`_presupposition_violation`, **3 votes**) + `reflect` (juge) | quelques appels |
-  | **Approfondi** | vérificateur sur **toute** réponse (**5 votes**) + `reflect` | le plus lourd |
-
-  Les vérificateurs lancés sont **ciblés par le `scope`** (pré-détecté ou choisi) : `citations`
-  et `verbatim` → **déterministes** ; `presupposition` → `_presupposition_violation` ;
-  `exhaustivity`/divers → `reflect`. On ne lance que ce qui est pertinent.
-
-- **Signaler + corriger** : aux crans Normal/Approfondi, si un **présupposé faux**
-  (vérificateur) ou un défaut (`reflect` `action:retry`, score < `REFLECT_ACCEPT_THRESHOLD = 6`)
-  est détecté → une **réponse corrigée** (re-rédaction) est proposée **sous** la réponse
-  d'origine (badge + bulle d'explication du curseur dans l'IHM).
-- **Vérificateur de présupposé** (`_presupposition_violation`) : appel LLM **étroit,
-  multi-vote à la MAJORITÉ** (3 ou 5) — « la réponse désigne-t-elle une entité/rôle/date que
-  les pièces n'établissent pas ? ». Plus fiable que le `reflect` omnibus (qui peut, lui,
-  manquer le présupposé — non déterminisme).
-- **Contexte de vérification** : nœuds **cités d'abord**, puis les autres pièces de la
-  session (borné 60k) — sinon le juge prend un fait issu d'une pièce **non citée** pour une
-  hallucination (faux positif).
-- **`reflect`** : **méthode d'instance** (utilise `self.pageindex`) — ne JAMAIS la remettre
-  `@staticmethod`, sinon `self` capte la question et l'éval renvoie toujours `accept/7`
-  (morte). *Historique : ce bug a rendu l'auto-éval inopérante longtemps ; corrigé, puis
-  l'ensemble est passé « à la demande ».*
-
-### 9.4 API & Socket.IO
+### 9.3 API & Socket.IO
 
 **REST** (`routes/api.py`) : `documents` (CRUD, upload, retry, status, tree,
 node-info, analysis, text-highlights, **`notes`** GET/POST/DELETE,
@@ -701,7 +643,142 @@ node-info, analysis, text-highlights, **`notes`** GET/POST/DELETE,
 
 ---
 
-## 10. Notes & annotations (persistées, sans toucher l'arbre)
+## 10. Vérification des réponses — alertes déterministes + vérification ciblée du fond
+
+Une réponse sourcée peut être **bien formée mais fausse**. Principe : **ce qui est peu
+coûteux (déterministe) est calculé et affiché d'office** comme *alertes* ; **ce qui exige
+le modèle (le fond)** est **proposé** au clic, **ciblé** sur ce que la pré-détection a
+repéré. Pas de relecture systématique, pas de réglage aveugle.
+
+### 10.1 Les enjeux
+
+- **Forme ≠ fond** : un contrôle déterministe (citations, verbatim) ne juge que le
+  **sourçage/la forme**, jamais la **véracité**. Afficher un « 8/10 » donnerait une **fausse
+  réassurance** → on n'affiche **pas** de score ; on lève des **alertes** précises.
+- **Présupposé faux** : une question orientée (« **le mineur**… » alors qu'aucun n'existe)
+  fait **confabuler** le modèle (cf. `DIAGNOSTIC-UEMO.md`) — il « trouve » l'entité au lieu
+  de la **réfuter**. Défaut le plus pernicieux : réponse fluide et citée, fausse dès le 1ᵉʳ mot.
+- **Coût** : juger le fond = appels LLM → **à la demande**, jamais automatique.
+- **Dosage** : une vérification aveugle est lente *et* peu fiable → on **cible** par scope (la
+  pré-détection dit *quoi* vérifier) au lieu d'un curseur de « niveau » trompeur.
+
+### 10.2 Deux couches
+
+| Couche | Quand | Coût | Sortie |
+|---|---|---|---|
+| **A — pré-détection** (`_predetect`) | à chaque réponse | **nul** (déterministe) | **alertes** précises (résolues) + **scope** recommandé |
+| **B — vérification du fond** (`/verify`) | sur **clic** | LLM (ciblé) | verdict + **réponse corrigée** |
+
+```
+Réponse rédigée
+   │
+   ▼
+[A] PRÉ-DÉTECTION  (déterministe, automatique, 0 appel LLM)   ── stockée sur message.quality
+   ├─ alertes RÉSOLUES   : citations (renvoi/page) · verbatim (guillemets)  → affichées d'office
+   └─ scope RECOMMANDÉ   : existence · « rien d'autre » · couverture         → proposé à l'agent
+   │
+   ▼  (clic « Vérifier le fond »)
+[B] VÉRIFICATION CIBLÉE  (LLM, sur le scope ; ou « complète »)
+   ├─ existence d'une entité  → _presupposition_violation (multi-vote)
+   ├─ « rien d'autre » / omissions → reflect
+   └─ défaut confirmé ?  →  RÉPONSE CORRIGÉE (affichée sous la réponse d'origine)
+```
+
+`_predetect` renvoie : `alerts` (anomalies **déjà tranchées**), `scope` (vérificateurs LLM
+recommandés), `flags` (libellés en clair), `need_verify`.
+
+### 10.3 Les détecteurs & scopes, un par un
+
+Pour chacun : **le signal** (comment on détecte, déterministe), **ce qu'on vérifie**, et
+**par quel moyen** (déterministe = tranché tout de suite ; LLM = au clic).
+
+- **`citations`** — *alerte déterministe* (`_estimate_quality`). **Signal** : pour chaque
+  renvoi `(node_X, page N)` extrait de la réponse, on vérifie que `node_X` fait partie des
+  **nœuds lus** (`refs`) et que **N est dans la plage** `[start_index, end_index]` du nœud
+  (`node_map`), et que la forme n'est pas dégénérée (`source`/`【】`). **Résultat** : alerte
+  précise, **formulée pour l'agent** (« renvoi à une page hors de la section citée », « renvoi
+  vers une section non consultée »). Tranché tout de suite, sans modèle.
+- **`verbatim`** — *alerte déterministe* (`_verbatim_issues`). **Signal** : on extrait chaque
+  segment **entre guillemets** `«…»`/`"…"` (≥ 12 car.), on normalise (espaces, casse) et on le
+  **cherche dans le texte des pièces lues**. **Résultat** : tout passage **introuvable**
+  → alerte « passage « … » introuvable tel quel dans les pièces (citation peut-être inexacte) »
+  (= faux verbatim). Tranché sans modèle.
+- **`presupposition`** — *vérificateur LLM recommandé*. **Signal du besoin** (déterministe,
+  `_predetect`) : la question **présuppose** une entité/un rôle — `_question_presupposes`
+  matche « qui est **le/la** … » ou un nom de rôle défini (« **le** mineur / **la** victime /
+  **le** médecin / **le** mis en cause »…) — **ET** la réponse **ne réfute pas** déjà ce
+  présupposé (`_REFUTES_RE` matche « **aucun** … n'est », « pas de … », « tous **majeurs** »…).
+  Les deux ensemble = la réponse **affirme peut-être** une entité que les pièces n'établissent
+  pas → on **recommande** la vérif. **Vérification** (au clic, `_presupposition_violation`) :
+  appel LLM **étroit, multi-vote à la majorité** (3, ou 5 si *complet*) — « la réponse
+  désigne-t-elle une entité/un rôle/une date que les sources n'**établissent** pas ? ».
+- **`exhaustivity`** — *vérificateur LLM recommandé*. **Signal** (déterministe, `_EXHAUSTIVITY_RE`) :
+  la réponse affirme une **absence/exhaustivité** (« aucun autre », « rien d'autre », « c'est
+  tout », « il n'y a pas d'autre »…). Or le contexte peut être un **extrait partiel** (cf.
+  map-reduce) → l'affirmation d'exhaustivité est invérifiable à la rédaction (règle grounding
+  §3.2). **Vérification** (au clic, `reflect`) : confronte cette affirmation aux pièces.
+- **`completeness`** — *vérificateur LLM recommandé*. **Signal** (déterministe) : la voie a
+  produit la réponse sur un **contexte partiel** — **map-reduce** (corpus) ou **décomposition**
+  (drapeau `partial_context`). Des éléments ont pu être omis. **Vérification** (au clic,
+  `reflect`) : cherche les omissions.
+
+### 10.4 Couche B — vérification du fond, ciblée (`POST …/verify`)
+
+Champs : **`scope`** (liste des vérificateurs à lancer — par défaut celui pré-détecté) +
+**`complete`** (booléen). Pas de « niveau ».
+
+- **`complete = false` (ciblé, défaut)** : on lance les vérificateurs LLM du `scope`
+  recommandé (présupposé : **3 votes**), plus `reflect` (couvre exhaustivité/omissions).
+- **`complete = true`** : on lance le présupposé sur **toute** la réponse (**5 votes**) +
+  `reflect`, quel que soit le scope.
+- Dans les deux cas, les **contrôles déterministes** (citations, verbatim) sont **rejoués**
+  pour **alimenter la réponse corrigée**.
+- **Signaler + corriger** : si un présupposé faux, un faux verbatim ou un défaut est détecté
+  (`reflect action:retry`, score < `REFLECT_ACCEPT_THRESHOLD = 6`) → une **réponse corrigée**
+  (re-rédaction fondée sur les pièces) est proposée **sous** la réponse d'origine.
+- **Contexte de vérification** : nœuds **cités d'abord**, puis les autres pièces de la session
+  (borné 60k) — sinon un fait d'une pièce **non citée** passe pour une hallucination (faux
+  positif).
+
+> ⚠️ `reflect` est une **méthode d'instance** (utilise `self.pageindex`) — ne **jamais** la
+> remettre `@staticmethod` : `self` capterait la question et l'éval renverrait toujours
+> `accept/7` (morte). Ce bug a longtemps rendu l'auto-évaluation inopérante.
+
+### 10.5 Côté IHM (`static/js/app.js`)
+
+- **Alertes déterministes affichées d'office** (gratuites) : « N alerte(s) de forme » +
+  liste précise (faux verbatim, page hors plage…).
+- Si la pré-détection recommande un fond à vérifier : bloc **« Vérification du fond
+  recommandée — \<scope\> »** + bouton **« Vérifier le fond (ciblé) »** (lance le scope
+  recommandé) et **« Vérification complète »** (`complete`). Sinon : **« Forme cohérente —
+  fond non vérifié »**. *(Plus de score « X/10 (auto) », plus de curseur de niveau.)*
+- Après vérification : panneau **« Problèmes relevés »** (liste, un par problème) +
+  éventuelle **réponse corrigée** sous la réponse d'origine.
+
+### 10.6 Exemple de bout en bout (cas réel « le mineur »)
+
+Question : **« Qui est le mineur mis en cause ? »** — or le dossier (Procédure) ne contient
+**aucun mineur** : les deux mis en cause y sont explicitement **« Majeur »**.
+
+1. **Rédaction.** Sans garde-fou, le modèle « trouve » un mineur (il désigne le plus jeune des
+   deux) → réponse fluide et citée, mais **fausse dès le premier mot**.
+2. **Pré-détection (auto, gratuite).** `_question_presupposes` repère « **le** mineur » et
+   `_REFUTES_RE` ne trouve pas de réfutation → `scope = ["presupposition"]`. L'agent voit
+   dans l'IHM : **« À faire vérifier — existence des personnes ou faits cités »** + le bouton
+   **« Vérifier le fond (ciblé) »** (avec sa bulle d'explication).
+3. **Clic.** L'agent lance la vérification ciblée.
+4. **Vérification.** `_presupposition_violation` (multi-vote) confronte la réponse aux pièces
+   et **constate qu'aucun mineur n'est établi** (tous majeurs).
+5. **Correction proposée.** Sous la réponse d'origine : *« Aucun mineur n'est mis en cause :
+   les personnes citées (LEGRAND, LEPETIT) sont toutes majeures (p. N). »*
+
+*(Si la règle grounding a déjà fait réfuter le modèle dès l'étape 1 — « aucun mineur… » —
+`_REFUTES_RE` matche, le scope reste vide, et l'IHM affiche « Forme cohérente — fond non
+vérifié » : pas de fausse alerte.)*
+
+---
+
+## 11. Notes & annotations (persistées, sans toucher l'arbre)
 
 Deux familles de **notes par pièce**, stockées **à part** de l'arbre PageIndex (qui
 reste l'index de recherche **intact**), selon **le même motif** (`models/document.py`,
@@ -726,7 +803,7 @@ La **Vue Structure** elle-même est une vue deux panneaux (arbre des pièces per
 (Bibliothèque · conversation mono-document · questions-réponses KB). Sessions
 persistées et **isolées par mode** (`single` / `kb`).
 
-### 10.1 Structure consolidée d'un répertoire (Bibliothèque)
+### 11.1 Structure consolidée d'un répertoire (Bibliothèque)
 
 Conceptuellement, **un dossier de N pièces ≡ un document concaténant N pièces** —
 c'est déjà ainsi que la voie corpus le traite (arbre synthétique « Dossier », §8.4).
@@ -740,7 +817,7 @@ seule, **0 appel LLM**). Un fichier lui-même composite y voit **toutes** ses pi
 remonter (ex. dossier de 25 fichiers → 30 pièces). **100 % présentation** — aucun
 impact indexation/retrieval/citations ; les cartes par fichier restent.
 
-### 10.2 Les notes comme **consignes** (orientation + épinglage)
+### 11.2 Les notes comme **consignes** (orientation + épinglage)
 
 Une note utilisateur **n'est ni une source ni une pièce** : c'est une **consigne /
 pré-rédaction** de l'utilisateur. Elle est donc réinjectée dans le pipeline à deux
@@ -763,7 +840,7 @@ consignes (non implémenté : réserve « orientées par une question passée »
 
 ---
 
-## 11. Modèles & configuration (`config.py` → `config.json`, hors git)
+## 12. Modèles & configuration (`config.py` → `config.json`, hors git)
 
 | Profil | Usage | Modèle (déploiement local) |
 |---|---|---|
@@ -779,14 +856,14 @@ consignes (non implémenté : réserve « orientées par une question passée »
   silencieusement (citations faussées). `SIMPLE_CONTEXT_BUDGET` est surchargeable par
   env **`PAGEINDEX_CTX_BUDGET`** (sert à **forcer le map-reduce en test**, budget bas).
 - **Aucune température imposée** (réglages du Modelfile). En contrepartie les réponses
-  ne sont pas reproductibles → **évaluer sur plusieurs tirages** (cf. §13).
+  ne sont pas reproductibles → **évaluer sur plusieurs tirages** (cf. §14).
 
 Tout serveur OpenAI-compatible fonctionne (Ollama, vLLM, LM Studio…). Serveur Flask +
 Socket.IO sur le port `5001` (`config.py`, `debug=True`).
 
 ---
 
-## 12. Modifications locales de `pageindex/` (fork)
+## 13. Modifications locales de `pageindex/` (fork)
 
 `pageindex/` est une copie de [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex).
 Le **paradigme** (arbre par raisonnement, prompts du cookbook pour `tree_search`)
@@ -806,7 +883,7 @@ signets PDF** (`tree_from_bookmarks`, gratuit/déterministe, repli `tree_parser`
 
 ---
 
-## 13. Limites connues
+## 14. Limites connues
 
 - **Synthèse globale (`overview`) = niveau « fiches »** : structure et thèmes, pas le
   détail circonstancié — levier = richesse des fiches. *(Les questions de détail

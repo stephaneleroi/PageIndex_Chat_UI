@@ -774,9 +774,19 @@ body {
     color: var(--text-secondary); font-size: 11.5px; font-weight: 500;
     padding: 3px 10px; border-radius: 999px; cursor: pointer;
     transition: all 0.15s;
+    position: relative;
 }
 .verify-btn:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text-primary); background: var(--bg-hover); }
 .verify-btn:disabled { opacity: 0.6; cursor: wait; }
+/* Info-bulle fiable (CSS, ≠ title natif) sur les boutons de vérification */
+.verify-btn[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute; bottom: calc(100% + 8px); left: 0;
+    width: 280px; max-width: 70vw; padding: 8px 10px; border-radius: 6px;
+    background: #1f2937; color: #fff; font-size: 11px; font-weight: 400;
+    line-height: 1.45; white-space: normal; text-align: left;
+    z-index: 60; box-shadow: 0 3px 10px rgba(0,0,0,.28); pointer-events: none;
+}
 .verify-issues {
     font-size: 11.5px; color: var(--text-secondary);
     max-width: 600px;
@@ -822,6 +832,25 @@ body {
     border-color: #2563eb; color: #1d4ed8; background: #eff6ff; font-weight: 600;
 }
 .verify-btn.reco:hover:not(:disabled) { background: #dbeafe; }
+.verify-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+/* Cursor de profondeur (3 crans) + override */
+.verify-override { margin-top: 8px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.verify-override-lbl { font-size: 11.5px; color: var(--text-secondary); font-weight: 600; }
+.verify-cursor-wrap { min-width: 220px; max-width: 300px; }
+.verify-cursor { width: 100%; accent-color: #2563eb; cursor: pointer; margin: 0; }
+.verify-cursor-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-top: 2px; overflow: visible; }
+.verify-cursor-labels span { position: relative; cursor: help; }
+.verify-cursor-labels span.on { color: #1d4ed8; font-weight: 700; }
+/* Bulle d'explication au survol de chaque cran (tooltip CSS fiable) */
+.verify-cursor-labels span[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute; bottom: 150%; left: 50%; transform: translateX(-50%);
+    width: 230px; max-width: 60vw; padding: 7px 9px; border-radius: 6px;
+    background: #1f2937; color: #fff; font-size: 11px; font-weight: 400;
+    font-style: normal; line-height: 1.45; white-space: normal; text-align: left;
+    z-index: 60; box-shadow: 0 3px 10px rgba(0,0,0,.28); pointer-events: none;
+}
+.verify-cursor-desc { font-size: 11.5px; color: var(--text-primary); margin-top: 5px; line-height: 1.45; background: var(--bg-hover); padding: 4px 7px; border-radius: 5px; }
 
 /* Per-message hover actions */
 .message { position: relative; }

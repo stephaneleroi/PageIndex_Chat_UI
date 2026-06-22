@@ -206,11 +206,11 @@ class DocumentAgent:
             checks.append("réponse très courte")
         if '"thought"' in text or re.search(r'\b\w+\(\{"', text):
             score -= 5
-            checks.append("syntaxe technique dans la réponse")
+            checks.append("texte technique parasite dans la réponse")
 
         if not cites:
             score -= 4
-            checks.append("aucune citation")
+            checks.append("aucun renvoi à une pièce ou une page")
         else:
             checks.append(f"{len(cites)} citation(s)")
             # Cohérence mécanique des renvois, sans LLM : le nœud cité
@@ -233,7 +233,7 @@ class DocumentAgent:
                 sans_doc = sum(1 for doc_part, _, _ in cites if not doc_part)
                 if sans_doc:
                     score -= 2
-                    checks.append(f"{sans_doc} citation(s) sans document (ambiguës en multi-pièces)")
+                    checks.append(f"{sans_doc} renvoi(s) sans indication du document (ambigu en multi-pièces)")
             bad_node = bad_page = 0
             for _, nid, page_s in cites:
                 pad = nid.zfill(4) if nid.isdigit() else nid
@@ -253,10 +253,10 @@ class DocumentAgent:
                         bad_page += 1
             if bad_node:
                 score -= 2
-                checks.append(f"{bad_node} citation(s) hors des sources lues")
+                checks.append(f"{bad_node} renvoi(s) vers une section non consultée")
             if bad_page:
                 score -= 2
-                checks.append(f"{bad_page} renvoi(s) de page hors plage du nœud")
+                checks.append(f"{bad_page} renvoi(s) à une page hors de la section citée")
             if not bad_node and not bad_page:
                 checks.append("renvois nœud/page cohérents")
 
@@ -271,7 +271,7 @@ class DocumentAgent:
         broken += text.count('【')
         if broken:
             score -= 2
-            checks.append(f"{broken} citation(s) mal formée(s) (placeholder « source » ou 【】)")
+            checks.append(f"{broken} renvoi(s) mal formé(s)")
         # `problems` = anomalies seules (on retire les items positifs : nombre de
         # citations, renvois cohérents). Sert à la pré-détection (besoin de vérif).
         problems = [c for c in checks
@@ -289,53 +289,60 @@ class DocumentAgent:
         r"n['e]y\s+a\s+pas\s+de)", re.IGNORECASE)
 
     def _predetect(self, query: str, answer: str, refs: list, tool_context: dict,
-                   partial_context: bool = False) -> Optional[dict]:
-        """Pré-détection DÉTERMINISTE (sans LLM) du BESOIN, du SCOPE et du NIVEAU de
-        vérification. Enrichit la note de qualité ; stockée sur le message → l'IHM
-        propose une vérification déjà cadrée. Aucune vérification LLM n'est lancée ici."""
+                   context: str = "", partial_context: bool = False) -> Optional[dict]:
+        """Pré-détection DÉTERMINISTE (sans LLM), à chaque réponse, stockée sur le message.
+        Produit deux choses :
+          - `alerts` : anomalies **déjà tranchées** déterministiquement (citations + verbatim)
+            → affichées telles quelles, gratuitement (« ce qui est peu coûteux intégré à la
+            réponse ») ;
+          - `scope` : vérificateurs **LLM recommandés** (sémantiques : présupposé, exhaustivité,
+            complétude) — exécutés seulement au clic.
+        Aucune vérification LLM n'est lancée ici."""
         q = self._estimate_quality(answer, refs, tool_context)
         if q is None:
             return None
         text = answer or ""
-        flags, scope = [], []
+        alerts, scope, flags = [], [], []
 
-        # 1) Citations (déterministe) — anomalies de forme déjà calculées.
-        if q.get("problems"):
-            scope.append("citations")
-            flags.append({"scope": "citations",
-                          "label": "; ".join(q["problems"])})
-        # 2) Présupposé : la question présuppose une entité ET la réponse ne la réfute pas.
+        # === Alertes DÉTERMINISTES (résolues ici, sans modèle) ===
+        # Citations : nœud hors sources lues / page hors plage / mal formée (cf. problems).
+        alerts += [{"type": "citations", "label": p} for p in (q.get("problems") or [])]
+        # Verbatim : chaque phrase entre guillemets doit exister mot pour mot dans les
+        # sources lues. On TRANCHE ici (déterministe) au lieu de seulement « flaguer ».
+        if context:
+            for s in self._verbatim_issues(answer, context):
+                alerts.append({"type": "verbatim",
+                               "label": f"Passage entre guillemets « {s} » introuvable tel quel dans les pièces (citation peut-être inexacte)."})
+
+        # === Vérificateurs LLM RECOMMANDÉS (sémantiques — au clic) ===
+        # Présupposé : la question présuppose une entité/un rôle (`_question_presupposes`)
+        # ET la réponse ne le réfute pas déjà (`_REFUTES_RE`) → risque de confabulation.
         if self._question_presupposes(query) and not self._REFUTES_RE.search(text):
             scope.append("presupposition")
             flags.append({"scope": "presupposition",
-                          "label": "la question présuppose une entité ; vérifier qu'elle est bien établie"})
-        # 3) Verbatim : présence de guillemets → à confronter au texte source.
-        if re.search(r"[«»“”]|\"[^\"]{8,}\"", text):
-            scope.append("verbatim")
-            flags.append({"scope": "verbatim",
-                          "label": "citations entre guillemets à confronter au texte source"})
-        # 4) Exhaustivité : affirmation d'absence/exhaustivité (risque grounding).
+                          "label": "La question suppose une personne ou un élément précis "
+                                   "(ex. « le mineur ») : vérifier qu'il figure bien dans les "
+                                   "pièces, pour éviter une réponse qui l'inventerait."})
+        # Exhaustivité : la réponse affirme une absence/exhaustivité (« aucun autre »…) →
+        # invérifiable sur un contexte possiblement partiel.
         if self._EXHAUSTIVITY_RE.search(text):
             scope.append("exhaustivity")
             flags.append({"scope": "exhaustivity",
-                          "label": "affirmation d'exhaustivité/absence — le contexte peut être partiel"})
-        # 5) Contexte partiel (map-reduce / décomposition).
+                          "label": "La réponse affirme qu'il n'y a rien d'autre : comme les "
+                                   "pièces consultées peuvent être incomplètes, à confronter au dossier."})
+        # Complétude : réponse construite sur un contexte partiel (map-reduce / décomposition).
         if partial_context:
             scope.append("completeness")
             flags.append({"scope": "completeness",
-                          "label": "réponse issue d'un contexte partiel (map-reduce/décomposition)"})
+                          "label": "La réponse a été assemblée à partir d'extraits du dossier : "
+                                   "des éléments ont pu être laissés de côté."})
 
-        # Niveau recommandé : dérivé de la nature/du nombre de flags.
-        sem = {"presupposition", "exhaustivity", "completeness"} & set(scope)
-        if not scope:
-            level = "rapide"
-        elif partial_context or len(scope) >= 3:
-            level = "approfondi"
-        elif sem:
-            level = "normal"
-        else:
-            level = "rapide"
-        q.update({"need": bool(scope), "scope": scope, "level": level, "flags": flags})
+        q.update({
+            "alerts": alerts,             # déterministe, à afficher tel quel
+            "scope": scope,               # vérificateurs LLM recommandés
+            "flags": flags,               # libellés des recommandations
+            "need_verify": bool(scope),   # propose « Vérifier le fond »
+        })
         return q
 
     # ============================================================ #
@@ -659,7 +666,7 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking=(f"Step 1 [tree_search]: {thinking}" if thinking else ""),
-            quality=self._predetect(query, full_answer, refs, tool_context),
+            quality=self._predetect(query, full_answer, refs, tool_context, context=context),
         ))
 
         # Vérification : À LA DEMANDE uniquement (bouton « Vérifier », curseur de
@@ -1082,7 +1089,7 @@ Provide a clear, comprehensive answer in French."""
         self.sessions.add_message(session_id, Message(
             role="assistant", content=full_answer, nodes=refs,
             thinking=(f"Sélection corpus [tree_search]: {thinking}" if thinking else ""),
-            quality=self._predetect(query, full_answer, refs, tool_context, partial_context=use_map_reduce),
+            quality=self._predetect(query, full_answer, refs, tool_context, context=context, partial_context=use_map_reduce),
         ))
 
         # Vérification : À LA DEMANDE uniquement (bouton « Vérifier », curseur de
@@ -1210,22 +1217,7 @@ Provide a clear, comprehensive answer in French."""
             role="assistant", content=full_answer, nodes=refs,
             thinking="Synthèse globale (agrégation des fiches de toutes les pièces)",
             quality=self._predetect(query, full_answer, refs, tool_context)))
-
-        healthy = (
-            len(full_answer) > 400
-            and len(re.findall(r'\(\s*(?:doc:[^,]+,\s*)?node[_\s]*\w+\s*,\s*pages?', full_answer)) >= 2
-            and '"thought"' not in full_answer
-        )
-        if not refs or healthy:
-            logger.info(f"synthèse globale: auto-évaluation sautée (réponse saine={healthy})")
-            return
-        yield "[REFLECTING]\n"
-        reflection = await self.reflect(
-            query, full_answer, inventory, model_type, is_vision, docs_overview=context_overview)
-        yield f"\n[AGENT_REFLECT]{json.dumps(reflection, ensure_ascii=False)}\n"
-        self.sessions.update_last_message(session_id, "assistant", verification={
-            "score": reflection.get("score"), "issues": reflection.get("issues") or [],
-            "missing_info": reflection.get("missing_info") or [], "auto": True})
+        # Vérification : à la demande uniquement (voir /verify) — pas d'auto-évaluation.
 
     async def _run_free_chat(self, session_id, query, model_type, use_memory):
         """Conversation libre (Q-R sans document sélectionné) : le modèle NU.

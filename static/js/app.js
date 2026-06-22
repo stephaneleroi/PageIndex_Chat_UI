@@ -2114,9 +2114,12 @@ function appendHistoryMessage(msgs, m, ctx) {
     if (m.role === 'assistant' && !m.superseded && (m.nodes || []).length) {
         const v = m.verification;
         const q = m.quality;
-        if (v && typeof v.score === 'number') {
+        // On n'affiche QUE les vérifications À LA DEMANDE (manuelles). Les anciens
+        // verdicts « auto » (legacy, plus produits) sont ignorés → pas de « X/10 (auto) ».
+        if (v && !v.auto && typeof v.score === 'number') {
             const cls = v.score >= 8 ? 'good' : v.score >= 6 ? 'medium' : 'poor';
-            const lvlTxt = v.level ? ` · ${esc(v.level)}` : '';
+            const lvlTxt = v.complete ? ' · complète'
+                : ((v.scope && v.scope.length) ? ` · ${esc(verifScopeText(v.scope))}` : '');
             const issuesList = v.issues || [];
             const missingList = v.missing_info || [];
             const li = arr => arr.map(x => `<li>${esc(x)}</li>`).join('');
@@ -2152,42 +2155,51 @@ function appendHistoryMessage(msgs, m, ctx) {
                 ${report}${corrected}
             </div>`;
         } else {
-            // Pré-détection (déterministe, backend) : besoin/scope/niveau de vérif.
-            // On PROPOSE une vérification déjà cadrée ; le curseur reste en override.
-            const lvl = localStorage.getItem('verificationLevel') || 'normal';
-            const opt = (val, label) => `<option value="${val}"${lvl === val ? ' selected' : ''}>${label}</option>`;
-            const levelTip = "Profondeur de la vérification (override manuel) :\n"
-                + "• Rapide : contrôles déterministes seuls (citations/pages, verbatim), aucune relecture par le modèle.\n"
-                + "• Normal : + vérificateur de présupposé (3 votes) + relecture par le juge ; propose une correction.\n"
-                + "• Approfondi : vérificateur sur toute la réponse (5 votes) + relecture → plus lent, plus sûr.";
-            const selectHtml = `<select class="verify-level" title="${esc(levelTip)}" onchange="localStorage.setItem('verificationLevel', this.value)">
-                    ${opt('rapide', 'Rapide')}${opt('normal', 'Normal')}${opt('approfondi', 'Approfondi')}
-                </select>`;
-            const manualBtn = `<button class="verify-btn" onclick="verifyMessage(${ctx.index}, this)"><i class="bi bi-shield-check"></i> Vérifier</button>`;
-            const SCOPE_LABELS = { citations: 'citations', presupposition: 'présupposé', verbatim: 'verbatim', exhaustivity: 'exhaustivité', completeness: 'complétude' };
-            if (q && q.need) {
-                const scopeTxt = (q.scope || []).map(s => SCOPE_LABELS[s] || s).join(' + ');
-                const flagsLi = (q.flags || []).map(f => `<li>${esc(f.label)}</li>`).join('');
-                const recoArgs = `${ctx.index}, this, ${JSON.stringify(q.scope || [])}, ${JSON.stringify(q.level || 'normal')}`;
-                verifyHtml = `<div class="verify-report medium">
-                    <div class="verify-line">
-                        <span class="verify-badge medium"><i class="bi bi-exclamation-triangle"></i> Vérification recommandée — ${esc(scopeTxt)} · niveau ${esc(q.level || 'normal')}</span>
-                    </div>
-                    <div class="verify-block">
-                        <div class="verify-block-title problems"><i class="bi bi-search"></i> Pré-détection (déterministe, sans modèle)</div>
-                        <ul class="verify-list">${flagsLi}</ul>
-                    </div>
-                    <div class="verify-line">
-                        <button class="verify-btn reco" onclick='verifyMessage(${recoArgs})'><i class="bi bi-shield-exclamation"></i> Lancer la vérification recommandée</button>
-                        ${selectHtml}${manualBtn}
-                    </div>
-                </div>`;
-            } else {
-                verifyHtml = `<div class="verify-line">
-                    <span class="verify-badge none"><i class="bi bi-shield"></i> Forme cohérente — fond non vérifié</span>
-                    ${selectHtml}${manualBtn}
-                </div>`;
+            // Pré-détection (déterministe, backend, sans modèle) : `alerts` = anomalies
+            // DÉJÀ tranchées (citations/verbatim, précises) ; `scope` = vérificateurs LLM
+            // recommandés (au clic). Deux actions : « Vérifier le fond (ciblé) » et
+            // « Vérification complète ».
+            const alerts = (q && q.alerts) || [];
+            const scope = (q && q.scope) || [];
+            const flags = (q && q.flags) || [];
+            const li = arr => arr.map(x => `<li>${esc(x)}</li>`).join('');
+            const tipCible = scope.length
+                ? "Fait relire la réponse par le système pour contrôler les points repérés ci-dessus ("
+                  + verifScopeText(scope) + "), en la confrontant aux pièces du dossier. "
+                  + "Plus rapide. Si une erreur est confirmée, une réponse corrigée est proposée."
+                : "Fait relire la réponse par le système et la confronte aux pièces du dossier ; "
+                  + "si une erreur est trouvée, une réponse corrigée est proposée.";
+            const tipFull = "Fait relire l'INTÉGRALITÉ de la réponse, plus en profondeur (tous les "
+                + "contrôles, plusieurs passes), en la confrontant aux pièces. Plus long mais plus "
+                + "sûr — à réserver aux réponses sensibles.";
+            const ciblBtn = `<button class="verify-btn reco" data-tip="${esc(tipCible)}" onclick='verifyMessage(${ctx.index}, this, ${JSON.stringify(scope)}, false)'><i class="bi bi-shield-check"></i> Vérifier le fond${scope.length ? ' (ciblé)' : ''}</button>`;
+            const fullBtn = `<button class="verify-btn" data-tip="${esc(tipFull)}" onclick='verifyMessage(${ctx.index}, this, [], true)'><i class="bi bi-shield-exclamation"></i> Vérification complète</button>`;
+            let blocks = '';
+            if (alerts.length) {
+                blocks += `<div class="verify-block">
+                    <div class="verify-block-title problems"><i class="bi bi-exclamation-triangle"></i> Anomalies repérées automatiquement (${alerts.length})</div>
+                    <ul class="verify-list">${li(alerts.map(a => a.label))}</ul></div>`;
             }
+            if (scope.length) {
+                blocks += `<div class="verify-block">
+                    <div class="verify-block-title"><i class="bi bi-search"></i> À faire vérifier — ${esc(verifScopeText(scope))}</div>
+                    <ul class="verify-list">${li(flags.map(f => f.label))}</ul></div>`;
+            }
+            const cls = alerts.length ? 'poor' : (scope.length ? 'medium' : 'none');
+            let header;
+            if (alerts.length || scope.length) {
+                const bits = [];
+                if (alerts.length) bits.push(`${alerts.length} alerte(s) de forme`);
+                if (scope.length) bits.push('fond à vérifier');
+                header = `<span class="verify-badge ${cls}"><i class="bi bi-exclamation-triangle"></i> ${bits.join(' · ')}</span>`;
+            } else {
+                header = `<span class="verify-badge none"><i class="bi bi-shield"></i> Forme cohérente — fond non vérifié</span>`;
+            }
+            verifyHtml = `<div class="verify-report ${cls === 'none' ? '' : cls}">
+                <div class="verify-line">${header}</div>
+                ${blocks}
+                <div class="verify-actions">${ciblBtn}${fullBtn}</div>
+            </div>`;
         }
     }
     div.innerHTML = `${supersededBadge}<div class="message-content">${rendered}</div>${verifyHtml}${actionsHtml}`;
@@ -2281,25 +2293,36 @@ async function startEditAssistantMessage(index) {
 }
 window.startEditAssistantMessage = startEditAssistantMessage;
 
+// Libellés EN CLAIR des contrôles de fond (destinés aux agents — pas de jargon).
+const VERIF_SCOPE_LABELS = {
+    presupposition: "existence des personnes ou faits cités",
+    exhaustivity: "mentions « aucun autre / rien d'autre »",
+    completeness: "réponse bâtie sur des extraits",
+};
+function verifScopeText(scope) {
+    return (scope || []).map(s => VERIF_SCOPE_LABELS[s] || s).join(' · ');
+}
+
 // Vérification à la demande : juge LLM rejoué sur la réponse avec ses pièces
 // sources. Longue (≈ 1-2 min) — bouton désactivé avec retour visuel, puis
 // rafraîchissement de l'historique (le badge remplace le bouton).
-async function verifyMessage(index, btn, scope, level) {
+async function verifyMessage(index, btn, scope, complete) {
     const sessionId = State.currentPage === 'doc-chat'
         ? State.docChat.activeSessionId : State.kbChat.activeSessionId;
     if (State.isStreaming) { showNotification('Patientez : une réponse est en cours de génération', 'error'); return; }
     if (!sessionId) { showNotification('Aucune conversation active', 'error'); return; }
-    // Reco pré-détectée : scope + niveau fournis. Override manuel (sans scope) :
-    // niveau du curseur + scope complet (vérification large à la demande).
-    level = level || localStorage.getItem('verificationLevel') || 'normal';
-    const sc = scope || ['citations', 'presupposition', 'verbatim', 'exhaustivity'];
+    // `scope` = vérificateurs LLM recommandés (pré-détectés) ; `complete` = tout vérifier
+    // (plus de votes). Le déterministe est déjà fait (alertes), il est rejoué côté serveur
+    // pour la correction.
+    const sc = scope || [];
     btn.disabled = true;
     btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Vérification en cours…';
-    showNotification(`Vérification « ${level} » lancée — relecture de la réponse avec ses sources`);
+    showNotification(complete ? 'Vérification complète lancée — relecture du fond'
+                              : 'Vérification du fond lancée — relecture avec les sources');
     try {
         const r = await fetch(`/api/sessions/${sessionId}/messages/${index}/verify`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ verification_level: level, scope: sc }) });
+            body: JSON.stringify({ scope: sc, complete: !!complete }) });
         const d = await r.json();
         if (!d.success) throw new Error(d.error || 'échec');
         State.socket.emit('get_history', { session_id: sessionId });
