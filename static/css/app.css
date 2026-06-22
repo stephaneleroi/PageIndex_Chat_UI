@@ -569,7 +569,11 @@ body {
     background: white;
     transition: margin-right 0.3s ease;
 }
-.main-content.preview-open { margin-right: 500px; }
+/* Largeur de la visionneuse latérale, redimensionnable (poignée à gauche). */
+:root { --preview-width: 500px; }
+.main-content.preview-open { margin-right: var(--preview-width); }
+body.preview-resizing { cursor: ew-resize; user-select: none; }
+body.preview-resizing .main-content { transition: none; }
 
 .kb-chat-topbar {
     padding: 10px 24px;
@@ -1085,6 +1089,21 @@ body {
 .sr-note-kind-badge { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; padding: 1px 6px; border-radius: 999px; white-space: nowrap; align-self: center; }
 .sr-note-kind-badge.desc { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
 .sr-note-kind-badge.consigne { color: #92400e; background: #fffbeb; border: 1px solid #fde68a; }
+.vnote-page { font-size: 10px; font-weight: 700; color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 1px 6px; white-space: nowrap; align-self: center; }
+
+/* Notes saisies depuis la visionneuse (par page sous l'image, par pièce dans l'en-tête) */
+.viewer-page-notes { margin: 6px auto 14px; max-width: 800px; display: flex; flex-direction: column; gap: 5px; }
+.viewer-piece-notes { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
+.vnote-h { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); display: flex; align-items: center; gap: 5px; }
+.viewer-page-notes .vnote-list, .viewer-piece-notes .vnote-list { display: flex; flex-direction: column; gap: 4px; }
+.viewer-page-notes .vnote-list:empty, .viewer-piece-notes .vnote-list:empty { display: none; }
+.vnote-add { align-self: flex-start; border: 1px dashed var(--border-strong); background: none; cursor: pointer; color: var(--text-secondary); font-size: 11.5px; padding: 3px 10px; border-radius: 7px; }
+.vnote-add:hover { background: var(--bg-hover); color: var(--text-primary); }
+.vnote-del { border: none; background: none; cursor: pointer; color: var(--text-secondary); font-size: 15px; line-height: 1; padding: 0 2px; margin-left: auto; }
+.vnote-del:hover { color: #dc2626; }
+.vnote-cancel { background: white; border: 1px solid var(--border); color: var(--text-secondary); border-radius: 7px; padding: 4px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
+.vnote-save { background: var(--dark); border: 1px solid var(--dark); color: white; border-radius: 7px; padding: 4px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
+.vnote-save:disabled { opacity: .5; cursor: not-allowed; }
 .sr-note-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .sr-note-actions button { border-radius: 7px; padding: 4px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
 .sr-note-cancel { background: white; border: 1px solid var(--border); color: var(--text-secondary); }
@@ -1237,13 +1256,25 @@ body {
  * PAGE PREVIEW MODAL (visionneuse latérale)
  * ============================================ */
 .page-preview-modal {
-    position: fixed; top: 0; right: 0; width: 500px; height: 100%;
+    position: fixed; top: 0; right: 0; width: var(--preview-width); height: 100%;
     z-index: 10000; display: none;
     background: white; flex-direction: column;
     border-left: 1px solid var(--border);
     box-shadow: -8px 0 30px rgba(0, 0, 0, 0.08);
 }
 .page-preview-modal.active { display: flex; animation: sidebarSlideIn 0.25s ease; }
+/* Poignée de redimensionnement (bord GAUCHE) : glisser à gauche = agrandir,
+   à droite = rétrécir. Donne plus de place aux pages et à la saisie de notes. */
+.page-preview-resizer {
+    position: absolute; left: -3px; top: 0; width: 8px; height: 100%;
+    cursor: ew-resize; z-index: 10001;
+}
+.page-preview-resizer::after {
+    content: ""; position: absolute; left: 2px; top: 0; width: 2px; height: 100%;
+    background: transparent; transition: background 0.15s;
+}
+.page-preview-resizer:hover::after,
+body.preview-resizing .page-preview-resizer::after { background: var(--primary, #2563eb); }
 .page-preview-content {
     display: flex; flex-direction: column; height: 100%; overflow: hidden;
 }

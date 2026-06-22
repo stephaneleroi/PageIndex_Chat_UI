@@ -2850,7 +2850,8 @@ function srNoteHtml(n) {
     const badge = consigne
         ? `<span class="sr-note-kind-badge consigne" title="Consigne : oriente la rédaction (jamais citée)">consigne</span>`
         : `<span class="sr-note-kind-badge desc" title="Descriptive : aide à retrouver et prioriser la pièce (sélection)">décrit</span>`;
-    return `<div class="sr-note" data-note-id="${esc(n.id)}">${badge}<span class="sr-note-text">${esc(n.text)}</span>`
+    const pageBadge = n.page ? `<span class="vnote-page" title="Note prise sur la page ${esc(String(n.page))} du PDF">p. ${esc(String(n.page))}</span>` : '';
+    return `<div class="sr-note" data-note-id="${esc(n.id)}">${badge}${pageBadge}<span class="sr-note-text">${esc(n.text)}</span>`
         + `<span class="sr-note-ts">${esc(n.ts || '')}</span>`
         + `<button class="sr-note-del" type="button" title="Supprimer">×</button></div>`;
 }
@@ -3022,7 +3023,8 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
         modal = document.createElement('div');
         modal.id = 'pagePreviewModal';
         modal.className = 'page-preview-modal';
-        modal.innerHTML = `<div class="page-preview-content">
+        modal.innerHTML = `<div class="page-preview-resizer" title="Glisser pour redimensionner la visionneuse"></div>
+            <div class="page-preview-content">
             <div class="page-preview-header">
                 <h5 class="page-preview-title"></h5>
                 <div class="page-preview-header-actions">
@@ -3042,10 +3044,16 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
         modal.querySelector('#prevPageBtn').addEventListener('click', () => navPage(-1));
         modal.querySelector('#nextPageBtn').addEventListener('click', () => navPage(1));
         modal.querySelector('#highlightToggleBtn').addEventListener('click', () => toggleHighlights());
+        modal.addEventListener('click', viewerNoteAction);  // saisie de notes par page / par pièce
+        modal.querySelector('.page-preview-resizer').addEventListener('mousedown', startPreviewResize);
+        // Restaure la largeur choisie précédemment (persistée).
+        const savedW = localStorage.getItem('previewWidth');
+        if (savedW) document.documentElement.style.setProperty('--preview-width', savedW);
     }
 
     State.activeHighlightNodeId = null;
     modal.dataset.docId = docId;
+    modal.dataset.activeNodeId = nodeId || '';
     updateHighlightToggleBtn();
 
     const nMap = State.nodeMapCache[docId] || {};
@@ -3100,6 +3108,7 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     }
 
     modal.dataset.pages = JSON.stringify(allPages);
+    await renderViewerNotes(modal);   // notes par page (+ notes de pièce dans l'en-tête)
     const si = Math.max(0, Math.min((focusPage || currentStart) - 1, allPages.length - 1));
     modal.dataset.currentIndex = si;
     updatePageNav();
@@ -3231,6 +3240,29 @@ function updateActiveNodeTags() {
     });
 }
 
+// Redimensionnement de la visionneuse : on pilote --preview-width (largeur de la
+// modale ET marge du chat). Glisser à GAUCHE agrandit, à DROITE rétrécit. Bornée
+// pour garder le chat utilisable ; persistée dans localStorage.
+function startPreviewResize(e) {
+    e.preventDefault();
+    document.body.classList.add('preview-resizing');
+    const onMove = (ev) => {
+        let w = window.innerWidth - ev.clientX;          // distance bord droit → curseur
+        const max = Math.min(window.innerWidth - 320, window.innerWidth * 0.9);
+        w = Math.max(360, Math.min(w, max));
+        document.documentElement.style.setProperty('--preview-width', w + 'px');
+    };
+    const onUp = () => {
+        document.body.classList.remove('preview-resizing');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        const w = getComputedStyle(document.documentElement).getPropertyValue('--preview-width').trim();
+        try { localStorage.setItem('previewWidth', w); } catch { /* quota : ignoré */ }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+}
+
 function closePagePreviewModal() {
     State.activeHighlightNodeId = null;
     if (State._highlightObserver) { State._highlightObserver.disconnect(); State._highlightObserver = null; }
@@ -3241,6 +3273,158 @@ function closePagePreviewModal() {
     }
 }
 window.closePagePreviewModal = closePagePreviewModal;
+
+// ---- Notes saisies depuis la VISIONNEUSE (Questions/Réponses) ----------------
+// Une note prise sur une page conserve son n° de page (→ « (p. N) », façon point
+// saillant) ; une note prise dans l'en-tête est globale à la pièce (page=None).
+// Les notes sont rangées PAR PIÈCE côté serveur (normalisation node→tête).
+
+// Meilleur nœud propriétaire d'une page : le plus SPÉCIFIQUE (plus petite plage),
+// pour éviter d'attribuer une page de frontière au mauvais nœud. Le serveur
+// remonte ensuite à la pièce ; ici on veut juste un node_id de cette pièce.
+function bestNodeForPage(pageNum, pageNodeMap, nMap) {
+    const cands = (pageNodeMap && pageNodeMap[pageNum]) || [];
+    if (!cands.length) return null;
+    let best = cands[0], bestSize = Infinity;
+    for (const c of cands) {
+        const info = nMap[c.id] || {};
+        const size = (info.end_index || info.start_index || 1) - (info.start_index || 1);
+        if (size < bestSize) { bestSize = size; best = c; }
+    }
+    return best.id;
+}
+
+function viewerNoteHtml(n) {
+    const consigne = n.kind === 'consigne';
+    const kindBadge = consigne
+        ? `<span class="sr-note-kind-badge consigne" title="Consigne : oriente la rédaction (jamais citée)">consigne</span>`
+        : `<span class="sr-note-kind-badge desc" title="Descriptive : aide à retrouver/prioriser la pièce">décrit</span>`;
+    const pageBadge = n.page ? `<span class="vnote-page">p. ${esc(String(n.page))}</span>` : '';
+    return `<div class="sr-note vnote" data-note-id="${esc(n.id)}" data-head="${esc(n._head || '')}">`
+        + `${kindBadge}${pageBadge}<span class="sr-note-text">${esc(n.text)}</span>`
+        + `<button class="vnote-del" type="button" title="Supprimer">×</button></div>`;
+}
+
+// (Re)construit les blocs de notes dans la visionneuse à partir des notes du doc.
+async function renderViewerNotes(modal) {
+    const docId = modal.dataset.docId;
+    const nodeId = modal.dataset.activeNodeId || null;
+    const nMap = State.nodeMapCache[docId] || {};
+    const pageNodeMap = buildPageNodeMap(nMap);
+    const allPages = JSON.parse(modal.dataset.pages || '[]');
+    let notesMap = {};
+    try {
+        notesMap = (await (await fetch(`/api/documents/${docId}/notes`)).json()).notes || {};
+    } catch { /* hors-ligne : on n'affiche rien, la saisie reste possible */ }
+
+    // Aplatit en gardant la tête de pièce (clé) sur chaque note → pour la suppression.
+    const byPage = {}, globals = [];
+    for (const [head, arr] of Object.entries(notesMap)) {
+        for (const n of (arr || [])) {
+            n._head = head;
+            if (n.page) (byPage[n.page] = byPage[n.page] || []).push(n);
+            else globals.push(n);
+        }
+    }
+
+    // Bloc par PAGE.
+    modal.querySelectorAll('.page-image-container').forEach(c => {
+        const idx = parseInt(c.dataset.index);
+        const pageNum = allPages[idx] && allPages[idx].page;
+        c.querySelector('.viewer-page-notes')?.remove();
+        const owner = bestNodeForPage(pageNum, pageNodeMap, nMap) || nodeId || '';
+        const list = (byPage[pageNum] || []).map(viewerNoteHtml).join('');
+        const block = document.createElement('div');
+        block.className = 'viewer-page-notes';
+        block.dataset.node = owner;
+        block.dataset.page = pageNum;
+        block.innerHTML = `<div class="vnote-list">${list}</div>`
+            + `<button class="vnote-add" type="button"><i class="bi bi-plus-lg"></i> Note sur cette page</button>`;
+        c.appendChild(block);
+    });
+
+    // Bloc PIÈCE (en-tête) : notes globales (sans page). Seulement si une pièce est active.
+    const card = modal.querySelector('#nodeInfoCard');
+    if (card && nodeId) {
+        card.querySelector('.viewer-piece-notes')?.remove();
+        const list = globals.map(viewerNoteHtml).join('');
+        const block = document.createElement('div');
+        block.className = 'viewer-piece-notes';
+        block.dataset.node = nodeId;
+        block.innerHTML = `<div class="vnote-h"><i class="bi bi-journal-text"></i> Notes générales de la pièce</div>`
+            + `<div class="vnote-list">${list}</div>`
+            + `<button class="vnote-add" type="button"><i class="bi bi-plus-lg"></i> Note sur cette pièce</button>`;
+        card.appendChild(block);
+    }
+}
+
+// Délégation des actions de notes de la visionneuse (add / save / cancel / del).
+async function viewerNoteAction(e) {
+    const modal = document.getElementById('pagePreviewModal');
+    if (!modal) return;
+    const docId = modal.dataset.docId;
+
+    const add = e.target.closest('.vnote-add');
+    if (add) {
+        e.stopPropagation();
+        const box = add.closest('.viewer-page-notes, .viewer-piece-notes');
+        if (box.querySelector('.vnote-form')) return;
+        const form = document.createElement('div');
+        form.className = 'sr-note-form vnote-form';
+        form.innerHTML = `<textarea class="sr-note-input" rows="2" placeholder="Votre note…"></textarea>`
+            + `<select class="sr-note-kind" title="« Décrit » entre dans la fiche de sélection (aide à retrouver la pièce) ; « Consigne » oriente la rédaction.">`
+            + `<option value="desc">Décrit la pièce (aide à la retrouver)</option>`
+            + `<option value="consigne">Consigne de réponse (comment répondre)</option>`
+            + `</select>`
+            + `<div class="sr-note-actions"><button class="vnote-cancel" type="button">Annuler</button>`
+            + `<button class="vnote-save" type="button">Enregistrer</button></div>`;
+        add.before(form);
+        form.querySelector('.sr-note-input').focus();
+        return;
+    }
+    const cancel = e.target.closest('.vnote-cancel');
+    if (cancel) { e.stopPropagation(); cancel.closest('.vnote-form')?.remove(); return; }
+
+    const save = e.target.closest('.vnote-save');
+    if (save) {
+        e.stopPropagation();
+        const box = save.closest('.viewer-page-notes, .viewer-piece-notes');
+        const form = save.closest('.vnote-form');
+        const text = form.querySelector('.sr-note-input').value.trim();
+        if (!text) return;
+        const kind = form.querySelector('.sr-note-kind').value;
+        const nodeId = box.dataset.node;
+        const page = box.dataset.page ? parseInt(box.dataset.page) : null;
+        if (!nodeId) { showNotification('Pièce introuvable pour cette page', 'error'); return; }
+        save.disabled = true;
+        try {
+            const r = await fetch(`/api/documents/${docId}/nodes/${encodeURIComponent(nodeId)}/notes`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, kind, page }),
+            });
+            const d = await r.json();
+            if (!d.success) throw new Error(d.error || 'échec');
+            await renderViewerNotes(modal);
+        } catch (err) {
+            showNotification('Échec de l\'ajout : ' + err.message, 'error');
+            save.disabled = false;
+        }
+        return;
+    }
+    const del = e.target.closest('.vnote-del');
+    if (del) {
+        e.stopPropagation();
+        const note = del.closest('.vnote');
+        const head = note.dataset.head;   // les notes sont rangées sous la tête de pièce
+        if (!head) return;
+        try {
+            const r = await fetch(`/api/documents/${docId}/nodes/${encodeURIComponent(head)}/notes/${note.dataset.noteId}`,
+                                  { method: 'DELETE' });
+            if (r.ok) await renderViewerNotes(modal);
+        } catch { /* silencieux */ }
+        return;
+    }
+}
 
 function navPage(dir) {
     const m = document.getElementById('pagePreviewModal'); if (!m) return;

@@ -140,6 +140,15 @@ Selon la question, l'app emprunte **automatiquement** (routing, §7) **une** voi
   sélection** — *c'est sur les fiches que `tree_search` raisonne* (§5). Les `(p. N)`
   rendent **citable** toute réponse bâtie sur les seules fiches.
 
+  > **`(p. N)` ≠ `<page_N>` — ne pas confondre.** `<page_N>…</page_N>` est le
+  > **balisage technique** du texte source (§2, *Nœud*), jamais montré ; le prompt
+  > de fiche **interdit** de le recopier. `(p. N)` en est la **traduction lisible
+  > et citable** : le modèle lit la page dans le marqueur englobant et l'écrit
+  > `(p. N)` après chaque fait des *Points saillants*. C'est un contenu **destiné à
+  > être lu** (affiché en Vue Structure, repris comme citation par la synthèse
+  > globale) — pas une scorie technique. *(Forme effective parfois `(p.1)` sans
+  > espace : le parseur IHM `CITE_RE` tolère ces variantes, §9.1.)*
+
 - **`node_map`** — table calculée à la préparation (nœud → plage de pages, texte,
   bbox de surlignage). Sert aux citations et à la visionneuse.
 
@@ -402,6 +411,19 @@ une fiche **complète** (pas le seul préambule de l'en-tête).
 |---|---|---|
 | **Compilation** (pièces indépendantes — **défaut sûr**) | pièces **numérotées** (`Document/Pièce/Annexe N`), **ou** pas de majorité de mots de plan dans les titres | fiches **isolées**, en parallèle (`SUMMARY_CONCURRENCY = 3` — sinon N gros appels gèlent Ollama). Anti-contamination. |
 | **Document unique** (plan cohérent) | la **majorité** des **titres** de têtes portent un mot de plan (chapitre/partie/section/titre/préface…) | fiches **cumulatives** : chaque section reçoit en contexte les fiches précédentes (continuité du fil) |
+
+> **« Cumulatif » n'est PAS une ré-agrégation.** En document unique, chaque section
+> est résumée **séquentiellement** avec, en contexte, **les fiches des sections
+> précédentes** (`utils.py:1047-1061`, contexte borné aux **8000 derniers caractères**).
+> Mais le prompt impose *« do NOT re-summarize them; summarize only the current part,
+> but use them to resolve any back-reference »* : on résume **uniquement la section
+> courante**, le contexte servant à **résoudre les renvois** (« comme vu au chapitre 2 »),
+> **pas** à fusionner les résumés. En **compilation** (défaut), chaque fiche est au
+> contraire produite **seule** (aucun contexte voisin) → anti-contamination.
+>
+> *(Précision transverse : le régime gouverne la fiche **entière** — les 7 champs —,
+> pas seulement les « Points saillants » ; et le texte résumé est celui de **tout le
+> sous-arbre** de la pièce, §4.2, pas le seul nœud de tête.)*
 
 Décision sur les **titres** des têtes — c'est le **seul signal disponible à l'indexation**,
 **avant** que les fiches existent. *(L'ancienne version lisait dates/auteurs/natures dans
@@ -786,17 +808,20 @@ un JSON à côté de `structure.json`) :
 
 | | Notes **utilisateur** | **Fiches à chaud** (map-reduce) |
 |---|---|---|
-| Origine | saisies (« Ajouter une note ») | générées par le *map* (§8.4) |
+| Origine | saisies (Vue Structure **ou visionneuse**, §11.3) | générées par le *map* (§8.4) |
 | Fichier | `notes.json` | `focused_fiches.json` |
 | Méthodes | `add_note` / `get_notes` / `delete_note` | `save_focused_fiche` / `get_focused_fiches` |
-| Forme | `{node_id: [{id, text, kind, ts}]}` (`kind` ∈ `desc`/`consigne`) | `{head_id: [{query, text, nid, ts}]}` |
-| Route | `/documents/<id>/notes` | `/documents/<id>/focused-fiches` |
+| Forme | `{node_id: [{id, text, kind, page, ts}]}` (`kind` ∈ `desc`/`consigne` ; `page` = n° PDF ou `null`) | `{head_id: [{query, text, nid, ts}]}` |
+| Route | `/documents/<id>/nodes/<node>/notes` | `/documents/<id>/focused-fiches` |
 | Persistance | disque (survit au redémarrage) | disque (survit au redémarrage) |
 
-Les deux sont rendues **par pièce** dans la **Vue Structure** (`app.js —
-srExtrasHtml` : bloc « 🔥 Fiches à chaud » + bloc « Mes notes »). Les fiches à chaud
-sont **dédupliquées par (pièce, question)** ; le cache mémoire `_focused_cache` ne sert
-qu'à **recalculer** moins — la **source d'affichage est le disque**.
+**Clé = tête de pièce.** Une note saisie sur un sous-nœud (une page) est **rangée
+sous sa pièce** par `_piece_head_for_node` (`models/document.py`) — invariant « notes
+par pièce » conservé partout (affichage, sélection). Les deux familles sont rendues
+**par pièce** dans la **Vue Structure** (`app.js — srExtrasHtml` : bloc « 🔥 Fiches à
+chaud » + bloc « Mes notes »). Les fiches à chaud sont **dédupliquées par (pièce,
+question)** ; le cache mémoire `_focused_cache` ne sert qu'à **recalculer** moins — la
+**source d'affichage est le disque**.
 
 La **Vue Structure** elle-même est une vue deux panneaux (arbre des pièces persistant
 à gauche, lecture du PDF + fiches + notes à droite), en plus des 3 pages
@@ -854,6 +879,40 @@ niveau 1, donc l'injection en fiche ne les concerne pas.
 Les **fiches à chaud** (map-reduce), elles, sont du **contenu sourcé** (cité à la
 page) — leur réinjection éventuelle relèverait du contexte/inventaire, pas des
 consignes (non implémenté : réserve « orientées par une question passée »).
+
+### 11.3 Saisie des notes depuis la **visionneuse** (Questions/Réponses)
+
+En plus de la Vue Structure, on saisit des notes **directement dans la visionneuse**
+du chat (`app.js — showPagePreviewModal`, fonctions `renderViewerNotes` /
+`viewerNoteAction`) :
+
+- **Note sur une page** — bouton sous chaque page ; la note **conserve son n° de page**
+  (`page = N`, page physique du PDF, cohérente avec les `(p. N)`). Concaténées, les notes
+  d'une pièce forment un bloc **proche des « Points saillants »** d'une fiche.
+- **Note de pièce** — bouton dans l'en-tête (carte du nœud actif) ; **globale**, sans page
+  (`page = null`) — équivalent des notes de la Vue Structure.
+
+Détails techniques :
+- **Rattachement** : le front envoie le nœud propriétaire de la page (le plus spécifique,
+  `bestNodeForPage`) ; le serveur **remonte à la tête de pièce** (`_piece_head_for_node`).
+  Une page de **frontière** entre deux pièces est un cas limite (le nœud le plus étroit
+  l'emporte).
+- **Suppression** : la note est rangée sous la tête ; l'IHM garde `data-head` sur chaque
+  note pour cibler la bonne clé.
+- **Usage** : `page` accompagne la note `desc` **dans la fiche de sélection**
+  (`_piece_descr_notes` → `texte (p. N)`) comme **contexte** — la note **reste
+  non-citable** : elle n'entre **pas** dans le contexte sourcé, le principe §11.2 (« une
+  note n'est pas une source ») tient. *(Évolution possible, non retenue : rendre ces
+  notes-page citables comme de vrais points saillants.)*
+
+**Documents ET répertoires, indistinctement.** Un **document composite** (1 fichier,
+N pièces) et un **répertoire** (N fichiers) suivent la **même voie corpus** — le
+dispatch ne compte que le **nombre total de pièces** (`agent.py`, `effective_single =
+len(_extract_pieces) <= 1`), pas les fichiers. La saisie (visionneuse ouverte sur un
+fichier précis, résolu par `docIdByName`), l'enrichissement de sélection
+(`_piece_descr_notes`, `notes_by_doc` indexé **par doc_id**) et l'épinglage
+fonctionnent donc identiquement dans les deux cas — conformément à l'équivalence
+§1.2/§11.1.
 
 ---
 

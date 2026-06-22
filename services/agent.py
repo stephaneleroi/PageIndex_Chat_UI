@@ -835,7 +835,11 @@ Provide a clear, comprehensive answer in French."""
                 if n.get("kind", "desc") == "desc":
                     t = (n.get("text") or "").strip()
                     if t:
-                        out.append(t)
+                        # La page (si saisie sur une page) accompagne la note pour
+                        # le CONTEXTE de sélection — façon « point saillant ». Elle
+                        # n'est PAS citée : la note reste hors du contexte sourcé.
+                        p = n.get("page")
+                        out.append(f"{t} (p. {p})" if p else t)
         return out
 
     def _piece_has_notes(self, pc, notes_by_doc: dict) -> bool:

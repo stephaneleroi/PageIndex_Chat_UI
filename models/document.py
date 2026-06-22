@@ -371,7 +371,10 @@ class DocumentStore:
     # ---- Notes utilisateur (annotations sur les pièces) ----
     # Prises de notes libres, persistées À PART (notes.json à côté de
     # structure.json) : elles N'ALTÈRENT PAS l'arbre PageIndex (l'index de
-    # recherche reste intact). Forme : { node_id: [{id, text, kind, ts}] }.
+    # recherche reste intact). Forme : { node_id: [{id, text, kind, page, ts}] }.
+    # Clé = TÊTE DE PIÈCE (les notes sont rangées par pièce, cf. _piece_head_for_node).
+    # `page` = n° de page physique du PDF où la note a été prise (None = note
+    # globale de la pièce, p. ex. saisie en Vue Structure).
     # `kind` ∈ {'desc', 'consigne'} :
     #   - 'desc'     : DÉCRIT la pièce → injectée dans la fiche de sélection
     #                  niveau 1 (tree_search la « voit ») + épingle la pièce ;
@@ -397,15 +400,38 @@ class DocumentStore:
         with open(self._notes_path(doc), 'w', encoding='utf-8') as f:
             json.dump(notes, f, indent=2, ensure_ascii=False)
 
+    def _piece_head_for_node(self, doc_id: str, node_id: str) -> str:
+        """node_id de la TÊTE DE PIÈCE (niveau 1) dont le sous-arbre contient
+        `node_id`. Les notes sont rangées PAR PIÈCE : une note saisie sur une
+        page (donc sur un sous-nœud) remonte à sa pièce — cohérent avec
+        l'affichage Vue Structure et la sélection (_piece_descr_notes). Repli :
+        `node_id` inchangé si non résolu."""
+        from pageindex.utils import piece_head_nodes
+        tree = self.get_tree(doc_id)
+        if not tree:
+            return node_id
+
+        def _ids(n):
+            out = [n.get('node_id')]
+            for c in (n.get('nodes') or []):
+                out.extend(_ids(c))
+            return out
+
+        for head in piece_head_nodes(tree):
+            if node_id in _ids(head):
+                return head.get('node_id') or node_id
+        return node_id
+
     def add_note(self, doc_id: str, node_id: str, text: str,
-                 kind: str = 'desc') -> Optional[dict]:
+                 kind: str = 'desc', page: Optional[int] = None) -> Optional[dict]:
         doc = self.get_document(doc_id)
         if not doc:
             return None
         kind = kind if kind in ('desc', 'consigne') else 'desc'
+        node_id = self._piece_head_for_node(doc_id, node_id)  # ranger sous la pièce
         notes = self.get_notes(doc_id)
         note = {'id': uuid.uuid4().hex[:10], 'text': text.strip(), 'kind': kind,
-                'ts': time.strftime('%Y-%m-%d %H:%M')}
+                'page': page, 'ts': time.strftime('%Y-%m-%d %H:%M')}
         notes.setdefault(node_id, []).append(note)
         self._save_notes(doc, notes)
         return note

@@ -628,7 +628,9 @@ def add_doc_note(doc_id, node_id):
     if not text:
         return jsonify({'error': 'text requis'}), 400
     kind = data.get('kind') or 'desc'
-    note = document_store.add_note(doc_id, node_id, text, kind)
+    page = data.get('page')
+    page = int(page) if str(page).isdigit() else None
+    note = document_store.add_note(doc_id, node_id, text, kind, page)
     if note is None:
         return jsonify({'error': 'Document introuvable'}), 404
     return jsonify({'success': True, 'note': note})
