@@ -423,7 +423,8 @@ class DocumentStore:
         return node_id
 
     def add_note(self, doc_id: str, node_id: str, text: str,
-                 kind: str = 'desc', page: Optional[int] = None) -> Optional[dict]:
+                 kind: str = 'desc', page: Optional[int] = None,
+                 quote: Optional[str] = None, rects: Optional[list] = None) -> Optional[dict]:
         doc = self.get_document(doc_id)
         if not doc:
             return None
@@ -432,6 +433,12 @@ class DocumentStore:
         notes = self.get_notes(doc_id)
         note = {'id': uuid.uuid4().hex[:10], 'text': text.strip(), 'kind': kind,
                 'page': page, 'ts': time.strftime('%Y-%m-%d %H:%M')}
+        # Annotation sur un passage sélectionné : passage exact (quote) + rectangles
+        # (fractions 0-1 de la page) pour redessiner le surlignage jaune.
+        if quote:
+            note['quote'] = quote.strip()
+        if rects:
+            note['rects'] = rects
         notes.setdefault(node_id, []).append(note)
         self._save_notes(doc, notes)
         return note

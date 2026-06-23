@@ -645,7 +645,10 @@ def add_doc_note(doc_id, node_id):
     kind = data.get('kind') or 'desc'
     page = data.get('page')
     page = int(page) if str(page).isdigit() else None
-    note = document_store.add_note(doc_id, node_id, text, kind, page)
+    quote = data.get('quote')
+    # rects = liste de {x, y, w, h} en fractions 0-1 de la page (surlignage jaune)
+    rects = data.get('rects') if isinstance(data.get('rects'), list) else None
+    note = document_store.add_note(doc_id, node_id, text, kind, page, quote, rects)
     if note is None:
         return jsonify({'error': 'Document introuvable'}), 404
     return jsonify({'success': True, 'note': note})
@@ -765,6 +768,50 @@ def get_text_highlights(doc_id):
         logger.warning(f"Failed to cache highlights: {e}")
 
     return jsonify(highlights)
+
+
+@api_bp.route('/documents/<doc_id>/page-words', methods=['GET'])
+def get_page_words(doc_id):
+    """Mots positionnés de chaque page (PyMuPDF get_text('words')), en FRACTIONS
+    0-1 de la page → couche de texte sélectionnable par-dessus l'image (la
+    sélection souris donne le passage exact + ses rectangles). Mis en cache."""
+    doc = document_store.get_document(doc_id)
+    if not doc:
+        return jsonify({'error': 'Document not found'}), 404
+    if doc.status != 'ready':
+        return jsonify({'error': 'Document not ready'}), 400
+
+    cache_path = os.path.join(doc.result_dir, 'page_words.json')
+    if os.path.exists(cache_path):
+        with open(cache_path, 'r', encoding='utf-8') as f:
+            return jsonify(json.load(f))
+
+    try:
+        import fitz
+        pdf = fitz.open(doc.file_path)
+        pages = {}
+        for i in range(len(pdf)):
+            page = pdf.load_page(i)
+            w, h = page.rect.width or 1, page.rect.height or 1
+            words = []
+            for x0, y0, x1, y1, word, *_ in page.get_text("words"):
+                if not word.strip():
+                    continue
+                words.append([round(x0 / w, 4), round(y0 / h, 4),
+                              round((x1 - x0) / w, 4), round((y1 - y0) / h, 4), word])
+            pages[str(i + 1)] = words
+        result = {'pages': pages}
+    except Exception as e:
+        logger.error(f"page-words extraction error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"Failed to cache page-words: {e}")
+    return jsonify(result)
 
 
 # ============= Skill Routes =============

@@ -676,7 +676,8 @@ fichier composite.
 ### 9.3 API & Socket.IO
 
 **REST** (`routes/api.py`) : `documents` (CRUD, upload, retry, status, tree,
-node-info, analysis, text-highlights, **`notes`** GET/POST/DELETE,
+node-info, analysis, text-highlights, **`page-words`** GET (mots positionnés pour la
+sélection, §11.3.1), **`notes`** GET/POST/DELETE,
 **`focused-fiches`** GET, édition titre/résumé d'un nœud),
 **`folders/<folder>/structure`** GET (structure consolidée d'un répertoire, §10.1),
 `sessions` (CRUD, truncate, messages, verify), `config/models`, `skills`.
@@ -836,7 +837,7 @@ un JSON à côté de `structure.json`) :
 | Origine | saisies (Vue Structure **ou visionneuse**, §11.3) | générées par le *map* (§8.4) |
 | Fichier | `notes.json` | `focused_fiches.json` |
 | Méthodes | `add_note` / `get_notes` / `delete_note` | `save_focused_fiche` / `get_focused_fiches` |
-| Forme | `{node_id: [{id, text, kind, page, ts}]}` (`kind` ∈ `desc`/`consigne` ; `page` = n° PDF ou `null`) | `{head_id: [{query, text, nid, ts}]}` |
+| Forme | `{node_id: [{id, text, kind, page, ts, quote?, rects?}]}` (`kind` ∈ `desc`/`consigne` ; `page` = n° PDF ou `null` ; `quote`/`rects` = passage annoté, §11.3) | `{head_id: [{query, text, nid, ts}]}` |
 | Route | `/documents/<id>/nodes/<node>/notes` | `/documents/<id>/focused-fiches` |
 | Persistance | disque (survit au redémarrage) | disque (survit au redémarrage) |
 
@@ -911,11 +912,17 @@ En plus de la Vue Structure, on saisit des notes **directement dans la visionneu
 du chat (`app.js — showPagePreviewModal`, fonctions `renderViewerNotes` /
 `viewerNoteAction`) :
 
+- **Annotation d'un PASSAGE par sélection** *(voie principale, §11.3.1)* — on **glisse la
+  souris sur le texte** d'une page : le passage se **surligne en jaune** et on le **commente**.
+  La note porte le passage (`quote`) et ses **rectangles** (`rects`) pour redessiner le jaune.
 - **Note sur une page** — bouton sous chaque page ; la note **conserve son n° de page**
   (`page = N`, page physique du PDF, cohérente avec les `(p. N)`). Concaténées, les notes
   d'une pièce forment un bloc **proche des « Points saillants »** d'une fiche.
 - **Note de pièce** — bouton dans l'en-tête (carte du nœud actif) ; **globale**, sans page
   (`page = null`) — équivalent des notes de la Vue Structure.
+
+> **Cible explicite (clarté).** Chaque formulaire/bulle affiche **« Note sur ‹titre de la
+> section› · p. N »** (`pieceLabelFor`) — on voit toujours à quel nœud/pièce la note se rattache.
 
 Détails techniques :
 - **Rattachement** : le front envoie le nœud propriétaire de la page (le plus spécifique,
@@ -929,6 +936,29 @@ Détails techniques :
   non-citable** : elle n'entre **pas** dans le contexte sourcé, le principe §11.2 (« une
   note n'est pas une source ») tient. *(Évolution possible, non retenue : rendre ces
   notes-page citables comme de vrais points saillants.)*
+
+#### 11.3.1 Sélection de texte sur une image de page
+
+Les pages sont des **images** (JPEG) : aucune couche de texte sélectionnable nativement.
+On reconstruit donc la sélection à partir des **boîtes de mots**.
+
+- **Mots positionnés** — `GET /documents/<id>/page-words` (`routes/api.py`) renvoie, par page,
+  les mots (`PyMuPDF get_text("words")`) en **fractions 0-1** de la page (indépendant de la
+  résolution), **mis en cache** (`page_words.json`). Chargés une fois par doc/session
+  (`ensureWords`, `State.wordsCache`).
+- **Sélection par glisser** (`setupPageSelection`) — au lieu de la sélection native (qui
+  exigerait une couche de texte parfaitement calée, *cf.* PDF.js), on sélectionne les **mots
+  couverts** par le glisser (du mot sous le point de départ à celui sous le point d'arrivée,
+  dans l'ordre de lecture PyMuPDF). Le passage (`quote`) = ces mots ; les `rects` = leurs
+  boîtes. *Avantage :* alignement **exact** avec l'image, sans dépendre du rendu de police.
+- **Surlignage jaune** — des `<div class="pps-hl">` en `%` de la page, **recalés en JS sur la
+  boîte RÉELLE de l'image** (`syncPageOverlays` : `offsetLeft/Top`, `clientWidth/Height` — car
+  l'image peut être centrée/plus étroite que le conteneur, `max-height: 70vh`), resync au
+  `load` et au `resize` (l'observer de `initHighlightsForModal`). Jaune **provisoire** pendant
+  le glisser, **persistant** ensuite (redessiné depuis les `rects` des notes).
+- **Commentaire** — au relâché, une bulle (`openCommentPopover`) montre la cible + le passage
+  + une zone de texte → `POST …/notes` avec `{page, quote, rects, text}`. Un simple **clic**
+  (sans glisser) n'ouvre pas de bulle (il garde le plein écran de l'image).
 
 **Documents ET répertoires, indistinctement.** Un **document composite** (1 fichier,
 N pièces) et un **répertoire** (N fichiers) suivent la **même voie corpus** — le

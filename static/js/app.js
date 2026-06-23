@@ -3104,6 +3104,7 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
         modal.querySelector('#structureToggleBtn').addEventListener('click', () => togglePreviewStructure());
         modal.addEventListener('click', viewerNoteAction);  // saisie de notes par page / par pièce
         modal.querySelector('.page-preview-resizer').addEventListener('mousedown', startPreviewResize);
+        setupPageSelection(modal);   // glisser pour sélectionner du texte → commenter
         // Restaure la largeur choisie précédemment (persistée).
         const savedW = localStorage.getItem('previewWidth');
         if (savedW) document.documentElement.style.setProperty('--preview-width', savedW);
@@ -3149,14 +3150,18 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     imgs.innerHTML = buildPageImagesHtml(allPages, pageNodeMap, nodeId, currentStart, currentEnd);
     if (allPages?.length) {
         imgs.querySelectorAll('.page-preview-image').forEach(img => {
-            img.addEventListener('click', () => openFullscreen(img.src));
+            img.addEventListener('click', () => {
+                // Après un glisser-sélection, on avale le clic (sinon plein écran).
+                if (State._swallowImgClick) { State._swallowImgClick = false; return; }
+                openFullscreen(img.src);
+            });
             // Highlights are drawn in image-pixel space, so a page can only be
             // highlighted once its image has real dimensions. Redraw on load so
             // an auto-activated highlight appears even before the user scrolls.
             img.addEventListener('load', () => {
-                if (!State.activeHighlightNodeId) return;
                 const container = img.closest('.page-image-container');
-                if (!container) return;
+                if (container) syncPageOverlays(container);   // cale les surlignages jaunes
+                if (!State.activeHighlightNodeId || !container) return;
                 const idx = parseInt(container.dataset.index);
                 drawHighlightsOnPage(container, idx + 1, State.highlightsCache[docId], nMap, State.activeHighlightNodeId);
             });
@@ -3170,6 +3175,8 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
     }
 
     modal.dataset.pages = JSON.stringify(allPages);
+    closeCommentPopover();
+    ensureWords(docId);               // charge la couche de mots (sélection) en tâche de fond
     await renderViewerNotes(modal);   // notes par page (+ notes de pièce dans l'en-tête)
     const si = Math.max(0, Math.min((focusPage || currentStart) - 1, allPages.length - 1));
     modal.dataset.currentIndex = si;
@@ -3192,10 +3199,11 @@ async function showPagePreviewModal(docId, nodeId, nodeInfo, allPages, autoHighl
 
 async function initHighlightsForModal(modal, nMap, docId) {
     const hlData = await fetchTextHighlights(docId);
-    if (!hlData) return;
     if (State._highlightObserver) { State._highlightObserver.disconnect(); State._highlightObserver = null; }
     State._highlightObserver = new ResizeObserver(() => {
-        if (State.activeHighlightNodeId) {
+        // Resync des surlignages JAUNES (annotations) sur la boîte de l'image.
+        modal.querySelectorAll('.page-image-container').forEach(syncPageOverlays);
+        if (hlData && State.activeHighlightNodeId) {
             redrawAllHighlights(modal, hlData, nMap, State.activeHighlightNodeId);
         }
     });
@@ -3398,7 +3406,168 @@ function previewFocusNode(nodeId, rowEl) {
     if (target && scrollParent) scrollParent.scrollTop = target.offsetTop - scrollParent.offsetTop;
 }
 
+// ---- Annotation par SÉLECTION de texte (glisser sur les mots) ----------------
+// Les pages sont des IMAGES : on utilise les boîtes de mots (PyMuPDF, en fractions
+// 0-1) pour une sélection qui s'aligne EXACTEMENT avec l'image. Glisser surligne en
+// jaune les mots couverts ; au relâché, on commente le passage. Le commentaire est
+// une note (page + quote + rects) rangée sous la pièce → concaténée en sa note.
+async function ensureWords(docId) {
+    State.wordsCache = State.wordsCache || {};
+    if (State.wordsCache[docId]) return State.wordsCache[docId];
+    State.wordsCache[docId] = {};   // anti double-fetch
+    try {
+        const r = await fetch(`/api/documents/${docId}/page-words`);
+        const d = await r.json();
+        State.wordsCache[docId] = d.pages || {};
+    } catch { /* réseau : pas de sélection */ }
+    return State.wordsCache[docId];
+}
+
+function setupPageSelection(modal) {
+    const body = modal.querySelector('.page-preview-body');
+    let drag = null;
+    const ptFrac = (container, ev) => {
+        const img = container.querySelector('.page-preview-image');
+        const cr = img.getBoundingClientRect();
+        return { x: (ev.clientX - cr.left) / cr.width, y: (ev.clientY - cr.top) / cr.height };
+    };
+    const wordIdxAt = (words, p) => {
+        let best = -1, bestD = Infinity;
+        for (let i = 0; i < words.length; i++) {
+            const [x, y, w, h] = words[i];
+            if (p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h) return i;
+            const dx = p.x - (x + w / 2), dy = p.y - (y + h / 2), d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    };
+    body.addEventListener('mousedown', ev => {
+        const container = ev.target.closest && ev.target.closest('.page-image-container');
+        if (!container) return;
+        if (ev.target.closest('.pps-comment-pop, .viewer-page-notes, .viewer-piece-notes, .page-node-tag')) return;
+        const docId = modal.dataset.docId;
+        const allPages = JSON.parse(modal.dataset.pages || '[]');
+        const pageNum = (allPages[parseInt(container.dataset.index)] || {}).page;
+        const words = (State.wordsCache[docId] || {})[String(pageNum)] || [];
+        if (!words.length) return;
+        ev.preventDefault();   // pas de drag-fantôme de l'image
+        State._swallowImgClick = false;
+        closeCommentPopover();
+        drag = { container, pageNum, words, startIdx: wordIdxAt(words, ptFrac(container, ev)), moved: false };
+    });
+    body.addEventListener('mousemove', ev => {
+        if (!drag) return;
+        const endIdx = wordIdxAt(drag.words, ptFrac(drag.container, ev));
+        if (endIdx !== drag.startIdx) drag.moved = true;
+        drawPendingSel(drag, endIdx);
+    });
+    body.addEventListener('mouseup', ev => {
+        if (!drag) return;
+        const d = drag; drag = null;
+        if (!d.moved) { clearPendingSel(); return; }   // simple clic → plein écran, pas de sélection
+        const endIdx = wordIdxAt(d.words, ptFrac(d.container, ev));
+        if (d.startIdx < 0 || endIdx < 0) { clearPendingSel(); return; }
+        const [a, b] = d.startIdx <= endIdx ? [d.startIdx, endIdx] : [endIdx, d.startIdx];
+        const sel = d.words.slice(a, b + 1);
+        const quote = sel.map(w => w[4]).join(' ').replace(/\s+/g, ' ').trim();
+        const rects = sel.map(([x, y, w, h]) => ({ x, y, w, h }));
+        State._swallowImgClick = true;   // évite le plein écran déclenché par le clic de fin
+        if (!quote) { clearPendingSel(); return; }
+        openCommentPopover(modal, d.container, d.pageNum, quote, rects);
+    });
+}
+
+function drawPendingSel(drag, endIdx) {
+    clearPendingSel();
+    if (drag.startIdx < 0 || endIdx < 0) return;
+    const [a, b] = drag.startIdx <= endIdx ? [drag.startIdx, endIdx] : [endIdx, drag.startIdx];
+    const hl = document.createElement('div');
+    hl.className = 'pps-hl pps-hl-pending';
+    hl.innerHTML = drag.words.slice(a, b + 1).map(([x, y, w, h]) =>
+        `<span style="left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%"></span>`).join('');
+    drag.container.appendChild(hl);
+    syncPageOverlays(drag.container);
+}
+function clearPendingSel() { document.querySelectorAll('.pps-hl-pending').forEach(h => h.remove()); }
+
+// Cale les surlignages (.pps-hl, en % de la PAGE) sur la boîte RÉELLE de l'image
+// (qui peut être centrée et plus étroite que le conteneur). Resync au load/resize.
+function syncPageOverlays(container) {
+    const img = container.querySelector('.page-preview-image');
+    if (!img) return;
+    const l = img.offsetLeft, t = img.offsetTop, w = img.clientWidth, h = img.clientHeight;
+    container.querySelectorAll('.pps-hl').forEach(hl => {
+        hl.style.left = l + 'px'; hl.style.top = t + 'px';
+        hl.style.width = w + 'px'; hl.style.height = h + 'px';
+    });
+}
+
+// Libellé CLAIR de la cible (2°) : « Note sur ‹section/pièce› · p. N ».
+function pieceLabelFor(docId, nodeId, pageNum) {
+    const nm = State.nodeMapCache[docId] || {};
+    const info = nm[nodeId];
+    const t = info ? ((info.node && info.node.title) || nodeId) : '';
+    const title = t ? `Note sur « ${t.length > 42 ? t.slice(0, 40) + '…' : t} »` : 'Note';
+    return title + (pageNum ? ` · p. ${pageNum}` : '');
+}
+
+function closeCommentPopover() {
+    document.getElementById('ppsCommentPop')?.remove();
+    clearPendingSel();
+}
+
+function openCommentPopover(modal, container, pageNum, quote, rects) {
+    closeCommentPopover();
+    // surlignage jaune provisoire (du passage sélectionné)
+    const hl = document.createElement('div');
+    hl.className = 'pps-hl pps-hl-pending';
+    hl.innerHTML = rects.map(r => `<span style="left:${r.x * 100}%;top:${r.y * 100}%;width:${r.w * 100}%;height:${r.h * 100}%"></span>`).join('');
+    container.appendChild(hl);
+    syncPageOverlays(container);
+
+    const docId = modal.dataset.docId;
+    const nm = State.nodeMapCache[docId] || {};
+    const owner = bestNodeForPage(pageNum, buildPageNodeMap(nm), nm) || modal.dataset.activeNodeId || '';
+    const pop = document.createElement('div');
+    pop.className = 'pps-comment-pop';
+    pop.id = 'ppsCommentPop';
+    const short = quote.length > 160 ? quote.slice(0, 158) + '…' : quote;
+    pop.innerHTML = `<div class="pps-pop-head">${esc(pieceLabelFor(docId, owner, pageNum))}</div>`
+        + `<div class="pps-pop-quote">« ${esc(short)} »</div>`
+        + `<textarea class="pps-pop-input" rows="2" placeholder="Votre commentaire sur ce passage…"></textarea>`
+        + `<div class="pps-pop-actions"><button class="pps-pop-cancel" type="button">Annuler</button>`
+        + `<button class="pps-pop-save" type="button">Commenter</button></div>`;
+    container.appendChild(pop);
+    // Position en pixels, calée sur la boîte RÉELLE de l'image (centrée/plus étroite).
+    const img = container.querySelector('.page-preview-image');
+    const r0 = rects[0];
+    const maxLeft = Math.max(0, img.offsetLeft + img.clientWidth - pop.offsetWidth);
+    pop.style.left = Math.min(img.offsetLeft + r0.x * img.clientWidth, maxLeft) + 'px';
+    pop.style.top = (img.offsetTop + (r0.y + r0.h) * img.clientHeight + 4) + 'px';
+    pop.querySelector('.pps-pop-input').focus();
+
+    pop.querySelector('.pps-pop-cancel').addEventListener('click', () => closeCommentPopover());
+    pop.querySelector('.pps-pop-save').addEventListener('click', async () => {
+        const text = pop.querySelector('.pps-pop-input').value.trim();
+        if (!text) return;
+        if (!owner) { showNotification('Pièce introuvable pour cette page', 'error'); return; }
+        const btn = pop.querySelector('.pps-pop-save');
+        btn.disabled = true;
+        try {
+            const r = await fetch(`/api/documents/${docId}/nodes/${encodeURIComponent(owner)}/notes`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, kind: 'desc', page: pageNum, quote, rects }),
+            });
+            const d = await r.json();
+            if (!d.success) throw new Error(d.error || 'échec');
+            closeCommentPopover();
+            await renderViewerNotes(modal);   // redessine les surlignages persistants + listes
+        } catch (err) { showNotification('Échec : ' + err.message, 'error'); btn.disabled = false; }
+    });
+}
+
 function closePagePreviewModal() {
+    closeCommentPopover();
     State.activeHighlightNodeId = null;
     if (State._highlightObserver) { State._highlightObserver.disconnect(); State._highlightObserver = null; }
     const m = document.getElementById('pagePreviewModal');
@@ -3435,9 +3604,11 @@ function viewerNoteHtml(n) {
         ? `<span class="sr-note-kind-badge consigne" title="Consigne : oriente la rédaction (jamais citée)">consigne</span>`
         : `<span class="sr-note-kind-badge desc" title="Descriptive : aide à retrouver/prioriser la pièce">décrit</span>`;
     const pageBadge = n.page ? `<span class="vnote-page">p. ${esc(String(n.page))}</span>` : '';
-    return `<div class="sr-note vnote" data-note-id="${esc(n.id)}" data-head="${esc(n._head || '')}">`
-        + `${kindBadge}${pageBadge}<span class="sr-note-text">${esc(n.text)}</span>`
-        + `<button class="vnote-del" type="button" title="Supprimer">×</button></div>`;
+    const quote = n.quote
+        ? `<div class="vnote-quote" title="Passage annoté">« ${esc(n.quote.length > 120 ? n.quote.slice(0, 118) + '…' : n.quote)} »</div>` : '';
+    return `<div class="sr-note vnote${quote ? ' has-quote' : ''}" data-note-id="${esc(n.id)}" data-head="${esc(n._head || '')}">`
+        + `<div class="vnote-top">${kindBadge}${pageBadge}<span class="sr-note-text">${esc(n.text)}</span>`
+        + `<button class="vnote-del" type="button" title="Supprimer">×</button></div>${quote}</div>`;
 }
 
 // (Re)construit les blocs de notes dans la visionneuse à partir des notes du doc.
@@ -3476,6 +3647,18 @@ async function renderViewerNotes(modal) {
         block.innerHTML = `<div class="vnote-list">${list}</div>`
             + `<button class="vnote-add" type="button"><i class="bi bi-plus-lg"></i> Note sur cette page</button>`;
         c.appendChild(block);
+        // Surlignages JAUNES persistants des passages annotés de cette page.
+        c.querySelectorAll('.pps-hl-saved').forEach(h => h.remove());
+        for (const n of (byPage[pageNum] || [])) {
+            if (!Array.isArray(n.rects) || !n.rects.length) continue;
+            const hl = document.createElement('div');
+            hl.className = 'pps-hl pps-hl-saved';
+            hl.dataset.noteId = n.id;
+            hl.title = n.text;
+            hl.innerHTML = n.rects.map(r => `<span style="left:${r.x * 100}%;top:${r.y * 100}%;width:${r.w * 100}%;height:${r.h * 100}%"></span>`).join('');
+            c.appendChild(hl);
+        }
+        syncPageOverlays(c);
     });
 
     // Bloc PIÈCE (en-tête) : notes globales (sans page). Seulement si une pièce est active.
@@ -3506,7 +3689,11 @@ async function viewerNoteAction(e) {
         if (box.querySelector('.vnote-form')) return;
         const form = document.createElement('div');
         form.className = 'sr-note-form vnote-form';
-        form.innerHTML = `<textarea class="sr-note-input" rows="2" placeholder="Votre note…"></textarea>`
+        // Cible CLAIRE (2°) : sur quelle pièce/section et quelle page porte la note.
+        const pg = box.dataset.page ? parseInt(box.dataset.page) : null;
+        const label = pieceLabelFor(docId, box.dataset.node, pg);
+        form.innerHTML = `<div class="vnote-form-head">${esc(label)}</div>`
+            + `<textarea class="sr-note-input" rows="2" placeholder="Votre note…"></textarea>`
             + `<select class="sr-note-kind" title="« Décrit » entre dans la fiche de sélection (aide à retrouver la pièce) ; « Consigne » oriente la rédaction.">`
             + `<option value="desc">Décrit la pièce (aide à la retrouver)</option>`
             + `<option value="consigne">Consigne de réponse (comment répondre)</option>`
