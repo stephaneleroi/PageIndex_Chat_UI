@@ -278,6 +278,14 @@ toute question) — par opposition aux fiches **« à chaud »** du map-reduce (
    est converti en PDF (`_convert_to_pdf_with_libreoffice()`, `soffice --headless`).
    Indexation **séquentielle** : un seul document à la fois (`_INDEXING_GATE =
    Semaphore(1)`).
+   - **`doc_id` STABLE, dérivé du contenu** : `doc_id = SHA-256(pdf)[:16]` (le PDF est
+     d'abord sauvé en temporaire, converti si `.docx`, puis empreint). Réimporter **le
+     même PDF redonne le même `doc_id`** → **réimport idempotent** (si le document existe
+     déjà, on le réutilise, sans doublon ni réindexation). *Pourquoi :* une session de chat
+     fige le `doc_id` des pièces citées (`doc_ids`, `doc_id::node`) ; un `doc_id` horodaté
+     (ancien schéma) rendait les conversations **orphelines** après un supprimer/réimporter.
+     Le scan de récupération lit le `doc_id` dans `metadata.json` (pas le nom de
+     répertoire), donc un id non horodaté est sans impact.
 2. **Cache de réimportation SHA-256** (`routes/api.py — _find_cached_index()` /
    `_sha256_file()`) : si un fichier `<nom>.pdf.pageindex.json` (à côté du PDF source,
    `SOURCE_DATA_DIR`, défaut `../data`) a un champ `pdf_sha256` égal à l'empreinte du
@@ -643,6 +651,19 @@ et accumule texte + citations. **Pas** de boucle ReAct.
 - Clic → `showPagePreviewModal()` : images des pages, défilement à la page citée,
   **surlignage du nœud source** (bbox) ; pour une citation « pages seules », le nœud
   est déduit du `node_map`. Le badge dit **« Page N du PDF »** (folio ≠ index).
+- **Robustesse aux citations incohérentes** (`showNodePreview`) : si la **page citée
+  est hors de la plage du nœud cité** (le modèle a écrit le mauvais `node_id` à côté de
+  pages correctes), on **se fie à la PAGE** — on associe le nœud qui la possède réellement
+  (le plus spécifique), comme une citation « page seule ». Navigation, surlignage **et**
+  prise de note pointent alors le bon nœud. *(Cas cohérent inchangé.)*
+- **Visionneuse redimensionnable** : poignée sur le bord gauche (variable CSS
+  `--preview-width`, bornée, persistée `localStorage`) — pilote largeur de la visionneuse
+  **et** marge du chat.
+- **Panneau « Structure »** (`togglePreviewStructure` / `renderStructureTree` en mode
+  `readonly`) : table des matières navigable **à gauche** des pages, **réutilise** le rendu
+  d'arbre de la Vue Structure (§11). Pièces avec **icône « résumé »** (fiche dépliable),
+  **sous-nœuds dépliés** ; clic sur un nœud → `previewFocusNode` (défile à sa **page de
+  début** + surligne). Chargé à la demande (`/tree`, cache `previewTreeCache`).
 
 ### 9.2 IDs de citation autorisés (`_build_allowed_citations`)
 
@@ -716,10 +737,14 @@ Pour chacun : **le signal** (comment on détecte, déterministe), **ce qu'on vé
 
 - **`citations`** — *alerte déterministe* (`_estimate_quality`). **Signal** : pour chaque
   renvoi `(node_X, page N)` extrait de la réponse, on vérifie que `node_X` fait partie des
-  **nœuds lus** (`refs`) et que **N est dans la plage** `[start_index, end_index]` du nœud
-  (`node_map`), et que la forme n'est pas dégénérée (`source`/`【】`). **Résultat** : alerte
-  précise, **formulée pour l'agent** (« renvoi à une page hors de la section citée », « renvoi
-  vers une section non consultée »). Tranché tout de suite, sans modèle.
+  **nœuds lus** (`refs`) et que **N est dans la plage de TOUT le SOUS-ARBRE** de `node_X`
+  (pas la seule plage de la tête), et que la forme n'est pas dégénérée (`source`/`【】`).
+  *Pourquoi le sous-arbre :* en **synthèse globale**, une pièce est citée par sa **tête**
+  (ex. `node_0006` « PREMIÈRE PARTIE », plage propre 15-18) mais ses faits sont aux pages de
+  ses **sous-sections** (p. 19-47) ; valider sur la seule tête lèverait de **fausses alertes**.
+  Les **feuilles** gardent leur plage propre → un vrai renvoi hors-pièce reste détecté.
+  **Résultat** : alerte précise, **formulée pour l'agent** (« renvoi à une page hors de la
+  section citée », « renvoi vers une section non consultée »). Tranché tout de suite, sans modèle.
 - **`verbatim`** — *alerte déterministe* (`_verbatim_issues`). **Signal** : on extrait chaque
   segment **entre guillemets** `«…»`/`"…"` (≥ 12 car.), on normalise (espaces, casse) et on le
   **cherche dans le texte des pièces lues**. **Résultat** : tout passage **introuvable**
@@ -976,6 +1001,14 @@ signets PDF** (`tree_from_bookmarks`, gratuit/déterministe, repli `tree_parser`
 - Détection de sommaire limitée aux **20 premières pages**.
 - Indexation et réponses **non déterministes** (LLM, température Modelfile) → évaluer
   sur **plusieurs tirages**.
+- **`node_id` non stables à la réindexation** : le `doc_id` est désormais stable
+  (dérivé du SHA, §4.1), mais réindexer un document **sans signets** peut **réassigner**
+  les `node_id`/pages (segmentation/sommaire par LLM). Une **vieille** conversation peut
+  donc citer un `node_id` dont le contenu a bougé. Atténuations : la visionneuse se **fie
+  à la page** si nœud et page divergent (§9.1) ; les documents **à signets** ont un arbre
+  **déterministe** (`tree_from_bookmarks`, §4.1). *(Une citation `(node, page)` peut aussi
+  être simplement **fausse à la génération** — mauvais `node_id` écrit par le modèle ; c'est
+  ce que signale le contrôle « page hors de la section citée », §10.3.)*
 
 ---
 
