@@ -90,8 +90,8 @@ class DocumentAgent:
         self.pageindex = pageindex_service
         self.store = store
         self.sessions = sessions
-        # Cache des fiches ciblées (map-reduce) : (doc_id, head_id, question) →
-        # fiche|None. Évite de recalculer un map déjà fait (retry, reformulation,
+        # Cache des fiches ciblées (map-reduce) : (doc_id, head_id, query, instructions)
+        # → fiche|None. Évite de recalculer un map déjà fait (retry, reformulation,
         # sous-question répétée). Conservé le temps du process.
         self._focused_cache = {}
 

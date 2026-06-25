@@ -230,7 +230,7 @@ la page, notes** — est **notre couche** par-dessus (`services/`, `models/`, IH
 │     · rag_service.py     → PageIndexService (tree_search, LLM/VLM) + RAGService
 │     · indexing_service.py→ index_pdf : pilote l'indexation
 │     · prompt_templates.py + prompts/*.jinja → prompts itérés/évalués (§3.2)
-│     · skill_manager.py   → skills Markdown injectables
+│     · skill_manager.py   → skills Markdown injectables (§8.6)
 │   models/
 │     · document.py        → Document / DocumentStore (arbre, node_map, images, NOTES, FICHES à chaud)
 │     · session.py         → ChatSession / Message / SessionStore
@@ -290,7 +290,7 @@ toute question) — par opposition aux fiches **« à chaud »** du map-reduce (
    `_sha256_file()`) : si un fichier `<nom>.pdf.pageindex.json` (à côté du PDF source,
    `SOURCE_DATA_DIR`, défaut `../data`) a un champ `pdf_sha256` égal à l'empreinte du
    PDF **et** une `structure` → arbre **restauré sans aucun appel LLM**. Sinon, après
-   indexation, le résultat y est **réécrit** (`{pdf_sha256, page_count, structure}`).
+   indexation, le résultat y est **réécrit** (`{pdf_sha256, page_count, structure, analysis}`).
 3. **Construction de l'arbre** (`indexing_service.index_pdf()` →
    `pageindex.page_index_main()`, code dans `pageindex/page_index.py —
    page_index_builder()`). C'est l'étape la plus riche : elle **mêle des passes
@@ -638,6 +638,36 @@ Une question de **natures différentes** est scindée par `decompose_query` ; ch
 sous-question suit la voie de **son** intention, et les réponses sont assemblées en
 **sections `##`** sous un seul cycle. `_relay_subquery` masque les marqueurs de cycle
 et accumule texte + citations. **Pas** de boucle ReAct.
+
+### 8.6 Skills personnalisés (gabarits de sortie injectés à la rédaction)
+
+À distinguer des **prompts grounding** (§3.2, figés et évalués) : un **skill** est une
+**consigne de format/méthode**, activable par l'utilisateur, qui **s'ajoute à la
+rédaction** sans toucher ni au retrieval ni aux citations.
+
+- **Stockage** — un fichier Markdown par skill dans `skills/`, front-matter `name` /
+  `description` / `enabled` (`services/skill_manager.py — Skill`). Trois fournis :
+  `key_info_extraction`, `structured_comparison`, `table_extraction`. CRUD complet via
+  REST (`/api/skills`, `routes/api.py`) et IHM.
+- **Injection** — `skill_manager.build_skill_prompt()` concatène **tous les skills
+  `enabled`** en un bloc *« Follow the output format and workflow of any matching custom
+  skill »*, ajouté à **deux** builders de rédaction :
+  - `_build_answer_prompt` (`agent.py:1681`) — réponses **texte** de la voie **corpus**,
+    de la **synthèse globale** (`summary_mode`, `_run_global_summary`) et des
+    sous-questions de **décomposition** ;
+  - `_build_vision_answer_prompt` (`agent.py:1600`) — **toute** réponse en mode **Vision**
+    (mono-pièce *ou* corpus).
+- **Périmètre — ce qui N'est PAS enrobé.** Seules **deux** rédactions échappent au skill :
+  la **conversation libre** (`_run_free_chat`, modèle **nu** — principe #2, §8.1) et la
+  **mono-pièce en mode texte** (`_build_simple_answer_prompt`, le **seul** builder de
+  réponse **sans** injection). Autrement dit, le skill s'applique à **toutes les réponses
+  sur documents sauf la mono-pièce texte**. Il reste un gabarit de **mise en forme d'une
+  réponse déjà sourcée**, jamais une instruction agissant sur le modèle nu. *(Asymétrie
+  réelle : pour une même question mono-pièce, le mode Vision reçoit le skill, le mode texte
+  non.)*
+- **Ne pas confondre avec `.claude/skills/`** (cité en fin de doc) : ceux-là sont des
+  skills **Claude Code** (outillage de développement, ex. `evaluer-reponse-sourcee`),
+  **sans rapport** avec les skills *runtime* de l'app décrits ici.
 
 ---
 
